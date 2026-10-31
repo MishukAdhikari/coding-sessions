@@ -35,9 +35,8 @@ function upstream() {
 async function gateway() {
   const database = new Database(":memory:"); applyDatabaseSchema(database);
   const key = randomBytes(32);
-  const connectors = new Connectors({ database, isLive: async () => true, codec: () => createSecretCodec(key), env: { CS_CONNECTOR_XCDEV_URL: upstream() } });
-  const { id } = connectors.add("xcdev");
-  connectors.setCredential(id, "upstream-credential-0001");
+  const connectors = new Connectors({ database, isLive: async () => true, codec: () => createSecretCodec(key), env: { CS_CONNECTOR_ALLOW_LOOPBACK: "1" } });
+  const { id } = await connectors.add({ name: "Lab", url: upstream(), token: "upstream-credential-0001" });
   await connectors.check(id);
   connectors.setTools(id, ["lab_list"]);
   connectors.setDefaultProviders(id, ["claude"]);
@@ -82,11 +81,11 @@ test("stdio bridge lists and calls granted tools and announces grant changes mad
   const init = await b.request("initialize", { protocolVersion: "2025-11-25" });
   expect(init.result.capabilities.tools.listChanged).toBe(true);
   const listed = await b.request("tools/list");
-  expect(listed.result.tools.map((tool: any) => tool.name).sort()).toEqual(["list_connections", "xcdev__lab_list"]);
+  expect(listed.result.tools.map((tool: any) => tool.name).sort()).toEqual(["lab__lab_list", "list_connections"]);
   g.connectors.setTools(g.id, ["lab_list", "env_status"]); // before the first poll
   await b.until(row => row.method === "notifications/tools/list_changed");
-  expect((await b.request("tools/list")).result.tools.map((tool: any) => tool.name)).toContain("xcdev__env_status");
-  expect((await b.request("tools/call", { name: "xcdev__lab_list", arguments: {} })).result.content[0].text).toBe("called lab_list");
+  expect((await b.request("tools/list")).result.tools.map((tool: any) => tool.name)).toContain("lab__env_status");
+  expect((await b.request("tools/call", { name: "lab__lab_list", arguments: {} })).result.content[0].text).toBe("called lab_list");
   expect((await b.request("coding_sessions/tools_revision")).error.code).toBe(-32601);
   const started = Date.now();
   b.child.stdin.end();
@@ -100,7 +99,7 @@ test("a revoked bridge stops polling and its calls fail without exposing credent
   const b = bridge(g.url, g.token);
   await b.request("initialize", {});
   g.connectors.revoke(g.launchId);
-  const failed = await b.request("tools/call", { name: "xcdev__lab_list", arguments: {} });
+  const failed = await b.request("tools/call", { name: "lab__lab_list", arguments: {} });
   expect(failed.error.message).toMatch(/lost access|ended/);
   await Bun.sleep(300);
   expect(b.child.exitCode).toBeNull();
@@ -148,7 +147,7 @@ test("launch adapters add the connector entry only when connectors are available
 test("managed launches receive a separate connector capability through env only, revoked on spawn failure", async () => {
   const database = new Database(":memory:"); applyDatabaseSchema(database);
   const key = randomBytes(32);
-  const connectors = new Connectors({ database, isLive: async () => true, codec: () => createSecretCodec(key), env: { CS_CONNECTOR_XCDEV_URL: "http://127.0.0.1:1/mcp" } });
+  const connectors = new Connectors({ database, isLive: async () => true, codec: () => createSecretCodec(key), env: { CS_CONNECTOR_ALLOW_LOOPBACK: "1" } });
   const communicator = new Communicator(database, { isLive: async () => true });
   let seen: Record<string, string> = {};
   let configured: boolean | undefined;
@@ -159,7 +158,7 @@ test("managed launches receive a separate connector capability through env only,
   expect(await startCommunicatingSession(options("none"), runtime(0) as any)).toEqual({ ok: true });
   expect(configured).toBe(false);
   expect(seen.CS_CONNECTOR_TOKEN).toBeUndefined();
-  connectors.add("xcdev");
+  await connectors.add({ name: "Local", url: "http://127.0.0.1:1/mcp" });
   expect(await startCommunicatingSession(options("with"), runtime(0) as any)).toEqual({ ok: true });
   expect(configured).toBe(true);
   expect(seen.CS_CONNECTOR_TOKEN).toMatch(/^csconn_/);

@@ -61,7 +61,7 @@ Fresh Codex workspaces may pause at folder trust. The app shows **Folder trust r
 
 Managed Codex sessions require Codex 0.166.0 or newer and additionally need the root-owned hook policy installed with `--codex-hooks`. Existing Codex policies are not silently replaced. Review the installer guide before enabling this host-wide policy.
 
-For MCP, open **Connect Claude or Codex** and follow the connection instructions. Approve only connections you initiated. See [MCP setup](docs/mcp.md) for OAuth and reverse-proxy details. To give agents read-only tools from the xcdev lab through one server-held token, see [external MCP connectors](docs/connectors.md).
+For MCP, open **Connect Claude or Codex** and follow the connection instructions. Approve only connections you initiated. See [MCP setup](docs/mcp.md) for OAuth and reverse-proxy details. To let agents use tools from remote MCP servers you choose, see [external MCP connectors](docs/connectors.md).
 
 ## Configuration and secrets
 

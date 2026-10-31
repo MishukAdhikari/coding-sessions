@@ -551,51 +551,73 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <div id="sheet-connectors" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-connectors-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-connectors-heading">External MCP connectors</h2>
-  <p class="sheet-body">Let agents started here use another service’s MCP tools through one credential. The token is kept on this server and is not passed to agents. Read-only in this release.</p>
-  <div id="connectors-empty" hidden>
-    <div id="connector-presets"></div>
-    <p class="hint">Adding a connector gives no agent access. You choose the tools and the sessions next.</p>
+  <p class="sheet-body">Connect MCP servers and choose which tools your agents can use. Access stays off until you grant it.</p>
+  <div id="connector-list"></div>
+  <form id="form-connector-add" class="proj-form" autocomplete="off">
+    <h3 class="label">Add MCP connector</h3>
+    <label class="label connector-field-label" for="input-connector-name">Name</label>
+    <input id="input-connector-name" class="field" type="text" maxlength="60" autocapitalize="off" spellcheck="false" placeholder="e.g. Issue tracker" required>
+    <label class="label connector-field-label" for="input-connector-url">Server URL</label>
+    <input id="input-connector-url" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://mcp.example.com/mcp" required>
+    <label class="label connector-field-label" for="input-connector-new-token">Bearer token <span class="connector-optional">optional</span></label>
+    <input id="input-connector-new-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Leave empty if the server needs none" aria-describedby="connector-token-hint">
+    <p id="connector-token-hint" class="hint">Stored encrypted on this server and never shown again.</p>
+    <p class="hint">Supports HTTPS MCP servers using Streamable HTTP. Use a bearer token if required; OAuth sign-in is not supported yet.</p>
+    <button class="btn btn-primary btn-big" type="submit">Add and test</button>
+  </form>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-connector" class="sheet" role="dialog" aria-modal="true" aria-labelledby="connector-name" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="connector-name">Connector</h2>
+  <div class="connector-head">
+    <span id="connector-host" class="pick-path connector-host"></span>
+    <span id="connector-state" class="connection-status" role="status"></span>
   </div>
-  <div id="connector-detail" hidden>
-    <div class="connector-head">
-      <div><span id="connector-name" class="connector-name"></span><span id="connector-host" class="pick-path connector-host"></span></div>
-      <span id="connector-state" class="connection-status" role="status"></span>
-    </div>
-    <p id="connector-state-detail" class="hint"></p>
-    <dl class="cli-update-details">
-      <dt>Account</dt><dd id="connector-account"></dd>
-      <dt>Credential</dt><dd id="connector-credential"></dd>
-      <dt>Last check</dt><dd id="connector-checked"></dd>
-      <dt>Tools</dt><dd id="connector-tool-count"></dd>
-    </dl>
-    <form id="form-connector-token" class="proj-form" autocomplete="off">
-      <label class="label" for="input-connector-token" id="connector-token-label">Access token</label>
-      <input id="input-connector-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Paste a token">
-      <p class="hint">Use a dedicated agent token made for this server in the service’s own settings. It is stored encrypted and is never shown again.</p>
-      <button class="btn btn-primary btn-big" type="submit" id="btn-connector-token">Save token</button>
-    </form>
-    <button id="btn-connector-check" class="btn btn-ghost btn-big">Test connection</button>
+  <p id="connector-state-detail" class="hint"></p>
+  <dl class="cli-update-details">
+    <dt>Server reports</dt><dd id="connector-server"></dd>
+    <dt>Token</dt><dd id="connector-credential"></dd>
+    <dt>Tool prefix</dt><dd id="connector-namespace"></dd>
+    <dt>Last check</dt><dd id="connector-checked"></dd>
+    <dt>Tools</dt><dd id="connector-tool-count"></dd>
+  </dl>
+  <button id="btn-connector-check" class="btn btn-ghost btn-big">Test connection</button>
 
-    <h3 class="label">Tools agents may use</h3>
-    <p class="hint">Only curated read-only tools can be granted. New tools the service adds stay off until you turn them on.</p>
-    <div id="connector-tools"></div>
-    <button id="btn-connector-recommended" class="btn btn-ghost btn-big" type="button">Use recommended read-only set</button>
-    <p id="connector-tools-other" class="hint"></p>
+  <h3 class="label">Tools agents may use</h3>
+  <p class="hint">Nothing is granted until you tick it, including tools the server adds later. Granted tools may read or change things on that server. The labels below are the server’s own claims and are not verified.</p>
+  <div id="connector-tools"></div>
 
-    <h3 class="label">New sessions get access</h3>
-    <div id="connector-providers"></div>
+  <h3 class="label">New sessions get access</h3>
+  <div id="connector-providers"></div>
 
-    <h3 class="label">Running sessions</h3>
-    <div id="connector-launches"></div>
-    <p class="hint">Agents that support MCP tool updates see changes within about 10 seconds; others after you resume the session. Calls are checked against these settings every time.</p>
+  <h3 class="label">Running sessions</h3>
+  <div id="connector-launches"></div>
+  <p class="hint">Agents that support MCP tool updates see changes within about 10 seconds; others after you resume the session. Calls are checked against these settings every time.</p>
 
-    <h3 class="label">Recent calls</h3>
-    <div id="connector-audit"></div>
+  <h3 class="label">Recent calls</h3>
+  <div id="connector-audit"></div>
 
-    <button id="btn-connector-enabled" class="btn btn-ghost btn-big" type="button"></button>
-    <button id="btn-connector-remove" class="btn btn-ghost btn-big row-danger" type="button">Disconnect…</button>
-    <p class="hint">Disconnecting deletes the token and every grant here immediately. To stop the token working everywhere, also revoke it in the service.</p>
-  </div>
+  <form id="form-connector-token" class="proj-form" autocomplete="off">
+    <label class="label" for="input-connector-token" id="connector-token-label">Bearer token</label>
+    <input id="input-connector-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Paste a token">
+    <button class="btn btn-ghost btn-big" type="submit" id="btn-connector-token">Save token</button>
+    <button class="btn btn-ghost btn-big" type="button" id="btn-connector-token-remove">Remove token</button>
+  </form>
+
+  <form id="form-connector-edit" class="proj-form" autocomplete="off">
+    <label class="label" for="input-connector-rename">Name</label>
+    <input id="input-connector-rename" class="field" type="text" maxlength="60" autocapitalize="off" spellcheck="false">
+    <label class="label" for="input-connector-edit-url">Server URL</label>
+    <input id="input-connector-edit-url" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false">
+    <p class="hint">Changing the URL removes the token and every tool grant, because it may be a different server or account. The tool prefix never changes.</p>
+    <button class="btn btn-ghost btn-big" type="submit">Save name and URL</button>
+  </form>
+
+  <button id="btn-connector-enabled" class="btn btn-ghost btn-big" type="button"></button>
+  <button id="btn-connector-remove" class="btn btn-ghost btn-big row-danger" type="button">Remove connector…</button>
+  <p class="hint">Removing deletes the token and every grant here immediately. To stop the token working everywhere, also revoke it with the service that issued it.</p>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
@@ -604,8 +626,8 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/agent-auth.js?v=7"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=2"></script>
-<script src="/connection-status.js?v=3"></script>
-<script src="/connectors.js?v=1"></script>
-<script src="/app.js?v=54"></script>
+<script src="/connection-status.js?v=4"></script>
+<script src="/connectors.js?v=3"></script>
+<script src="/app.js?v=55"></script>
 </body>
 </html>

@@ -49,13 +49,13 @@
     },
     connectors: data => {
       const connectors = array(data.connectors);
-      if (!connectors.length) return state("neutral", "Not set up", "Give agents read-only tools from another service, such as the xcdev lab.");
+      if (!connectors.length) return state("neutral", "Not set up", "Let agents use tools from remote MCP servers you choose.");
       const connected = connectors.filter(c => c.state === "connected").length;
       const sessions = new Set(connectors.flatMap(c => array(c.launches).filter(l => l.granted).map(l => l.launch_id))).size;
-      const attention = connectors.some(c => ["auth_failed", "forbidden", "unavailable", "needs_credential"].includes(c.state));
+      const attention = connectors.some(c => ["auth_failed", "forbidden", "unavailable", "blocked", "needs_url"].includes(c.state));
       return state(attention ? "warning" : connected ? "positive" : "neutral",
         attention ? "Needs attention" : connected ? `${connected} connected` : connectors.every(c => c.state === "disabled") ? "Disabled" : "Not checked",
-        `${sessions} ${sessions === 1 ? "session has" : "sessions have"} access. Read-only.`);
+        `${connectors.length} ${connectors.length === 1 ? "server" : "servers"} · ${sessions} ${sessions === 1 ? "session has" : "sessions have"} access.`);
     },
     cli: data => {
       const tokens = array(data.tokens);

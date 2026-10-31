@@ -196,10 +196,13 @@ export function applyDatabaseSchema(database: Database): void {
 
   // Outbound MCP connectors (Coding Sessions → another service). Separate from the
   // inbound oauth_* tables above. credential is always AES-GCM sealed; see connectors.ts.
+  migratePresetConnectors(database);
   database.exec(`
     CREATE TABLE IF NOT EXISTS mcp_connectors (
       id                TEXT PRIMARY KEY,
-      preset            TEXT NOT NULL UNIQUE,
+      name              TEXT NOT NULL,
+      slug              TEXT NOT NULL UNIQUE,
+      url               TEXT NOT NULL DEFAULT '',
       enabled           INTEGER NOT NULL DEFAULT 1,
       credential        TEXT,
       credential_set_at INTEGER,
@@ -208,8 +211,9 @@ export function applyDatabaseSchema(database: Database): void {
       catalog           TEXT,
       catalog_at        INTEGER,
       catalog_stale     INTEGER NOT NULL DEFAULT 0,
-      identity          TEXT,
+      server_info       TEXT,
       check_status      TEXT,
+      check_detail      TEXT,
       check_at          INTEGER,
       check_ok_at       INTEGER,
       created_at        INTEGER NOT NULL
@@ -242,4 +246,38 @@ export function applyDatabaseSchema(database: Database): void {
     );
     CREATE INDEX IF NOT EXISTS connector_audit_at_idx ON connector_audit (connector_id, at);
   `);
+}
+
+/**
+ * The first release stored connectors as fixed presets (a `preset` column, no URL). Convert
+ * those rows in place, keeping id, grants and audit: the preset name becomes the name and the
+ * permanent tool namespace, the URL is left empty, and the row is disabled until the operator
+ * enters a URL. The old token is kept sealed but is cleared when a URL is set, because the
+ * destination it was entered for is not recorded.
+ */
+function migratePresetConnectors(database: Database): void {
+  const columns = database.query("PRAGMA table_info(mcp_connectors)").all() as Array<{ name: string }>;
+  if (!columns.some(column => column.name === "preset")) return;
+  database.exec("PRAGMA foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(`
+        CREATE TABLE mcp_connectors_v2 (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, url TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1, credential TEXT, credential_set_at INTEGER,
+          granted_tools TEXT NOT NULL DEFAULT '[]', default_providers TEXT NOT NULL DEFAULT '[]',
+          catalog TEXT, catalog_at INTEGER, catalog_stale INTEGER NOT NULL DEFAULT 0, server_info TEXT,
+          check_status TEXT, check_detail TEXT, check_at INTEGER, check_ok_at INTEGER, created_at INTEGER NOT NULL
+        );
+        INSERT INTO mcp_connectors_v2 (id,name,slug,url,enabled,credential,credential_set_at,granted_tools,default_providers,catalog,catalog_at,catalog_stale,created_at)
+          SELECT id, preset, lower(preset), '', 0, credential, credential_set_at, granted_tools, default_providers, catalog, catalog_at, 1, created_at FROM mcp_connectors;
+        DROP TABLE mcp_connectors;
+        ALTER TABLE mcp_connectors_v2 RENAME TO mcp_connectors;
+      `);
+      const broken = database.query("PRAGMA foreign_key_check").all();
+      if (broken.length) throw new Error("Connector migration left dangling grants.");
+    })();
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON");
+  }
 }
