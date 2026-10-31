@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { buildCodexInvocation } from "./codex";
+import { applyCodexHook, parseCodexHookInput } from "./codex-state";
+import { CODEX_READINESS_TIMEOUT_ERROR } from "./codex-startup";
+import { Communicator } from "./communicator";
 import * as mux from "./mux";
 import { applyDatabaseSchema } from "./db-schema";
 import {
@@ -8,8 +11,6 @@ import {
   archiveManagedLaunch,
   canArchiveManagedLaunch,
   canResumeCodexArchive,
-  CODEX_SESSION_START_TIMEOUT_SEC,
-  codexSessionStartTimedOut,
   failScreenlessCodexLaunch,
   findProviderProcess,
   normalizeCodexResumeId,
@@ -87,12 +88,6 @@ test("Codex archive resume IDs normalize only exact UUIDs", () => {
   expect(normalizeCodexResumeId("--last")).toBeNull();
 });
 
-test("awaiting SessionStart becomes a bounded failure based on the Codex child uptime", () => {
-  expect(codexSessionStartTimedOut("awaiting_session_start", CODEX_SESSION_START_TIMEOUT_SEC)).toBe(false);
-  expect(codexSessionStartTimedOut("awaiting_session_start", CODEX_SESSION_START_TIMEOUT_SEC + 1)).toBe(true);
-  expect(codexSessionStartTimedOut("ready", CODEX_SESSION_START_TIMEOUT_SEC + 1)).toBe(false);
-});
-
 test("only hook-confirmed Codex launches become new archive conversations", () => {
   expect(canArchiveManagedLaunch("codex", "preparing")).toBe(false);
   expect(canArchiveManagedLaunch("codex", "awaiting_session_start")).toBe(false);
@@ -146,7 +141,7 @@ test("a stale same-screen launch row is not silently rebound to a new Codex proc
   const runtime: ManagedCodexRuntime = {
     database,
     dbPath: "/var/lib/xcloud/app.db",
-    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.146.0" }),
+    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.166.0" }),
     execute: async () => ({ code: 0, out: "", err: "" }),
     uuid: () => launchId,
     now: () => 2,
@@ -197,8 +192,14 @@ test("launch ownership exists before screen starts and advances only to awaiting
   const runtime: ManagedCodexRuntime = {
     database,
     dbPath: "/var/lib/xcloud/app.db",
-    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.146.0" }),
-    execute: async (command) => {
+    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.166.0" }),
+    execute: async (command, env) => {
+      expect(env?.CS_COMMUNICATOR_TOKEN).toStartWith("cscomm_");
+      expect(command.join(" ")).not.toContain(env!.CS_COMMUNICATOR_TOKEN!);
+      const identity = await new Communicator(database, { isLive: async () => true }).identity(env!.CS_COMMUNICATOR_TOKEN!, false);
+      expect(identity.launch_id).toBe(launchId);
+      expect(command.join(" ")).toContain("coding_sessions_communicator");
+      expect(command.join(" ")).toContain("--no-daemon");
       screenCommand = command;
       expect(database.query("SELECT provider, phase, remote_control FROM launches WHERE screen = 'cs-demo'").get()).toEqual({
         provider: "codex",
@@ -236,7 +237,7 @@ test("a failed Codex resume keeps its archive and records a sanitized retryable 
   const runtime: ManagedCodexRuntime = {
     database,
     dbPath: "/var/lib/xcloud/app.db",
-    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.146.0" }),
+    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.166.0" }),
     execute: async () => ({ code: 1, out: "", err: "screen\nfailed\u0000with details" }),
     uuid: () => launchId,
     now: () => 2,
@@ -255,6 +256,7 @@ test("a failed Codex resume keeps its archive and records a sanitized retryable 
     error_message: "screen failed with details",
     resume_archive_id: archiveId,
   });
+  expect(database.query("SELECT revoked_at IS NOT NULL AS revoked FROM communicator_credentials WHERE launch_id=?").get(launchId)).toEqual({ revoked: 1 });
   database.close();
 });
 
@@ -320,36 +322,45 @@ test("archiving a managed launch rolls back its deletion when history persistenc
 });
 
 
-test("folder trust suppresses only readiness timeout and hooks remain the readiness authority", () => {
+test("idle pre-hook Codex can wait indefinitely and only real hook state changes phase", () => {
   const database = new Database(":memory:");
   applyDatabaseSchema(database);
   try {
     database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, launch_id, phase) VALUES ('cs-demo', 'demo', '/srv/demo', 1, 'codex', ?, 'awaiting_session_start')").run(launchId);
     const row = () => database.query("SELECT * FROM launches WHERE launch_id = ?").get(launchId) as LaunchRow;
-    expect(reconcileCodexStartup(database, row(), 300, true)).toEqual({ phase: "awaiting_session_start", error: null, waitingForTrust: true });
-    const timedOut = reconcileCodexStartup(database, row(), 300, false);
-    expect(timedOut.phase).toBe("failed");
-    expect(timedOut.waitingForTrust).toBe(false);
-    expect(reconcileCodexStartup(database, row(), 300, true).waitingForTrust).toBe(true);
+    expect(reconcileCodexStartup(database, row(), "unknown")).toEqual({ phase: "awaiting_session_start", error: null, waitingForTrust: false, inputReady: false });
+    expect(reconcileCodexStartup(database, row(), "input")).toEqual({ phase: "awaiting_session_start", error: null, waitingForTrust: false, inputReady: true });
+    expect(canArchiveManagedLaunch("codex", row().phase)).toBe(false);
+    expect(database.query("SELECT COUNT(*) AS count FROM codex_launch_state").get()).toEqual({ count: 0 });
+    expect(reconcileCodexStartup(database, row(), "trust").waitingForTrust).toBe(true);
     const staleRow = row();
-    database.query("UPDATE launches SET phase = 'ready' WHERE launch_id = ?").run(launchId);
-    expect(reconcileCodexStartup(database, staleRow, 300, true)).toEqual({ phase: "ready", error: null, waitingForTrust: false });
-    expect(reconcileCodexStartup(database, staleRow, 300, false).phase).toBe("ready");
-    database.query("UPDATE launches SET phase = 'failed', error_message = 'Codex exited before its managed SessionStart hook reported readiness.' WHERE launch_id = ?").run(launchId);
-    expect(reconcileCodexStartup(database, row(), 300, true).waitingForTrust).toBe(false);
-    expect(row().phase).toBe("failed");
+    const hook = parseCodexHookInput({ session_id: resumeId, cwd: "/srv/demo", hook_event_name: "SessionStart" })!;
+    expect(applyCodexHook(database, "cs-demo", launchId, hook, 300_000)).toBe(true);
+    expect(database.query("SELECT session_id FROM codex_launch_state WHERE launch_id = ?").get(launchId)).toEqual({ session_id: resumeId });
+    expect(reconcileCodexStartup(database, staleRow, "input")).toEqual({ phase: "ready", error: null, waitingForTrust: false, inputReady: false });
+    expect(reconcileCodexStartup(database, staleRow, "trust").waitingForTrust).toBe(false);
   } finally { database.close(); }
 });
 
-test("a stale launch id cannot recover a replacement screen or override hook state", () => {
+test("only positive bound startup evidence can recover a legacy timeout failure", () => {
   const database = new Database(":memory:");
   applyDatabaseSchema(database);
   try {
-    database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, launch_id, phase) VALUES ('cs-demo', 'demo', '/srv/demo', 1, 'codex', ?, 'awaiting_session_start')").run(launchId);
-    const row = database.query("SELECT * FROM launches WHERE launch_id = ?").get(launchId) as LaunchRow;
-    expect(reconcileCodexStartup(database, { ...row, launch_id: resumeId }, 300, true).waitingForTrust).toBe(false);
+    database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, launch_id, phase, error_message) VALUES ('cs-demo', 'demo', '/srv/demo', 1, 'codex', ?, 'failed', ?)").run(launchId, CODEX_READINESS_TIMEOUT_ERROR);
+    const row = () => database.query("SELECT * FROM launches WHERE launch_id = ?").get(launchId) as LaunchRow;
+    expect(reconcileCodexStartup(database, row(), "unknown").phase).toBe("failed");
+    expect(reconcileCodexStartup(database, { ...row(), launch_id: resumeId }, "input").inputReady).toBe(false);
+    expect(reconcileCodexStartup(database, { ...row(), screen: "cs-other" }, "input").inputReady).toBe(false);
+    expect(row().phase).toBe("failed");
+    expect(reconcileCodexStartup(database, row(), "input")).toEqual({ phase: "awaiting_session_start", error: null, waitingForTrust: false, inputReady: true });
+    database.query("UPDATE launches SET phase = 'failed', error_message = ? WHERE launch_id = ?").run(CODEX_READINESS_TIMEOUT_ERROR, launchId);
+    expect(reconcileCodexStartup(database, row(), "trust").waitingForTrust).toBe(true);
+    database.query("UPDATE launches SET phase = 'failed', error_message = 'Codex exited before its managed SessionStart hook reported readiness.' WHERE launch_id = ?").run(launchId);
+    expect(reconcileCodexStartup(database, row(), "input").inputReady).toBe(false);
+    expect(reconcileCodexStartup(database, row(), "trust").phase).toBe("failed");
+    database.query("UPDATE launches SET error_message = ? WHERE launch_id = ?").run(CODEX_READINESS_TIMEOUT_ERROR, launchId);
     database.query("INSERT INTO codex_launch_state (launch_id, screen, session_id, turn_state, canonical_cwd, updated_at) VALUES (?, 'cs-demo', ?, 'waiting', '/srv/demo', 2)").run(launchId, resumeId);
-    expect(reconcileCodexStartup(database, row, 300, true).waitingForTrust).toBe(false);
-    expect(reconcileCodexStartup(database, row, 300, false).phase).toBe("awaiting_session_start");
+    expect(reconcileCodexStartup(database, row(), "input").phase).toBe("failed");
+    expect(reconcileCodexStartup(database, row(), "input").inputReady).toBe(false);
   } finally { database.close(); }
 });

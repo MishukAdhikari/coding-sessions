@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { applyDatabaseSchema } from "./db-schema";
 import { handleCodexHookPayload, readBoundedJson } from "./codex-hook";
 
@@ -84,4 +87,25 @@ test("standalone managed hook accepts existing legacy launches without mixing ma
   expect(handleCodexHookPayload(payload, legacy, open, 10)).toBe(true);
   expect(database.query("SELECT phase FROM launches").get()).toEqual({ phase: "ready" });
   database.close();
+});
+
+
+test("default hook opener updates an existing SQLite file without creating missing databases", () => {
+  const directory = mkdtempSync(join(tmpdir(), "cs-hook-open-"));
+  const path = join(directory, "app.db");
+  const database = new Database(path);
+  try {
+    applyDatabaseSchema(database);
+    database.query("INSERT INTO launches (screen,name,project_path,created_at,provider,launch_id,phase) VALUES ('cs-demo','demo','/srv/project',1,'codex',?,'awaiting_session_start')").run(launchId);
+    const payload = { session_id: sessionId, cwd: "/srv/project", hook_event_name: "SessionStart", source: "startup" };
+    const environment = { CS_DB_PATH: path, CS_SCREEN: "cs-demo", CS_LAUNCH_ID: launchId };
+    expect(handleCodexHookPayload(payload, environment)).toBe(true);
+    expect(database.query("SELECT phase FROM launches").get()).toEqual({ phase: "ready" });
+    const missing = join(directory, "missing.db");
+    expect(handleCodexHookPayload(payload, { ...environment, CS_DB_PATH: missing })).toBe(false);
+    expect(existsSync(missing)).toBe(false);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

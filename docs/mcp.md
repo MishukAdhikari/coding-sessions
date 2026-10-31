@@ -135,3 +135,48 @@ sign-in. Failed sign-out or Claude callback submission returns a tool error.
 Command Code sign-in returns a browser continuation path; enter its key only in
 the authenticated browser. Account responses never include stored credentials
 or terminal output. Unknown provider status is distinct from signed out.
+
+
+## Built-in session communicator
+
+New and resumed managed Claude, Codex, and Command Code sessions automatically receive a separate MCP server named `coding_sessions_communicator`. No operator token, API key, or extra `.env` value is needed for this connection. Older running sessions keep their current configuration; end and resume them when convenient to load it.
+
+This connector exchanges messages between participating sessions on this instance. It cannot read terminal screens, press keys, approve prompts, change accounts, or start/end sessions. The external operator connector described above remains separate.
+
+| Tool | Purpose |
+|---|---|
+| `session_identity` | Get this session's immutable `launch_id`, session ID, name, and agent. |
+| `list_peers` | Find other running sessions with the communicator. |
+| `send_message` | Queue a message to a peer, or reply to a received message. |
+| `read_messages` | Read this session's inbox or sent history. |
+| `wait_for_messages` | Wait up to 25 seconds for incoming mail. |
+
+Ask an agent to check its inbox when beginning collaborative work. For example: “Find the Command Code session, ask it to review this approach, and wait for its reply.” Ask the other session to check or wait on its inbox too. A busy agent can collect pending messages on its next inbox call. An idle agent that is not polling is **not automatically woken up**; the communicator never types into its terminal.
+
+A tool exchange looks like this (IDs come from tool results):
+
+```json
+{"recipient_id":"peer-launch-uuid","text":"Please review this approach.","idempotency_key":"review-1"}
+```
+
+The receiver calls `read_messages` or `wait_for_messages`, then replies with the received message's `id`:
+
+```json
+{"reply_to":"received-message-uuid","text":"Reviewed: the approach looks sound.","idempotency_key":"review-1-reply"}
+```
+
+`send_message` confirms durable queue acceptance. `received` means an inbox request returned the message; it does not prove that the agent acted on it. An explicit reply provides that evidence. Retry the same send with the same idempotency key and identical contents to avoid duplicates; a key cannot be reused for a different message.
+
+Inbox reads default to unread messages. Use `unread_only:false` to reread history, or `direction:"sent"` to inspect sent messages and receipt status. Follow `next_cursor` while `has_more` is true. Each read returns at most 100 messages. Messages are limited to 16 KiB of UTF-8 text, sends to 60 per minute per session, and stored messages to 30 days.
+
+Messages and credentials are bound to a specific launch, not a reusable session name. A resumed or replacement session gets a new identity and inbox. Ended/failed launches cannot use their old credentials. Web-service restarts preserve messages and credentials for surviving sessions.
+
+### Provider setup and troubleshooting
+
+- Codex requires **0.166.0 or newer**. Managed launches use a dedicated runtime so each session retains its own environment and communicator identity.
+- Claude receives invocation-only MCP configuration. Existing configured MCP servers and tool-approval policies are preserved.
+- Command Code uses its supported npm installation and private local MCP file under `~/.commandcode/projects/`. The app resolves the installed CLI's own project-name mapping, merges only its connector, and records the previous managed entry for safe release-path updates. Malformed files, symlinks, conflicting names, or manually changed managed entries cause a visible launch error instead of an overwrite.
+
+Configuration files contain only executable paths and environment-variable references. The launch credential is passed through the child environment, never through command arguments or project files. Running the bridge manually without that environment fails with an unavailable message; it cannot borrow another session's identity.
+
+Peer messages are attributed but remain untrusted input. They do not replace the operator's instructions or authorize broader work. All sessions still share the instance's Unix-account trust boundary; see [security boundaries](security.md).

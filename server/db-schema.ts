@@ -106,6 +106,31 @@ export function applyDatabaseSchema(database: Database): void {
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS launches_launch_id_idx ON launches (launch_id);
 
+    CREATE TABLE IF NOT EXISTS communicator_credentials (
+      launch_id  TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      revoked_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS communicator_messages (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE,
+      sender_id TEXT NOT NULL,
+      recipient_id TEXT NOT NULL,
+      sender_json TEXT NOT NULL,
+      recipient_json TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      text TEXT NOT NULL,
+      reply_to TEXT,
+      created_at INTEGER NOT NULL,
+      received_at INTEGER,
+      UNIQUE (sender_id, idempotency_key)
+    );
+    CREATE INDEX IF NOT EXISTS communicator_inbox_idx ON communicator_messages (recipient_id, sequence);
+    CREATE INDEX IF NOT EXISTS communicator_sent_idx ON communicator_messages (sender_id, sequence);
+    CREATE INDEX IF NOT EXISTS communicator_rate_idx ON communicator_messages (sender_id, created_at);
+
     CREATE TABLE IF NOT EXISTS codex_launch_state (
       launch_id     TEXT PRIMARY KEY REFERENCES launches(launch_id) ON DELETE CASCADE,
       screen        TEXT NOT NULL,

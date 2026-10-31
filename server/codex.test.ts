@@ -75,7 +75,7 @@ function preflightDependencies(requirements = managedRequirements()): CodexPrefl
   return {
     which: () => "/usr/local/bin/codex",
     run: async (argv) => {
-      if (argv.includes("--version")) return { code: 0, out: "codex-cli 0.146.0", err: "" };
+      if (argv.includes("--version")) return { code: 0, out: "codex-cli 0.166.0", err: "" };
       if (argv.includes("status")) return { code: 0, out: "Logged in", err: "" };
       return { code: 0, out: "hooks stable true", err: "" };
     },
@@ -94,6 +94,7 @@ test("builds stable new and exact-resume invocations with bounded app markers", 
   })).toEqual({
     argv: [
       "/usr/local/bin/codex",
+      "--no-daemon",
       "-C",
       "/srv/project",
     ],
@@ -113,6 +114,7 @@ test("builds stable new and exact-resume invocations with bounded app markers", 
     resumeId,
   })?.argv).toEqual([
     "/usr/local/bin/codex",
+    "--no-daemon",
     "-C",
     "/srv/project",
     "resume",
@@ -128,7 +130,7 @@ test("rejects command and marker injection instead of quoting arbitrary values",
 });
 
 test("parses the tested Codex version floor", () => {
-  expect(parseCodexVersion("codex-cli 0.146.0")).toEqual([0, 146, 0]);
+  expect(parseCodexVersion("codex-cli 0.166.0")).toEqual([0, 166, 0]);
   expect(parseCodexVersion("codex-cli 1.2.3-beta.1")).toEqual([1, 2, 3]);
   expect(parseCodexVersion("unknown")).toBeNull();
 });
@@ -144,10 +146,10 @@ test("preflight distinguishes binary, version, login, hooks, and managed provisi
     ...preflightDependencies(requirements),
     readText: (path: string) => files.get(path) ?? null,
   };
-  expect(await preflightCodex(deps)).toMatchObject({ ok: true, bin: "/usr/local/bin/codex", version: "0.146.0" });
+  expect(await preflightCodex(deps)).toMatchObject({ ok: true, bin: "/usr/local/bin/codex", version: "0.166.0" });
   expect(await preflightCodex({ ...deps, which: () => null })).toMatchObject({ ok: false, code: "missing_binary" });
   expect(await preflightCodex({ ...deps, run: async (argv, timeoutMs) => argv.includes("--version")
-    ? { code: 0, out: "codex-cli 0.145.0", err: "" }
+    ? { code: 0, out: "codex-cli 0.165.0", err: "" }
     : deps.run(argv, timeoutMs) })).toMatchObject({ ok: false, code: "unsupported_version" });
   expect(await preflightCodex({ ...deps, run: async (argv, timeoutMs) => argv.includes("status")
     ? { code: 1, out: "", err: "not logged in" }
@@ -289,7 +291,7 @@ test("the checked-in managed requirements template satisfies preflight without b
   expect(await preflightCodex({
     which: () => "/usr/local/bin/codex",
     run: async (argv) => argv.includes("--version")
-      ? { code: 0, out: "codex-cli 0.146.0", err: "" }
+      ? { code: 0, out: "codex-cli 0.166.0", err: "" }
       : argv.includes("status")
         ? { code: 0, out: "Logged in", err: "" }
         : { code: 0, out: "hooks stable true", err: "" },
@@ -300,7 +302,7 @@ test("the checked-in managed requirements template satisfies preflight without b
       return null;
     },
     inspectPath: securePathInspection,
-  })).toMatchObject({ ok: true, version: "0.146.0" });
+  })).toMatchObject({ ok: true, version: "0.166.0" });
 });
 
 test("unrestricted Codex permissions require explicit operator configuration", () => {

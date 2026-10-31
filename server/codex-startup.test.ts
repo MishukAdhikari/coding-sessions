@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { boundedTerminalCommand, createStartupTrustProbe, isCodexFolderTrustPrompt, matchesCodexLaunchMarkers, readStartupViewport } from "./codex-startup";
+import { boundedTerminalCommand, createStartupProbe, isCodexInputReady, isCodexFolderTrustPrompt, matchesCodexLaunchMarkers, readStartupViewport } from "./codex-startup";
 
 const prompt = `You are in /work/example
   Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings
@@ -30,20 +30,50 @@ test("process marker binding requires the exact launch, screen and database", ()
   expect(matchesCodexLaunchMarkers(raw + "CS_LAUNCH_ID=second\0", "first", "cs-demo", "/data/app.db")).toBe(false);
 });
 
-test("startup probes share pending reads, expire after ten seconds and isolate replacement launches", async () => {
+const idle = `>_ OpenAI Codex (v0.166.0)
+  /tmp/project
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol xhigh Fast · /tmp/project
+  ? for shortcuts                    ⚠ 9 warnings · f2 to view
+`;
+
+test("only a current Codex input prompt and footer allow the first prompt", () => {
+  expect(isCodexInputReady(idle)).toBe(true);
+  expect(isCodexInputReady(`\x1b[32m${idle}\x1b[0m`)).toBe(true);
+  for (const text of ["", "Ready", prompt, "Trust these hooks?\n› 1. Trust and continue", idle + prompt,
+    idle + "Warnings · 1 of 9 · Startup\nProblem loading a skill\nk keep & next · esc dismiss & close · ^o copy · ←/→ warning",
+    idle + "Process exited", idle.replace("› Ask Codex to do anything", "› typed input"),
+    idle.replace("? for shortcuts", "Approval required"), idle + "\n".repeat(50)]) {
+    expect(isCodexInputReady(text)).toBe(false);
+  }
+});
+
+test("startup probes cache viewport reads but revalidate exact launch binding on every access", async () => {
   let now = 0, reads = 0;
   let text: string | null = prompt;
-  const probe = createStartupTrustProbe(async () => { reads++; return text; }, () => now);
-  expect(await Promise.all([probe("first", 1, target), probe("first", 1, target)])).toEqual([true, true]);
+  let valid = true;
+  const bindings: unknown[][] = [];
+  const probe = createStartupProbe(async () => { reads++; return text; }, () => now,
+    (...args) => { bindings.push(args); return valid; });
+  expect(await Promise.all([probe("first", 1, target, "/data/app.db"), probe("first", 1, target, "/data/app.db")])).toEqual(["trust", "trust"]);
   expect(reads).toBe(1);
-  text = "Ready";
-  expect(await probe("second", 1, target)).toBe(false);
-  expect(await probe("first", 2, target)).toBe(false);
+  expect(bindings).toEqual(Array.from({ length: 4 }, () => [1, "first", "cs-demo", "/data/app.db"]));
+  valid = false;
+  expect(await probe("first", 1, target, "/data/app.db")).toBe("unknown");
+  expect(reads).toBe(1);
+  valid = true;
+  text = idle;
+  expect(await probe("second", 1, target, "/data/app.db")).toBe("input");
+  expect(await probe("first", 2, target, "/data/app.db")).toBe("input");
   now = 10_000;
-  expect(await probe("first", 1, target)).toBe(false);
+  expect(await probe("first", 1, target, "/data/app.db")).toBe("input");
   text = null;
   now += 10_000;
-  expect(await probe("first", 1, target)).toBe(false);
+  expect(await probe("first", 1, target, "/data/app.db")).toBe("unknown");
+  const replacedDuringRead = createStartupProbe(async () => { valid = false; return idle; }, () => now, () => valid);
+  expect(await replacedDuringRead("first", 1, target, "/data/app.db")).toBe("unknown");
 });
 
 test("screen probe uses a private current-viewport file and always removes it", async () => {

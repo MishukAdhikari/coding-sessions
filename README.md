@@ -2,7 +2,7 @@
 
 **v0.1.3 preview (prerelease).** See [validation coverage and remaining checks](deploy/VALIDATION.md). Full systemd lifecycle, provider OAuth, and provider sandbox compatibility are not yet verified across the supported Ubuntu matrix.
 
-A self-hosted control panel for Claude Code, Codex, Command Code, and other CLI agents. Start sessions from your phone, reconnect to their terminals, inspect activity, and resume supported conversations. An authenticated MCP endpoint lets compatible clients manage the same sessions.
+A self-hosted control panel for Claude Code, Codex, Command Code, and other CLI agents. Start sessions from your phone, reconnect to their terminals, inspect activity, and resume supported conversations. An authenticated MCP endpoint lets compatible clients manage the same sessions. Built-in session communication lets managed agents exchange messages and replies through their own MCP inboxes.
 
 Built with Bun, SQLite, and plain browser JavaScript. Licensed under [MIT](LICENSE).
 
@@ -59,7 +59,7 @@ Use **Agent authentication** in the app for supported sign-in/account actions. A
 
 Fresh Codex workspaces may pause at folder trust. The app shows **Folder trust required** while startup is pending; open the terminal to review the folder yourself. It does not accept trust on your behalf or report readiness before the managed hook arrives.
 
-Managed Codex sessions additionally need the root-owned hook policy installed with `--codex-hooks`. Existing Codex policies are not silently replaced. Review the installer guide before enabling this host-wide policy.
+Managed Codex sessions require Codex 0.166.0 or newer and additionally need the root-owned hook policy installed with `--codex-hooks`. Existing Codex policies are not silently replaced. Review the installer guide before enabling this host-wide policy.
 
 For MCP, open **Connect Claude or Codex** and follow the connection instructions. Approve only connections you initiated. See [MCP setup](docs/mcp.md) for OAuth and reverse-proxy details.
 
