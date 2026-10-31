@@ -300,23 +300,27 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .repo-option-name, .repo-option-owner { display: block; overflow-wrap: anywhere; white-space: normal; }
 .repo-option-owner { margin-top: 3px; color: var(--text-secondary); font-size: 12px; }
 
-.settings-section { --menu-icon-space: 28px; }
+.settings-section { --menu-icon-space: 1.75rem; }
+#sheet-menu .sheet-title { font-size: 1.6875rem; }
+#sheet-menu .appearance-setting, #sheet-menu .field { font-size: var(--type-menu-action); }
+#sheet-menu .appearance-setting { flex-wrap: wrap; }
+#sheet-menu .setting-label { gap: .625rem; }
+#sheet-menu .setting-label .menu-icon { width: 1.125em; height: 1.125em; }
 .settings-section .row-btn, .settings-footer .row-btn { font-size: var(--type-menu-action); line-height: 1.5; }
-.settings-section .row-btn:not(.row-with-icon), .settings-footer .row-btn { padding-inline-start: var(--menu-icon-space, 28px); }
+.settings-section .row-btn:not(.row-with-icon), .settings-footer .row-btn { padding-inline-start: var(--menu-icon-space, 1.75rem); }
 .settings-section .hint { font-size: var(--type-menu-helper); line-height: 1.55; max-width: 60ch; }
 .settings-section .label { font-size: var(--type-menu-label); font-weight: 500; }
 .settings-section h3 { font-size: var(--type-menu-label); }
 .settings-section .ws-row { font-size: var(--type-menu-helper); }
 
-.settings-section .row-btn.connection-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); align-items: start; padding-block: var(--space-3); padding-inline-start: 0; }
-.connection-status { display: inline-flex; align-items: center; gap: var(--space-1); padding-top: 3px; font-size: var(--type-menu-label); font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
-.connection-status svg { width: 14px; height: 14px; flex: none; }
+.settings-section .row-btn.connection-row { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; padding-block: var(--space-3); padding-inline-start: var(--menu-icon-space); }
+.connection-row > span:first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.connection-status { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; font-size: var(--type-menu-label); font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.connection-status svg { width: 1.077em; height: 1.077em; flex: none; }
 .connection-status[data-tone="positive"] { color: var(--status-positive); }
 .connection-status[data-tone="warning"] { color: var(--status-working); }
-.connection-detail { grid-column: 1 / -1; color: var(--text-secondary); font-size: var(--type-menu-label); line-height: 1.5; overflow-wrap: anywhere; }
+.connection-detail { flex-basis: 100%; min-width: 0; color: var(--text-secondary); font-size: var(--type-menu-helper); line-height: 1.55; overflow-wrap: anywhere; }
 .connection-detail:empty { display: none; }
-.connection-action { display: flex; align-items: center; gap: var(--space-2); }
-.connection-action .menu-icon { flex: none; }
-.settings-section #btn-commands, .settings-section #btn-projects { padding-inline-start: var(--menu-icon-space); }
-#btn-web-terminal .connection-action { grid-column: 1 / -1; }
+.connection-action { position: relative; }
+.connection-action .menu-icon { position: absolute; left: calc(-1 * var(--menu-icon-space)); top: .1875em; width: 1.125em; height: 1.125em; }
 .logout-detail { display: block; margin-top: var(--space-1); }
