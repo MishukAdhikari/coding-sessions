@@ -48,3 +48,11 @@ test("Codex hook lifecycle distinguishes ready, work, input and a finished turn"
   }
   db.close();
 });
+
+test("confirmed pre-hook folder trust waits for input without claiming readiness", () => {
+  const pending = session({ provider: "codex", phase: "awaiting_session_start", status: "starting", startupWaitingForTrust: true, telemetryUnknown: true });
+  expect(sessionActivity(pending)).toBe("waiting");
+  expect(sessionActivity({ ...pending, phase: "failed" })).toBe("failed");
+  expect(sessionActivity({ ...pending, status: "ended" })).toBe("ended");
+  expect(sessionActivity({ ...pending, startupWaitingForTrust: false })).toBe("starting");
+});

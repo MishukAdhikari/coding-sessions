@@ -72,3 +72,12 @@ test("steady slow overlapping requests still update as responses arrive", async 
   }
   expect(renders).toHaveLength(3);
 });
+
+test("folder trust is a waiting state, never readiness or a generic setup failure", () => {
+  const pending = { provider: "codex", phase: "awaiting_session_start", status: "starting", startupWaitingForTrust: true };
+  expect(window.sessionStatus(pending)).toMatchObject({ state: "waiting", label: "Folder trust required" });
+  expect(window.sessionStatus(pending).detail).toContain("not reported readiness");
+  expect(window.sessionStatus({ ...pending, phase: "failed" }).state).toBe("failed");
+  expect(window.sessionStatus({ ...pending, status: "ended" }).state).toBe("ended");
+  expect(window.sessionStatus({ ...pending, startupWaitingForTrust: false }).state).toBe("starting");
+});

@@ -11,6 +11,9 @@
     failed: { label: "Launch failed", detail: "Open the session for details." },
   };
   window.sessionStatus = session => {
+    if (session.provider === "codex" && session.phase === "awaiting_session_start" && session.status !== "ended" && session.startupWaitingForTrust) {
+      return { state: "waiting", label: "Folder trust required", detail: "Open the terminal to review this folder. Codex has not reported readiness yet." };
+    }
     const state = session.phase === "failed" ? "failed"
       : session.status === "ended" ? "ended"
       : session.status === "starting" ? "starting"

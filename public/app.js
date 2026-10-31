@@ -1113,7 +1113,12 @@
   function confirmEnd(s) {
     const provider = providerOf(s);
     const displayName = providerName(provider);
-    if (s.phase === "failed") {
+    const awaitingTrust = s.startupWaitingForTrust === true && window.sessionStatus(s).state === "waiting";
+    if (awaitingTrust) {
+      $("confirm-title").textContent = `Review folder trust for “${s.name}”`;
+      $("confirm-body").textContent = "Codex is waiting for you to review this folder in its terminal. Startup continues after your decision; the app has not approved it for you.";
+      $("btn-confirm").textContent = "End session";
+    } else if (s.phase === "failed") {
       $("confirm-title").textContent = `End failed “${s.name}” launch?`;
       $("confirm-body").textContent = s.errorMessage || `${displayName} could not start. End this attempt and try again.`;
       $("btn-confirm").textContent = "End attempt";
@@ -1143,6 +1148,9 @@
     // Live web terminal: attach a writable second seat to this session's screen.
     // Only for managed (cs-*) sessions that are actually up.
     const term = $("btn-web-term");
+    term.textContent = awaitingTrust ? "Review in terminal" : "Open web terminal";
+    term.classList.toggle("btn-primary", awaitingTrust);
+    term.classList.toggle("btn-ghost", !awaitingTrust);
     const canAttach = providerHas(provider, "webTerminal") && typeof s.id === "string" && s.id.startsWith("m:") && (s.status === "running" || s.status === "starting");
     term.hidden = !canAttach;
     if (canAttach) {

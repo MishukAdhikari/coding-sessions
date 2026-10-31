@@ -17,6 +17,7 @@ const SERVER_INFO = { name: "xcloud-sessions", title: "Coding Sessions", version
 const INSTRUCTIONS = `Coding Sessions runs Claude, Codex and Command Code agents in terminal sessions on one server; this connector drives them.
 Typical loop: list_sessions (or launch_session with a prompt) → send_message → wait_for_session → read_session, repeating until the work is done.
 Session ids look like "m:cs-name". A session's state is one of: starting, working, asking (blocked on a question — read_session, then press_keys or send_message to answer), waiting (finished its turn, ready for the next message), running (alive; this agent reports no turn state), ended.
+When startup_waiting_for_trust is true, Codex is waiting for the operator to review folder trust before its managed startup hook can run. Report this decision to the operator; do not accept trust automatically.
 The additive activity field matches the web UI: running, waiting (needs input), finished (turn complete; session still open), ready, connected (no reliable turn signal), starting, ended, or failed.
 Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.`;
 
@@ -48,6 +49,7 @@ export type SessionState = "starting" | "working" | "asking" | "waiting" | "runn
 
 export function sessionState(s: SessionInfo | undefined, turnState: boolean): SessionState {
   if (!s || s.status === "ended") return "ended";
+  if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupWaitingForTrust) return "asking";
   if (s.status === "starting") return "starting";
   if (!turnState || s.telemetryUnknown) return "running";
   if (s.asking) return "asking";
@@ -63,6 +65,7 @@ function summarize(s: SessionInfo, turnState: boolean) {
     agent: s.provider,
     state: sessionState(s, turnState),
     activity: sessionActivity(s),
+    ...(s.startupWaitingForTrust ? { startup_waiting_for_trust: true } : {}),
     managed: s.kind === "managed",
     project: s.projectLabel ?? s.project,
     folder: s.project,

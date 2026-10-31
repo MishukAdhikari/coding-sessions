@@ -16,6 +16,7 @@ import {
   screenlessLaunchAction,
   startManagedCodex,
   run,
+  reconcileCodexStartup,
   type ManagedCodexRuntime,
   type LaunchRow,
   type Proc,
@@ -316,4 +317,39 @@ test("archiving a managed launch rolls back its deletion when history persistenc
   expect(database.query("SELECT screen FROM launches WHERE screen = 'cs-demo'").get()).toEqual({ screen: "cs-demo" });
   expect(database.query("SELECT launch_id FROM codex_launch_state WHERE launch_id = ?").get(launchId)).toEqual({ launch_id: launchId });
   database.close();
+});
+
+
+test("folder trust suppresses only readiness timeout and hooks remain the readiness authority", () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  try {
+    database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, launch_id, phase) VALUES ('cs-demo', 'demo', '/srv/demo', 1, 'codex', ?, 'awaiting_session_start')").run(launchId);
+    const row = () => database.query("SELECT * FROM launches WHERE launch_id = ?").get(launchId) as LaunchRow;
+    expect(reconcileCodexStartup(database, row(), 300, true)).toEqual({ phase: "awaiting_session_start", error: null, waitingForTrust: true });
+    const timedOut = reconcileCodexStartup(database, row(), 300, false);
+    expect(timedOut.phase).toBe("failed");
+    expect(timedOut.waitingForTrust).toBe(false);
+    expect(reconcileCodexStartup(database, row(), 300, true).waitingForTrust).toBe(true);
+    const staleRow = row();
+    database.query("UPDATE launches SET phase = 'ready' WHERE launch_id = ?").run(launchId);
+    expect(reconcileCodexStartup(database, staleRow, 300, true)).toEqual({ phase: "ready", error: null, waitingForTrust: false });
+    expect(reconcileCodexStartup(database, staleRow, 300, false).phase).toBe("ready");
+    database.query("UPDATE launches SET phase = 'failed', error_message = 'Codex exited before its managed SessionStart hook reported readiness.' WHERE launch_id = ?").run(launchId);
+    expect(reconcileCodexStartup(database, row(), 300, true).waitingForTrust).toBe(false);
+    expect(row().phase).toBe("failed");
+  } finally { database.close(); }
+});
+
+test("a stale launch id cannot recover a replacement screen or override hook state", () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  try {
+    database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, launch_id, phase) VALUES ('cs-demo', 'demo', '/srv/demo', 1, 'codex', ?, 'awaiting_session_start')").run(launchId);
+    const row = database.query("SELECT * FROM launches WHERE launch_id = ?").get(launchId) as LaunchRow;
+    expect(reconcileCodexStartup(database, { ...row, launch_id: resumeId }, 300, true).waitingForTrust).toBe(false);
+    database.query("INSERT INTO codex_launch_state (launch_id, screen, session_id, turn_state, canonical_cwd, updated_at) VALUES (?, 'cs-demo', ?, 'waiting', '/srv/demo', 2)").run(launchId, resumeId);
+    expect(reconcileCodexStartup(database, row, 300, true).waitingForTrust).toBe(false);
+    expect(reconcileCodexStartup(database, row, 300, false).phase).toBe("awaiting_session_start");
+  } finally { database.close(); }
 });

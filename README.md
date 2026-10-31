@@ -1,6 +1,6 @@
 # Coding Sessions
 
-**v0.1.1 preview (prerelease).** See [validation coverage and remaining checks](deploy/VALIDATION.md). Full systemd lifecycle, provider OAuth, and provider sandbox compatibility are not yet verified across the supported Ubuntu matrix.
+**v0.1.2 preview (prerelease).** See [validation coverage and remaining checks](deploy/VALIDATION.md). Full systemd lifecycle, provider OAuth, and provider sandbox compatibility are not yet verified across the supported Ubuntu matrix.
 
 A self-hosted control panel for Claude Code, Codex, Command Code, and other CLI agents. Start sessions from your phone, reconnect to their terminals, inspect activity, and resume supported conversations. An authenticated MCP endpoint lets compatible clients manage the same sessions.
 
@@ -56,6 +56,8 @@ sudo -u xcs-personal -H /opt/xcloud-sessions/personal/current/deploy/install-pro
 ```
 
 Use **Agent authentication** in the app for supported sign-in/account actions. Account changes apply to the whole instance. Existing logins may have an unknown login date, and providers do not all expose email addresses.
+
+Fresh Codex workspaces may pause at folder trust. The app shows **Folder trust required** while startup is pending; open the terminal to review the folder yourself. It does not accept trust on your behalf or report readiness before the managed hook arrives.
 
 Managed Codex sessions additionally need the root-owned hook policy installed with `--codex-hooks`. Existing Codex policies are not silently replaced. Review the installer guide before enabling this host-wide policy.
 

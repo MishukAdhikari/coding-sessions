@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { CODEX_READINESS_TIMEOUT_ERROR, codexProcessMatchesLaunch, createStartupTrustProbe } from "./codex-startup";
 import { childEnvironment } from "./child-env";
 import { DB_PATH, db, getMeta } from "./db";
 import { queueChatDeletion } from "./claude-chat";
@@ -35,6 +36,7 @@ const ACTIVE_CPU_PCT = 5; // Process CPU indicator only; turn state comes from a
 const STARTING_GRACE_MS = 15 * 60_000; // screen alive but claude not yet up → "starting"
 const SCREEN_DISCOVERY_GRACE_MS = 30_000;
 export const CODEX_SESSION_START_TIMEOUT_SEC = 2 * 60;
+const startupTrustProbe = createStartupTrustProbe();
 const CODEX_EARLY_EXIT_ERROR = "Codex exited before its managed SessionStart hook reported readiness.";
 
 export function codexSessionStartTimedOut(phase: string | null, childUptimeSec: number): boolean {
@@ -64,6 +66,7 @@ export interface SessionInfo {
   asking: boolean;         // Claude asked a question and is blocked on your reply (a stronger "waiting")
   telemetryUnknown: boolean; // Activity evidence is stale or absent while the process is live
   activity?: SessionActivity;
+  startupWaitingForTrust?: boolean; // A live pre-hook Codex TUI needs a folder-trust decision.
   turnComplete?: boolean; // Codex Stop, distinct from its initial SessionStart readiness
   claudeUrl: string | null;
   remoteControl: boolean;  // launched with --remote-control → drivable from the Claude app
@@ -484,6 +487,31 @@ export interface LaunchRow {
   resume_archive_id: number | null;
 }
 
+export function reconcileCodexStartup(database: Database, launch: LaunchRow, uptimeSec: number, trustPrompt: boolean) {
+  if (trustPrompt) {
+    database.query(
+      "UPDATE launches SET phase = 'awaiting_session_start', error_message = NULL " +
+      "WHERE launch_id = ? AND screen = ? AND provider = 'codex' AND phase = 'failed' AND error_message = ? " +
+      "AND NOT EXISTS (SELECT 1 FROM codex_launch_state WHERE launch_id = launches.launch_id)",
+    ).run(launch.launch_id, launch.screen, CODEX_READINESS_TIMEOUT_ERROR);
+  } else if (codexSessionStartTimedOut(launch.phase, uptimeSec)) {
+    database.query(
+      "UPDATE launches SET phase = 'failed', error_message = ? WHERE launch_id = ? AND screen = ? " +
+      "AND provider = 'codex' AND phase = 'awaiting_session_start' " +
+      "AND NOT EXISTS (SELECT 1 FROM codex_launch_state WHERE launch_id = launches.launch_id)",
+    ).run(CODEX_READINESS_TIMEOUT_ERROR, launch.launch_id, launch.screen);
+  }
+  const current = database.query(
+    "SELECT phase, error_message FROM launches WHERE launch_id = ? AND screen = ? AND provider = 'codex'",
+  ).get(launch.launch_id, launch.screen) as { phase: string; error_message: string | null } | null;
+  const hasState = !!database.query("SELECT 1 FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id);
+  return {
+    phase: current?.phase ?? launch.phase,
+    error: current?.error_message ?? (current ? null : launch.error_message),
+    waitingForTrust: !!current && current.phase === "awaiting_session_start" && !hasState && trustPrompt,
+  };
+}
+
 const launchColumns = "screen, name, project_path, created_at, claude_url, resume_id, remote_control, provider, launch_id, phase, error_message, resume_archive_id";
 
 function rowProvider(value: unknown): SessionProvider {
@@ -667,7 +695,10 @@ export function resolveActivity(cpuHigh: boolean, st: TurnState): Activity {
 }
 
 export async function listSessions(): Promise<SessionInfo[]> {
-  const [procs, screens] = await Promise.all([listProcs(), listScreens()]);
+  const [procs, holders] = await Promise.all([listProcs(), mux.listAll()]);
+  const screens = new Map<number, string>();
+  let unknownHolder = 0;
+  for (const holder of holders) if (holder.name.startsWith(SCREEN_PREFIX)) screens.set(holder.pid ?? --unknownHolder, holder.name);
   const byPid = new Map(procs.map((p) => [p.pid, p]));
 
   const claudeProcs = procs.filter((p) => isClaudeProc(p.args));
@@ -789,14 +820,22 @@ export async function listSessions(): Promise<SessionInfo[]> {
     const proc = findProviderProcess(procs, screenEntry[0], "codex");
     if (!proc) continue;
     claimedScreens.add(launch.screen);
-    if (codexSessionStartTimedOut(launch.phase, proc.etimes)) {
-      const error = "Codex started, but its managed SessionStart hook did not report readiness.";
-      db.query(
-        "UPDATE launches SET phase = 'failed', error_message = ? WHERE launch_id = ? AND provider = 'codex' AND phase = 'awaiting_session_start'",
-      ).run(error, launch.launch_id);
-      launch.phase = "failed";
-      launch.error_message = error;
+    let startupWaitingForTrust = false;
+    const mayWaitForTrust = launch.phase === "awaiting_session_start"
+      || (launch.phase === "failed" && launch.error_message === CODEX_READINESS_TIMEOUT_ERROR);
+    const holder = holders.find(item => item.name === launch.screen && item.pid === screenEntry[0]);
+    if (mayWaitForTrust && launch.launch_id && holder
+      && !db.query("SELECT 1 FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id)
+      && codexProcessMatchesLaunch(proc.pid, launch.launch_id, launch.screen, DB_PATH)) {
+      const prompt = await startupTrustProbe(launch.launch_id, proc.pid, {
+        backend: holder.backend, screen: launch.screen, zmxBin: mux.ZMX_BIN,
+      });
+      startupWaitingForTrust = prompt && codexProcessMatchesLaunch(proc.pid, launch.launch_id, launch.screen, DB_PATH);
     }
+    const startup = reconcileCodexStartup(db, launch, proc.etimes, startupWaitingForTrust);
+    launch.phase = startup.phase;
+    launch.error_message = startup.error;
+    startupWaitingForTrust = startup.waitingForTrust;
     const state = launch.launch_id
       ? db.query("SELECT session_id, model, turn_state, last_event, updated_at FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id) as
           { session_id: string | null; model: string | null; turn_state: string; last_event: string; updated_at: number } | null
@@ -820,9 +859,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
       uptimeSec: proc.etimes,
       cpu: proc.pcpu,
       active: proc.pcpu >= ACTIVE_CPU_PCT,
+      startupWaitingForTrust,
       busy: ready && activity.busy,
-      waiting: ready && activity.waiting,
-      asking: ready && activity.asking,
+      waiting: startupWaitingForTrust || (ready && activity.waiting),
+      asking: startupWaitingForTrust || (ready && activity.asking),
       telemetryUnknown: ready && activity.telemetryUnknown,
       turnComplete: state?.last_event === "Stop",
       claudeUrl: null,

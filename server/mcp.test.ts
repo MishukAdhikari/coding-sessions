@@ -174,3 +174,10 @@ test("list_sessions adds UI activity without changing legacy MCP state", async (
   const result = await call(deps, "list_sessions", {});
   expect(result.structuredContent.sessions[0]).toMatchObject({ state: "waiting", activity: "finished" });
 });
+
+test("MCP reports confirmed startup trust as asking, preserving unready lifecycle", async () => {
+  const pending = session({ provider: "codex", phase: "awaiting_session_start", status: "starting", startupWaitingForTrust: true, telemetryUnknown: true });
+  expect(sessionState(pending, true)).toBe("asking");
+  expect(sessionState({ ...pending, status: "ended" }, true)).toBe("ended");
+  expect(sessionState({ ...pending, startupWaitingForTrust: false }, true)).toBe("starting");
+});
