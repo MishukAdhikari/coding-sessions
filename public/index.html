@@ -12,7 +12,7 @@
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=38">
+<link rel="stylesheet" href="/app.css?v=39">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -48,8 +48,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 <!-- ========== App ========== -->
 <section id="app" class="screen" hidden>
   <header class="topbar">
-    <div>
+    <div class="title-block">
       <h1 class="title">Sessions</h1>
+      <p id="summary" class="summary" aria-live="polite" aria-atomic="true">&nbsp;</p>
     </div>
     <div id="host" class="host" hidden aria-label="Server usage">
       <div class="host-row"><span class="host-k">CPU</span><span class="host-meter"><i id="host-cpu-bar"></i></span><span class="host-v" id="host-cpu">—</span></div>
@@ -60,7 +61,6 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="0.5"/><circle cx="12" cy="12" r="0.5"/><circle cx="12" cy="19" r="0.5"/></svg>
     </button>
   </header>
-  <p id="summary" class="summary" aria-live="polite" aria-atomic="true">&nbsp;</p>
 
   <nav id="tabs" class="tabs" aria-label="Filter sessions">
     <button class="tab" data-tab="active">Active <span class="tab-n" id="tabn-active"></span></button>
