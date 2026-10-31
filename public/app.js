@@ -1385,7 +1385,7 @@
   });
 
   $("btn-end-all").addEventListener("click", () => {
-    const running = sessions.filter((s) => s.status === "running").length;
+    const running = sessions.filter((s) => s.status === "running" || s.status === "starting").length;
     if (!sessions.length) { closeSheet(); showToast("Nothing to end"); return; }
     $("btn-open-claude").hidden = true;
     $("btn-copy-cmd").hidden = true;

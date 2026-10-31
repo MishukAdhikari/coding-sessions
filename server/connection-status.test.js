@@ -25,6 +25,36 @@ test("authorized apps, configured tokens and missing connections have distinct s
   expect(describe.cli({ tokens: [] }).label).toBe("Not configured");
 });
 
+test("agent totals count confirmed sign-ins and keep unknown checks visible", () => {
+  const { describe } = harness();
+  const accounts = [{ installed: true, loggedIn: true }, { installed: true, loggedIn: true }, { installed: true, loggedIn: false }];
+  expect(describe.agents({ accounts })).toMatchObject({ tone: "positive", label: "2 connected", detail: "" });
+  accounts[2].loggedIn = null;
+  expect(describe.agents({ accounts })).toMatchObject({ tone: "warning", label: "2 connected" });
+  expect(describe.agents({ accounts }).detail).toContain("1 agent");
+  expect(describe.agents({ accounts: [{ installed: true, loggedIn: null }] }).label).toBe("Unknown");
+  expect(describe.agents({ accounts: [{ installed: false, loggedIn: null }] }).label).toBe("0 connected");
+});
+
+test("command and project totals describe registrations rather than live connections", () => {
+  const { describe } = harness();
+  expect(describe.commands({ commands: [] }).label).toBe("0 commands");
+  expect(describe.commands({ commands: [{}] }).label).toBe("1 command");
+  expect(describe.projects({ projects: [{}, {}, {}] }).label).toBe("3 projects");
+  expect(describe.projects({ projects: [{}] }).label).toBe("1 project");
+});
+
+test("server summaries show schedule health and distinguish live sessions from history", () => {
+  const { describe } = harness();
+  expect(describe.updates({ available: true, enabled: true, result: "success" })).toMatchObject({ tone: "positive", label: "Daily" });
+  expect(describe.updates({ available: true, enabled: false }).label).toBe("Paused");
+  expect(describe.updates({ available: true, enabled: true, result: "failed" }).tone).toBe("warning");
+  expect(describe.updates({ available: true, running: true }).label).toBe("Updating");
+  expect(describe.updates({ available: false }).label).toBe("Not set up");
+  expect(describe.history({ archived: [{}, {}] }).label).toBe("2 ended");
+  expect(describe.sessions({ sessions: [{ status: "running" }, { status: "starting" }, { status: "ended" }] }).label).toBe("2 live");
+});
+
 test("GitHub reports sign-in and installation evidence without treating missing data as signed out", () => {
   const { describe } = harness();
   expect(describe.github({ installed: true, authenticated: true, account: "operator" }).detail).toContain("operator");
