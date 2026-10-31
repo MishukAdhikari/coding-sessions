@@ -240,7 +240,10 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 }
 
 .appearance-setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border-default); }
-.appearance-setting select { min-height: 44px; padding: 8px 12px; font: inherit; color: var(--text-primary); background: var(--surface-muted); border: 1px solid var(--border-default); border-radius: var(--radius-control); }
+.appearance-select { position: relative; flex: none; max-width: 100%; }
+.appearance-setting select { appearance: none; -webkit-appearance: none; width: 100%; min-width: 7.5em; min-height: 44px; padding: .625em 2.5em .625em .875em; font: inherit; line-height: 1.5; color: var(--text-primary); background: var(--surface-muted); border: 1px solid var(--border-default); border-radius: var(--radius-control); cursor: pointer; }
+.appearance-select > svg { position: absolute; inset-inline-end: .75em; top: 50%; transform: translateY(-50%); width: 1em; height: 1em; pointer-events: none; color: var(--text-secondary); }
+.appearance-setting select:hover { border-color: var(--text-secondary); }
 @media (max-width: 379px) {
   .topbar { flex-wrap: wrap; }
   .host { order: 3; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; font-size: 9px; }
