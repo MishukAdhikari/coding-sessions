@@ -41,6 +41,8 @@ New deployments use `CS_AGENT_PERMISSIONS=standard`: the application does not ad
 
 Explicit `unrestricted` and `inherit` modes support deliberate legacy behavior. Review them before enabling either. No credential-pointer filtering can make arbitrary same-account shell access safe for mutually untrusted users.
 
+In `unrestricted` mode, managed Codex launches and resumes automatically trust the selected project folder, including its project configuration. Trust is passed for that invocation only; the application does not rewrite Codex's user configuration or trust the entire workspace parent. Standard mode keeps Codex's folder-trust confirmation. Managed hook validation remains enabled in both modes.
+
 With no configured token key, legacy app-token reads and writes remain plaintext-compatible. Configuring a key encrypts new writes, while existing plaintext rows remain readable. There is no automatic database or backup migration. An encrypted value with a missing/wrong key, wrong context, or failed authentication cannot be delivered as a token.
 
 ## Backup and recovery

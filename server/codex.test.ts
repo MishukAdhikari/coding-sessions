@@ -306,5 +306,23 @@ test("the checked-in managed requirements template satisfies preflight without b
 test("unrestricted Codex permissions require explicit operator configuration", () => {
   const options = { bin: "/usr/local/bin/codex", cwd: "/srv/project", screen: "cs-demo", launchId, dbPath: "/srv/app/data/app.db" };
   expect(buildCodexInvocation(options)?.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  expect(buildCodexInvocation(options)?.argv).not.toContain("-c");
   expect(buildCodexInvocation({ ...options, unrestricted: true })?.argv).toContain("--dangerously-bypass-approvals-and-sandbox");
+});
+
+test("unrestricted launches and resumes trust only the selected folder through a valid TOML table", () => {
+  for (const cwd of ["/srv/project", "/srv/example.com/team's \"copy\"", "/srv/back\\slash\nnext\x7f"]) {
+    for (const session of [null, resumeId]) {
+      const invocation = buildCodexInvocation({
+        bin: "codex", cwd, screen: "cs-demo", launchId, dbPath: "/tmp/app.db",
+        unrestricted: true, resumeId: session,
+      })!;
+      const overrideIndex = invocation.argv.indexOf("-c");
+      const override = invocation.argv[overrideIndex + 1]!;
+      expect(override.startsWith("projects=")).toBe(true);
+      expect(Bun.TOML.parse(override)).toEqual({ projects: { [cwd]: { trust_level: "trusted" } } });
+      expect(invocation.argv).not.toContain("--dangerously-bypass-hook-trust");
+      if (session) expect(invocation.argv.slice(-2)).toEqual(["resume", session]);
+    }
+  }
 });
