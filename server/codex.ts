@@ -67,6 +67,11 @@ export function buildCodexInvocation(options: CodexInvocationOptions): CodexInvo
   ) return null;
 
   const argv = [bin, ...(options.unrestricted ? ["--dangerously-bypass-approvals-and-sandbox"] : []), "-C", normalize(cwd)];
+  if (options.unrestricted) {
+    // Use a table value: Codex splits dotted override keys even inside quoted paths.
+    const projectKey = JSON.stringify(normalize(cwd)).replace(/\x7f/g, "\\u007f");
+    argv.push("-c", `projects={${projectKey}={trust_level="trusted"}}`);
+  }
   if (resumeId) argv.push("resume", resumeId.toLowerCase());
   return {
     argv,
