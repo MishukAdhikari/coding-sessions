@@ -17,6 +17,7 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13",
     "@simplewebauthn/server": "^13",
+    "ipaddr.js": "2",
     "playwright": "1.59.1"
   }
 }

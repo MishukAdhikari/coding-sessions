@@ -98,9 +98,9 @@ codex mcp add xcloud-sessions --url https://sessions.example.com/mcp --bearer-to
 
 ## Cloudflare Access
 
-The whole host sits behind Cloudflare Access, and Claude's servers (and a CLI's
-token refresh) can't pass an Access login. These paths need a **Bypass** policy —
-the app's own OAuth guards them instead:
+If your instance sits behind Cloudflare Access, note that Claude's servers (and a
+CLI's token refresh) can't pass an Access login. These paths then need a **Bypass**
+policy — the app's own OAuth guards them instead:
 
 - `sessions.example.com/mcp`
 - `sessions.example.com/.well-known/oauth-protected-resource`

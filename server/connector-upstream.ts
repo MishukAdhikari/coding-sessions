@@ -23,11 +23,16 @@ const MESSAGES: Record<UpstreamFailure, string> = {
 const fail = (kind: UpstreamFailure): never => { throw new UpstreamError(kind, MESSAGES[kind]); };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-export interface UpstreamTool { name: string; title?: string; description?: string; inputSchema: Record<string, unknown> }
-export interface UpstreamSession { protocolVersion: string; sessionId: string | null; instructions: string; expiresAt: number }
+export interface UpstreamTool {
+  name: string; title?: string; description?: string; inputSchema: Record<string, unknown>;
+  /** The server's own annotations, kept only to show the operator. */
+  hints?: { readOnly?: boolean; destructive?: boolean; idempotent?: boolean; openWorld?: boolean };
+}
+export interface UpstreamSession { protocolVersion: string; sessionId: string | null; instructions: string; serverInfo: { name: string; version: string | null } | null; expiresAt: number }
 export interface UpstreamOptions {
   url: URL;
-  credential: () => string;
+  /** null sends no Authorization header (a server that needs none). */
+  credential: () => string | null;
   fetch?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
@@ -48,6 +53,26 @@ function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 }
 const reasonKind = (signal: AbortSignal, fallback: UpstreamFailure): UpstreamFailure =>
   signal.aborted && signal.reason instanceof UpstreamError ? signal.reason.kind : fallback;
+
+const label = (value: unknown, max: number): string | null =>
+  typeof value === "string" && value.trim() && !/[\x00-\x1f\x7f]/.test(value) ? value.trim().slice(0, max) : null;
+function serverInfo(value: unknown): UpstreamSession["serverInfo"] {
+  if (!object(value)) return null;
+  const name = label(value.name, 80);
+  return name ? { name, version: label(value.version, 40) } : null;
+}
+function hints(value: Record<string, unknown>): NonNullable<UpstreamTool["hints"]> {
+  const flag = (key: string) => typeof value[key] === "boolean" ? value[key] as boolean : undefined;
+  const out = { readOnly: flag("readOnlyHint"), destructive: flag("destructiveHint"), idempotent: flag("idempotentHint"), openWorld: flag("openWorldHint") };
+  return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined));
+}
+
+/** A name listed more than once (e.g. across pages) is ambiguous: drop every copy. */
+function unique(tools: UpstreamTool[]): UpstreamTool[] {
+  const counts = new Map<string, number>();
+  for (const tool of tools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+  return tools.filter(tool => counts.get(tool.name) === 1);
+}
 
 /** Reads a body with a hard byte cap; never buffers more than the cap. */
 async function boundedText(response: Response, signal: AbortSignal): Promise<string> {
@@ -120,21 +145,27 @@ export class UpstreamClient {
     this.now = options.now ?? Date.now;
   }
 
-  /** Forget cached sessions, e.g. after the credential or endpoint changes. */
+  private readonly lifetime = new AbortController();
+  /** Forget a cached session (e.g. before a fresh settings check). */
   reset(key?: string): void { if (key === undefined) this.sessions.clear(); else this.sessions.delete(key); }
+  /** Permanently stop: in-flight requests (including a shared initialize) abort and new ones fail before sending. */
+  close(): void { this.sessions.clear(); this.lifetime.abort(new UpstreamError("cancelled", MESSAGES.cancelled)); }
 
   private async post(body: Record<string, unknown>, session: UpstreamSession | null, call: Call): Promise<Posted> {
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(new UpstreamError("timeout", MESSAGES.timeout)), call.timeoutMs ?? this.options.timeoutMs ?? 120_000);
     const onAbort = () => abort.abort(new UpstreamError("cancelled", MESSAGES.cancelled));
     call.signal?.addEventListener("abort", onAbort, { once: true });
-    if (call.signal?.aborted) onAbort();
-    const release = () => { clearTimeout(timeout); call.signal?.removeEventListener("abort", onAbort); };
+    this.lifetime.signal.addEventListener("abort", onAbort, { once: true });
+    if (call.signal?.aborted || this.lifetime.signal.aborted) onAbort();
+    const release = () => { clearTimeout(timeout); call.signal?.removeEventListener("abort", onAbort); this.lifetime.signal.removeEventListener("abort", onAbort); };
     try {
+      if (abort.signal.aborted) throw abort.signal.reason;
+      const credential = this.options.credential();
       const headers: Record<string, string> = {
-        authorization: `Bearer ${this.options.credential()}`,
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
+        ...(credential ? { authorization: `Bearer ${credential}` } : {}),
       };
       if (session) headers["mcp-protocol-version"] = session.protocolVersion;
       if (session?.sessionId) headers["mcp-session-id"] = session.sessionId;
@@ -143,7 +174,7 @@ export class UpstreamClient {
     } catch (error) {
       release();
       // A local failure (e.g. the credential cannot be opened) keeps its own class.
-      if (!(error instanceof Error) || error.name === "ConnectorError") throw error;
+      if (!(error instanceof Error) || error.name === "ConnectorError" || error.name === "DestinationError" || error instanceof UpstreamError) throw error;
       return fail(reasonKind(abort.signal, "unavailable"));
     }
   }
@@ -212,6 +243,7 @@ export class UpstreamClient {
         protocolVersion: value.protocolVersion as string,
         sessionId: sessionId && /^[\x21-\x7e]{1,256}$/.test(sessionId) ? sessionId : null,
         instructions: typeof value.instructions === "string" ? value.instructions.slice(0, 16384) : "",
+        serverInfo: serverInfo(value.serverInfo),
         expiresAt: this.now() + 30 * 60_000,
       };
       await this.notify("notifications/initialized", {}, session);
@@ -252,18 +284,19 @@ export class UpstreamClient {
       if (!object(result) || !Array.isArray(result.tools)) fail("protocol");
       const value = result as { tools: unknown[]; nextCursor?: unknown };
       for (const tool of value.tools) {
-        if (!object(tool) || typeof tool.name !== "string" || !/^[A-Za-z0-9_.-]{1,64}$/.test(tool.name) || !object(tool.inputSchema)) continue;
+        if (!object(tool) || typeof tool.name !== "string" || !/^[A-Za-z0-9_./-]{1,128}$/.test(tool.name) || !object(tool.inputSchema)) continue;
         tools.push({
           name: tool.name,
           ...(typeof tool.title === "string" ? { title: tool.title.slice(0, 200) } : {}),
           ...(typeof tool.description === "string" ? { description: tool.description.slice(0, 4000) } : {}),
           inputSchema: tool.inputSchema,
+          ...(object(tool.annotations) ? { hints: hints(tool.annotations) } : {}),
         });
       }
-      if (typeof value.nextCursor !== "string" || !value.nextCursor) return tools;
+      if (typeof value.nextCursor !== "string" || !value.nextCursor) return unique(tools);
       cursor = value.nextCursor;
     }
-    return tools;
+    return unique(tools);
   }
 
   async callTool(key: string, name: string, args: Record<string, unknown>, call: Call = {}): Promise<Record<string, unknown>> {
