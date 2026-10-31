@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- interactive-widget: without it Android Chrome shrinks only the visual
+     viewport when the soft keyboard opens, so a 100dvh page keeps its full
+     height and the cursor line sits behind the keyboard. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Terminal — xCloud Sessions</title>
+<meta name="theme-color" content="#f3f2ed">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<script src="/theme.js?v=1"></script>
+<link rel="stylesheet" href="/app.css?v=38">
+</head>
+<body class="term-page">
+
+<!-- ttyd ships its own xterm.js UI but no viewport meta and no chrome, so on a
+     phone it renders at desktop width with no way out. This page wraps it: a
+     title bar with Close, and a key row for the keys a soft keyboard lacks. -->
+
+<header class="term-bar">
+  <span class="term-live" aria-hidden="true"></span>
+  <h1 id="term-name" class="term-name">Terminal</h1>
+  <button id="btn-term-share" class="term-btn">Share</button>
+  <button id="btn-term-keys" class="term-btn" aria-pressed="true" title="Show or hide the key row">Keys</button>
+  <button id="btn-term-close" class="term-btn term-btn-close">Close</button>
+</header>
+
+<iframe id="term-frame" class="term-frame" title="Terminal"></iframe>
+
+<div id="term-gone" class="term-gone" hidden>
+  <p id="term-gone-title" class="term-gone-title">This terminal has closed.</p>
+  <p id="term-gone-body" class="term-gone-body">The session itself keeps running on the server — open a new terminal from the app.</p>
+  <a id="term-gone-link" class="btn btn-primary" href="/">Back to sessions</a>
+</div>
+
+<nav id="term-keys" class="term-keys" aria-label="Terminal keys">
+  <button class="key" data-seq="&#x1b;">esc</button>
+  <button class="key" data-seq="&#9;">tab</button>
+  <button class="key" data-seq="&#x3;">^C</button>
+  <!-- Screen's copy mode (Ctrl-A [). A session started before ~/.screenrc gained
+       `ti@:te@` still runs on the alternate screen, where the browser terminal
+       has no scrollback at all — this is the only way back through its history.
+       Once inside, the ↑ ↓ keys below scroll and esc leaves. -->
+  <button class="key key-scroll" data-seq="&#x1;[" aria-label="Scroll back through history" title="Scroll back through history — then use ↑ ↓, esc to exit"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h14M12 19V9m-5 5 5-5 5 5"/></svg></button>
+  <button class="key" data-seq="&#x1b;[D">←</button>
+  <button class="key" data-seq="&#x1b;[A">↑</button>
+  <button class="key" data-seq="&#x1b;[B">↓</button>
+  <button class="key" data-seq="&#x1b;[C">→</button>
+  <button class="key key-wide" id="btn-term-kbd" aria-label="Show keyboard"><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h.01M12 9h.01M17 9h.01M7 12h.01M12 12h.01M17 12h.01M8 16h8"/></svg></button>
+</nav>
+
+<script src="/term.js?v=7"></script>
+</body>
+</html>

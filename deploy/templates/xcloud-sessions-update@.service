@@ -1,0 +1,23 @@
+# Managed by xcloud-sessions install-ubuntu. No privilege escalation or credentials.
+[Unit]
+Description=Update installed coding CLIs (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=xcs-%i
+Group=xcs-%i
+WorkingDirectory=/var/lib/xcloud-sessions/%i
+EnvironmentFile=/etc/xcloud-sessions/%i.env
+ExecStart=/opt/xcloud-sessions/%i/current/deploy/update-coding-clis
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/xcloud-sessions/%i
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

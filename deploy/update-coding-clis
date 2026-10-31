@@ -1,0 +1,44 @@
+#!/bin/bash
+set -uo pipefail
+: "${HOME:?HOME must identify the service account}"
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:${PATH:-/usr/local/bin:/usr/bin:/bin}"
+if [[ -e $HOME/.local/bin/node ]]; then
+  node_path="$(readlink -f "$HOME/.local/bin/node")"
+  node_dir=$(dirname "$node_path")
+  export PATH="$node_dir:$PATH"
+fi
+failed=0
+state_dir="$HOME/.local/state/coding-cli-updates"
+mkdir -p "$state_dir" || exit 1
+started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+save_status() {
+  local temp
+  temp="$(mktemp "$state_dir/status.XXXXXX")" || return 1
+  printf '{"started":"%s","finished":%s,"result":"%s"}\n' "$started" "$2" "$1" > "$temp"
+  mv "$temp" "$state_dir/status.json"
+}
+finish() {
+  local code=$?
+  local result=success
+  if [ "$code" -ne 0 ]; then result=failed; fi
+  save_status "$result" "\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+}
+trap finish EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+save_status running null || exit 1
+echo "CLI updates started: $(date -Is)"
+if [[ -x $HOME/.local/bin/codex ]]; then
+  npm install --global --prefix "$HOME/.local" @openai/codex@latest || failed=1
+  "$HOME/.local/bin/codex" --version || failed=1
+fi
+if [[ -x $HOME/.local/bin/command-code ]]; then
+  npm install --global --prefix "$HOME/.local" command-code@latest || failed=1
+  "$HOME/.local/bin/command-code" --no-auto-update --version || failed=1
+fi
+if [[ -x $HOME/.local/bin/claude ]]; then
+  "$HOME/.local/bin/claude" install latest || failed=1
+  "$HOME/.local/bin/claude" --version || failed=1
+fi
+echo "CLI updates finished: $(date -Is); status=$failed"
+exit "$failed"

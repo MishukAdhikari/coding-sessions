@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+[[ $(id -u) != 0 ]] || { echo 'Run as the instance service user, not root.' >&2; exit 1; }
+: "${HOME:?HOME must identify the instance service account}"
+export PATH="$HOME/.local/bin:$PATH"
+(($#)) || { echo 'Usage: install-provider-clis codex|claude|command-code [...]' >&2; exit 1; }
+for provider in "$@"; do
+  case "$provider" in
+    codex|command-code)
+      command -v npm >/dev/null || { echo 'Install a supported Node.js release and npm first.' >&2; exit 1; }
+      node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' || { echo 'Node.js 22 or newer is required.' >&2; exit 1; }
+      package=$provider
+      [[ $provider != codex ]] || package=@openai/codex
+      npm install --global --prefix "$HOME/.local" "$package@latest"
+      "$HOME/.local/bin/$provider" --version;;
+    claude)
+      installer=$(mktemp)
+      trap 'rm -f -- "$installer"' EXIT
+      curl --fail --location --proto '=https' --tlsv1.2 https://claude.ai/install.sh -o "$installer"
+      bash "$installer" latest
+      rm -f -- "$installer"
+      trap - EXIT
+      "$HOME/.local/bin/claude" --version;;
+    *) printf 'Unknown provider: %s\n' "$provider" >&2; exit 1;;
+  esac
+done
+printf 'Installed selected CLIs. Authenticate as this same account; no login was performed.\n'

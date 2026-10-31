@@ -1,0 +1,11 @@
+# Managed by xcloud-sessions install-ubuntu.
+[Unit]
+Description=Daily coding CLI updates (%i)
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 UTC
+Persistent=true
+Unit=xcloud-sessions-update@%i.service
+
+[Install]
+WantedBy=timers.target

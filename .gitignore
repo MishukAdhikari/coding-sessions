@@ -1,0 +1,52 @@
+# dependencies (bun install)
+node_modules
+
+# vendored agent skills (a local copy of mattpocock/skills)
+# skills-lock.json is the tracked record of what's installed
+.agents/
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# runtime state (sqlite db: password hash, passkeys, sessions)
+data/
+
+# Local secrets and database backups
+.env.*
+!.env.example
+*.pem
+*.key
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3

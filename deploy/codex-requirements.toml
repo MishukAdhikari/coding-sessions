@@ -1,0 +1,63 @@
+# Install as /etc/codex/requirements.toml, owned and writable only by root.
+# The pinned Bun interpreter and hook sources must be installed root-owned at
+# these exact paths as documented in README.md. Deliberately do not set
+# allow_managed_hooks_only: normal user, project, session, and plugin hooks
+# retain Codex's standard trust review.
+
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/usr/local/lib/xcloud-sessions/codex-hooks"
+
+[[hooks.SessionStart]]
+matcher = "^(startup|resume|clear|compact)$"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 5
+
+[[hooks.PreToolUse]]
+matcher = "^(request_user_input|AskUserQuestion)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 5
+
+[[hooks.PostToolUse]]
+matcher = "^(request_user_input|AskUserQuestion)$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 5
+
+[[hooks.PermissionRequest]]
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 5
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 5
+
+[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "/usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts"
+timeout = 3

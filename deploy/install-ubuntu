@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+fail() { printf 'install-ubuntu: %s\n' "$*" >&2; exit 1; }
+usage() {
+  cat <<'USAGE'
+Usage: sudo ./deploy/install-ubuntu --instance NAME --origin https://HOST --port PORT
+       (--bun /path/to/reviewed/linux/bun | --bun-version VERSION --bun-sha256 SHA256)
+       [--source /path/to/reviewed/checkout] [--daily-updates] [--codex-hooks]
+       [--install-nginx] [--no-start] [--check]
+
+Ubuntu 24.04/26.04. Creates a dedicated xcs-NAME user; existing unmanaged users,
+units, state or Codex policies are never taken over. --check validates inputs and
+reports paths without writes. --no-start stages units for offline validation.
+Provider CLIs and authentication are separate operator steps. No sudo grant is
+made to the service account. Nginx is opt-in; HTTPS must be provisioned afterward.
+USAGE
+}
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+instance='' origin='' port='' bun_path='' bun_version='' bun_sha256=''
+daily=0 hooks=0 nginx=0 start=1 check=0
+while (($#)); do
+  case "$1" in
+    --instance|--origin|--port|--bun|--bun-version|--bun-sha256|--source)
+      (($# >= 2)) || fail "missing value for $1"
+      case "$1" in
+        --instance) instance=$2;; --origin) origin=$2;; --port) port=$2;;
+        --bun) bun_path=$2;; --bun-version) bun_version=$2;; --bun-sha256) bun_sha256=$2;;
+        --source) source_dir=$2;;
+      esac
+      shift 2;;
+    --daily-updates) daily=1; shift;; --codex-hooks) hooks=1; shift;;
+    --install-nginx) nginx=1; shift;; --no-start) start=0; shift;; --check) check=1; shift;;
+    --help|-h) usage; exit 0;; *) fail "unknown option: $1";;
+  esac
+done
+[[ $instance =~ ^[a-z][a-z0-9-]{0,19}$ && $instance != *- ]] || fail 'instance must be 1-20 lowercase letters/digits/hyphens, starting with a letter and ending with letter/digit'
+[[ $origin =~ ^https://([a-z0-9]([a-z0-9.-]*[a-z0-9])?)$ ]] || fail 'origin must be https://hostname without port, path, or credentials'
+host=${BASH_REMATCH[1]}
+[[ $host != *..* ]] || fail 'invalid hostname'
+IFS=. read -r -a host_labels <<< "$host"
+for label in "${host_labels[@]}"; do
+  [[ $label =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || fail 'invalid hostname label'
+done
+((${#host} <= 253)) || fail 'hostname is too long'
+[[ $port =~ ^[0-9]{4,5}$ ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || fail 'port must be 1024-65535'
+port=$((10#$port))
+[[ -z $bun_path || ( -z $bun_version && -z $bun_sha256 ) ]] || fail 'choose --bun or version/checksum, not both'
+if [[ -n $bun_path ]]; then
+  [[ $bun_path = /* && -f $bun_path && -x $bun_path ]] || fail '--bun must name an absolute executable file'
+else
+  [[ $bun_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $bun_sha256 =~ ^[a-fA-F0-9]{64}$ ]] || fail 'provide --bun or an exact --bun-version and --bun-sha256 archive checksum'
+fi
+[[ -d $source_dir && -f $source_dir/bun.lock && -f $source_dir/server/index.ts && -d $source_dir/deploy/templates ]] || fail 'source must be a reviewed checkout containing bun.lock, server and deploy templates'
+source_dir=$(cd -- "$source_dir" && pwd -P)
+[[ $source_dir != / && $source_dir != /opt/xcloud-sessions* ]] || fail 'source must be a separate checkout, not an installed release'
+service_user=xcs-$instance
+instance_home=/var/lib/xcloud-sessions/$instance
+app_root=/opt/xcloud-sessions/$instance
+config_root=/etc/xcloud-sessions
+marker=$config_root/instances/$instance
+if ((check)); then
+  printf 'Validated: instance=%s user=%s home=%s app=%s origin=%s port=%s\n' "$instance" "$service_user" "$instance_home" "$app_root" "$origin" "$port"
+  exit 0
+fi
+[[ $(id -u) = 0 ]] || fail 'run the installer as root; agents will run under the dedicated non-root account'
+[[ $(uname -s) = Linux && -r /etc/os-release ]] || fail 'Ubuntu Linux required'
+. /etc/os-release
+[[ ${ID:-} = ubuntu && ( ${VERSION_ID:-} = 24.04 || ${VERSION_ID:-} = 26.04 ) ]] || fail 'supported releases are Ubuntu 24.04 and 26.04'
+case $(uname -m) in x86_64) bun_arch=x64;; aarch64|arm64) bun_arch=aarch64;; *) fail 'supported architectures are amd64 and arm64';; esac
+for path in /opt/xcloud-sessions "$config_root" "$config_root/instances" "$config_root/credentials" "$config_root/credentials/$instance" "$app_root" "$app_root/releases" /var/lib/xcloud-sessions; do
+  [[ ! -L $path ]] || fail "refusing symlink: $path"
+  if [[ -e $path ]]; then
+    [[ -d $path && $(stat -c %u "$path") = 0 ]] || fail "installer directory must be root-owned: $path"
+    mode=$(stat -c %a "$path")
+    (( (8#$mode & 0022) == 0 )) || fail "installer directory must not be group/world writable: $path"
+  fi
+done
+[[ ! -L $instance_home ]] || fail 'instance home cannot be a symlink'
+managed=0
+if [[ -e $marker ]]; then
+  [[ -f $marker && ! -L $marker && $(stat -c %u "$marker") = 0 ]] || fail 'invalid instance ownership marker'
+  [[ $(cat "$marker") = "xcloud-sessions:$instance:$service_user:$instance_home" ]] || fail 'instance marker mismatch'
+  managed=1
+else
+  ! getent passwd "$service_user" >/dev/null || fail 'service user already exists without installer ownership marker'
+  ! getent group "$service_user" >/dev/null || fail 'service group already exists without installer ownership marker'
+  [[ ! -e $instance_home && ! -e $app_root && ! -e $config_root/$instance.env && ! -e $config_root/credentials/$instance ]] || fail 'instance paths already exist without installer ownership marker'
+  [[ ! -e /etc/systemd/system/xcloud-sessions@$instance.service && ! -e /etc/systemd/system/xcloud-sessions-update@$instance.service && ! -e /etc/systemd/system/xcloud-sessions-update@$instance.timer ]] || fail 'instance unit override already exists'
+fi
+for unit in xcloud-sessions@.service xcloud-sessions-update@.service xcloud-sessions-update@.timer; do
+  target=/etc/systemd/system/$unit
+  if [[ -e $target ]]; then
+    [[ ! -L $target ]] && head -n 1 "$target" | grep -q '^# Managed by xcloud-sessions install-ubuntu\.' || fail "refusing unmanaged unit: $target"
+    cmp -s "$source_dir/deploy/templates/$unit" "$target" || fail "shared unit differs: review and upgrade $target separately"
+  fi
+done
+if ((hooks)) && [[ -e /etc/codex/requirements.toml ]]; then
+  [[ ! -L /etc/codex/requirements.toml ]] && cmp -s "$source_dir/deploy/codex-requirements.toml" /etc/codex/requirements.toml || fail 'existing Codex requirements differ; review policy separately'
+fi
+if ((nginx)) && [[ -e /etc/nginx/sites-available/xcloud-sessions-$instance || -L /etc/nginx/sites-available/xcloud-sessions-$instance || -e /etc/nginx/sites-enabled/xcloud-sessions-$instance || -L /etc/nginx/sites-enabled/xcloud-sessions-$instance ]]; then
+  fail 'nginx site already exists; preserve it and omit --install-nginx on rerun'
+fi
+if ((managed)); then
+  [[ -f $config_root/$instance.env && ! -L $config_root/$instance.env && $(stat -c %u "$config_root/$instance.env") = 0 ]] || fail 'managed environment file is missing or unsafe'
+  grep -qx "ORIGIN=$origin" "$config_root/$instance.env" && grep -qx "PORT=$port" "$config_root/$instance.env" || fail 'existing origin or port differs; edit instance configuration deliberately, then rerun'
+  for unit in "xcloud-sessions@$instance.service" "xcloud-sessions-update@$instance.service" "xcloud-sessions-update@$instance.timer"; do
+    [[ ! -e /etc/systemd/system/$unit && ! -d /etc/systemd/system/$unit.d ]] || fail "instance unit override exists: $unit; review separately"
+  done
+  entry=$(getent passwd "$service_user") || fail 'managed service account is missing'
+  [[ $(cut -d: -f6 <<< "$entry") = "$instance_home" && $(cut -d: -f3 <<< "$entry") != 0 ]] || fail 'managed service account changed'
+  [[ $(id -nG "$service_user") = "$service_user" ]] || fail 'service account has extra groups; review them before continuing'
+fi
+if ((start)); then [[ -d /run/systemd/system ]] || fail 'systemd is not running; use --no-start for image preparation'; fi
+for existing in "$config_root"/*.env; do
+  [[ -f $existing && $existing != "$config_root/$instance.env" ]] || continue
+  ! grep -qx "PORT=$port" "$existing" || fail 'port is assigned to another instance'
+done
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates curl unzip git gh rsync openssh-client screen ttyd procps lsof sudo bash coreutils grep sed libc-bin openssl systemd util-linux
+if ((nginx)); then apt-get install -y nginx certbot python3-certbot-nginx; fi
+stage=$(mktemp -d /tmp/xcs-install.XXXXXXXX)
+trap 'rm -rf -- "$stage"' EXIT
+if [[ -z $bun_path ]]; then
+  archive=$stage/bun.zip
+  curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-$bun_arch.zip" -o "$archive"
+  printf '%s  %s\n' "$bun_sha256" "$archive" | sha256sum --check --status || fail 'Bun archive checksum mismatch'
+  unzip -q "$archive" -d "$stage/bun"
+  bun_path=$stage/bun/bun-linux-$bun_arch/bun
+fi
+"$bun_path" --version >/dev/null || fail 'Bun does not run on this host'
+mkdir "$stage/source"
+source_items=(server public scripts deploy package.json bun.lock)
+for document in LICENSE README.md SECURITY.md THIRD_PARTY_NOTICES.md docs/security.md docs/mcp.md docs/local-dev.md; do [[ ! -f $source_dir/$document ]] || source_items+=("$document"); done
+tar -C "$source_dir" --exclude=node_modules --exclude=data --exclude='.env*' --exclude='*.log' --exclude='*.db' --exclude='*.db-*' --exclude=__pycache__ --exclude='*.pyc' -cf "$stage/source.tar" "${source_items[@]}"
+tar -C "$stage/source" -xf "$stage/source.tar"
+[[ -z $(find "$stage/source" -type l -print -quit) ]] || fail 'reviewed source must not contain symlinks into mutable locations'
+mkdir -p "$stage/source/bin"
+install -m 0755 "$bun_path" "$stage/source/bin/bun"
+(cd "$stage/source" && ./bin/bun install --frozen-lockfile --ignore-scripts)
+release=$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$stage/source.tar" | cut -c1-12)
+install -d -o root -g root -m 0755 /opt/xcloud-sessions "$app_root" "$app_root/releases"
+[[ ! -e $app_root/releases/$release ]] || release=$release-$$
+cp -a "$stage/source" "$app_root/releases/$release"
+chown -R root:root "$app_root/releases/$release"
+chmod -R go-w "$app_root/releases/$release"
+chmod 0755 "$app_root/releases/$release"
+chmod 0755 "$app_root/releases/$release/deploy/update-coding-clis" "$app_root/releases/$release/deploy/install-provider-clis"
+# Package directories must be readable by the service account despite installer umask.
+find "$app_root/releases/$release" -type d -exec chmod a+rx {} +
+find "$app_root/releases/$release" -type f -exec chmod a+r {} +
+
+install -d -o root -g root -m 0755 "$config_root" "$config_root/instances" /var/lib/xcloud-sessions
+install -d -o root -g root -m 0700 "$config_root/credentials" "$config_root/credentials/$instance"
+if ((!managed)); then
+  useradd --system --user-group --home-dir "$instance_home" --shell /bin/bash "$service_user"
+  install -d -o "$service_user" -g "$service_user" -m 0700 "$instance_home"
+  printf 'xcloud-sessions:%s:%s:%s\n' "$instance" "$service_user" "$instance_home" > "$marker"
+  chmod 0600 "$marker"
+fi
+for directory in data run run/screen .config .local .local/bin .local/state; do
+  [[ ! -L $instance_home/$directory ]] || fail "refusing state symlink: $directory"
+  runuser -u "$service_user" -- install -d -m 0700 "$instance_home/$directory"
+done
+for credential in admin-password token-encryption-key; do
+  path=$config_root/credentials/$instance/$credential
+  [[ ! -L $path ]] || fail 'credential path is a symlink'
+  if [[ ! -e $path ]]; then openssl rand -base64 32 > "$path"; fi
+  [[ -f $path && $(stat -c %u "$path") = 0 ]] || fail 'credential must be a root-owned regular file'
+  chmod 0600 "$path"
+done
+if [[ ! -e $instance_home/.screenrc ]]; then
+  printf 'termcapinfo xterm*|xterms|xs|rxvt ti@:te@\ndefscrollback 10000\ndefutf8 on\n' | runuser -u "$service_user" -- tee "$instance_home/.screenrc" >/dev/null
+fi
+if [[ ! -e $config_root/$instance.env ]]; then
+  cat > "$config_root/$instance.env" <<ENV
+HOME=$instance_home
+PATH=$instance_home/.local/bin:/opt/xcloud-sessions/$instance/current/bin:/usr/local/bin:/usr/bin:/bin
+PORT=$port
+ORIGIN=$origin
+RP_ID=$host
+XCS_DATA_DIR=$instance_home/data
+XCS_RUNTIME_DIR=$instance_home/run
+SCREENDIR=$instance_home/run/screen
+XCS_AGENT_PERMISSIONS=standard
+XCS_CHILD_ENV=filtered
+XCS_TRUST_PROXY=1
+XCS_MUX=screen
+XCS_CLI_UPDATE_TIMER=xcloud-sessions-update@$instance.timer
+XCS_CLI_UPDATE_SERVICE=xcloud-sessions-update@$instance.service
+XCS_CLI_UPDATE_CONTROL=0
+ENV
+  chmod 0600 "$config_root/$instance.env"
+else
+  [[ ! -L $config_root/$instance.env && $(stat -c %u "$config_root/$instance.env") = 0 ]] || fail 'environment file must be root-owned and not a symlink'
+  chmod 0600 "$config_root/$instance.env"
+  grep -qx "ORIGIN=$origin" "$config_root/$instance.env" && grep -qx "PORT=$port" "$config_root/$instance.env" || fail 'existing origin or port differs; edit instance configuration deliberately, then rerun'
+fi
+for unit in xcloud-sessions@.service xcloud-sessions-update@.service xcloud-sessions-update@.timer; do
+  install -o root -g root -m 0644 "$source_dir/deploy/templates/$unit" /etc/systemd/system/
+done
+if ((hooks)); then
+  for directory in /etc/codex /usr/local/lib/xcloud-sessions /usr/local/lib/xcloud-sessions/bin /usr/local/lib/xcloud-sessions/codex-hooks; do
+    [[ ! -L $directory ]] || fail "refusing managed hook symlink: $directory"
+    install -d -o root -g root -m 0755 "$directory"
+  done
+  for target in /usr/local/lib/xcloud-sessions/bin/bun /usr/local/lib/xcloud-sessions/codex-hooks/codex-hook.ts /usr/local/lib/xcloud-sessions/codex-hooks/codex-state.ts; do [[ ! -L $target ]] || fail "refusing hook symlink: $target"; done
+  install -o root -g root -m 0755 "$bun_path" /usr/local/lib/xcloud-sessions/bin/bun
+  install -o root -g root -m 0644 "$source_dir/server/codex-hook.ts" "$source_dir/server/codex-state.ts" /usr/local/lib/xcloud-sessions/codex-hooks/
+  install -o root -g root -m 0644 "$source_dir/deploy/codex-requirements.toml" /etc/codex/requirements.toml
+fi
+ln -s "$app_root/releases/$release" "$app_root/current.new"
+mv -Tf "$app_root/current.new" "$app_root/current"
+if ((nginx)); then
+  sed -e "s/@INSTANCE@/$instance/g" -e "s/@HOST@/$host/g" -e "s/@PORT@/$port/g" "$source_dir/deploy/templates/nginx.conf" > "/etc/nginx/sites-available/xcloud-sessions-$instance"
+  chmod 0644 "/etc/nginx/sites-available/xcloud-sessions-$instance"
+  ln -s "/etc/nginx/sites-available/xcloud-sessions-$instance" "/etc/nginx/sites-enabled/xcloud-sessions-$instance"
+  nginx -t
+  if ((start)); then systemctl reload nginx; fi
+fi
+systemd-analyze verify "xcloud-sessions@$instance.service" "xcloud-sessions-update@$instance.service" "xcloud-sessions-update@$instance.timer"
+if ((start)); then
+  systemctl daemon-reload
+  systemctl enable "xcloud-sessions@$instance.service"
+  systemctl restart "xcloud-sessions@$instance.service"
+  healthy=0
+  for _ in {1..10}; do
+    if systemctl is-active --quiet "xcloud-sessions@$instance.service" && curl --fail --silent --max-time 2 --output /dev/null "http://127.0.0.1:$port/"; then healthy=1; break; fi
+    sleep 1
+  done
+  ((healthy)) || fail "service did not become healthy; inspect xcloud-sessions@$instance.service privately (no journal contents printed)"
+  if ((daily)); then systemctl enable --now "xcloud-sessions-update@$instance.timer"; fi
+fi
+printf 'Installed %s. Credentials remain root-only in %s/credentials/%s/.\n' "$instance" "$config_root" "$instance"
+printf 'Complete HTTPS before browser use: sudo certbot --nginx -d %s\n' "$host"
+printf 'Administrator-controlled updates: sudo systemctl enable --now xcloud-sessions-update@%s.timer\n' "$instance"
+printf 'No provider login was performed. See deploy/README.md for provider and operator setup.\n'

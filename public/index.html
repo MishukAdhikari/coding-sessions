@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Coding Sessions</title>
+<meta name="theme-color" content="#f3f2ed">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sessions">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<script src="/theme.js?v=1"></script>
+<link rel="stylesheet" href="/app.css?v=38">
+<script src="/vendor/webauthn.js"></script>
+</head>
+<body>
+<!--
+THESIS: A field notebook for live coding work: clear entries, exact state, useful actions.
+OWN-WORLD: Mineral paper, ruled session ledger, Instrument Sans, restrained cobalt controls; mono is reserved for paths and measurements.
+STORY: Find active work, read its actual state, open or manage it; account and update tasks stay in focused side sheets.
+FIRST VIEWPORT: Sessions and server pressure, a quiet filter index, then aligned session entries and a reachable start action.
+FORM: Grounded direction 5, field notebook index; seed eebd5d1f. Desktop rows become compact stacked entries on phones.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+-->
+
+<!-- ========== Login ========== -->
+<section id="login" class="screen" hidden>
+  <div class="login-wrap">
+    <div class="wordmark" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="38" height="38" rx="5"/><path d="M14 16h20M14 24h12M14 32h20"/></svg></div>
+    <h1 class="login-title">Coding Sessions</h1>
+    <p class="login-sub">Your coding agents on your server</p>
+
+    <div class="login-actions">
+      <button id="btn-passkey" class="btn btn-primary" hidden>Unlock</button>
+      <form id="form-password" hidden>
+        <input id="input-password" class="field" type="password" autocomplete="current-password"
+               placeholder="Admin password" aria-label="Admin password" required>
+        <button class="btn btn-primary" type="submit">Sign in</button>
+      </form>
+      <button id="btn-use-password" class="btn-link" hidden>Use password instead</button>
+    </div>
+    <p id="login-error" class="login-error" hidden></p>
+  </div>
+</section>
+
+<!-- ========== App ========== -->
+<section id="app" class="screen" hidden>
+  <header class="topbar">
+    <div>
+      <h1 class="title">Sessions</h1>
+    </div>
+    <div id="host" class="host" hidden aria-label="Server usage">
+      <div class="host-row"><span class="host-k">CPU</span><span class="host-meter"><i id="host-cpu-bar"></i></span><span class="host-v" id="host-cpu">—</span></div>
+      <div class="host-row"><span class="host-k">RAM</span><span class="host-meter"><i id="host-mem-bar"></i></span><span class="host-v" id="host-mem">—</span></div>
+      <div class="host-row"><span class="host-k">DISK</span><span class="host-meter"><i id="host-disk-bar"></i></span><span class="host-v" id="host-disk">—</span></div>
+    </div>
+    <button id="btn-menu" class="icon-btn" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="0.5"/><circle cx="12" cy="12" r="0.5"/><circle cx="12" cy="19" r="0.5"/></svg>
+    </button>
+  </header>
+  <p id="summary" class="summary" aria-live="polite" aria-atomic="true">&nbsp;</p>
+
+  <nav id="tabs" class="tabs" aria-label="Filter sessions">
+    <button class="tab" data-tab="active">Active <span class="tab-n" id="tabn-active"></span></button>
+    <button class="tab" data-tab="ended">Ended <span class="tab-n" id="tabn-ended"></span></button>
+    <button class="tab" data-tab="all">All</button>
+  </nav>
+
+  <form id="session-search-form" class="session-search" role="search" aria-label="Sessions">
+    <label class="sr-only" for="session-search">Search sessions</label>
+    <svg aria-hidden="true"
+  xmlns="http://www.w3.org/2000/svg"
+  width="18"
+  height="18"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="m21 21-4.34-4.34" />
+  <circle cx="11" cy="11" r="8" />
+</svg>
+
+    <input id="session-search" type="search" placeholder="Search sessions, projects, agents…" autocomplete="off" spellcheck="false" aria-controls="list" aria-describedby="search-status">
+    <button id="clear-session-search" type="button" hidden>Clear</button>
+  </form>
+  <p id="search-status" class="search-status" role="status" aria-live="polite" aria-atomic="true"></p>
+
+  <main id="list" class="list"></main>
+
+  <div id="empty" class="empty" hidden>
+    <div class="empty-halo"><div class="empty-dot"></div></div>
+    <h2 id="empty-title">All quiet</h2>
+    <p id="empty-body">No sessions running. Start one here,<br>then continue in its app or web terminal.</p>
+  </div>
+
+  <footer class="dock">
+    <button id="btn-new" class="btn btn-primary btn-big">Start a session</button>
+  </footer>
+</section>
+
+<!-- ========== Sheets ========== -->
+<div id="scrim" class="scrim" hidden></div>
+
+<div id="sheet-new" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-new-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-new-heading">Start a session</h2>
+  <form id="form-new">
+    <fieldset class="provider-fieldset">
+      <legend class="label">Agent</legend>
+      <div id="provider-picker" class="provider-picker">
+        <label class="provider-pick" data-provider-card="claude">
+          <input type="radio" name="provider" value="claude" aria-describedby="provider-claude-detail" required>
+          <span class="provider-mark provider-mark-claude" aria-hidden="true">C</span>
+          <span class="provider-copy">
+            <span class="provider-name">Claude</span>
+            <span id="provider-claude-detail" class="provider-detail">Claude app or web terminal</span>
+          </span>
+        </label>
+        <label class="provider-pick" data-provider-card="codex">
+          <input type="radio" name="provider" value="codex" aria-describedby="provider-codex-detail provider-capability-note" required disabled>
+          <span class="provider-mark provider-mark-codex" aria-hidden="true">X</span>
+          <span class="provider-copy">
+            <span class="provider-name">Codex</span>
+            <span id="provider-codex-detail" class="provider-detail">Trusted server + web terminal</span>
+          </span>
+        </label>
+        <label class="provider-pick" data-provider-card="command-code">
+          <input type="radio" name="provider" value="command-code" aria-describedby="provider-command-code-detail provider-capability-note" required disabled>
+          <span class="provider-mark provider-mark-command-code" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6 6 6-6 6M13 18h6"/></svg></span>
+          <span class="provider-copy">
+            <span class="provider-name">Command Code</span>
+            <span id="provider-command-code-detail" class="provider-detail">Trusted server + web terminal</span>
+          </span>
+        </label>
+      </div>
+      <p id="provider-capability-note" class="provider-note" aria-live="polite">Checking Codex support…</p>
+    </fieldset>
+    <label class="label" for="input-name">Name</label>
+    <input id="input-name" class="field" type="text" placeholder="e.g. billing-fix"
+           autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="31" required
+           pattern="[a-zA-Z0-9][a-zA-Z0-9_\-]*">
+    <p id="name-preview" class="hint" hidden></p>
+    <label class="label">Project</label>
+    <div id="project-picker" class="picker"></div>
+    <p id="project-load-status" class="hint" role="status" aria-live="polite"></p>
+    <label id="label-repo" class="label" for="input-repo" hidden>Repository</label>
+    <input id="input-repo" class="field" type="text" placeholder="Search repos, or paste a repo or PR link" hidden
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div id="repo-selection" class="repo-selection" role="group" aria-labelledby="label-repo" hidden>
+      <svg class="repo-provider-icon" aria-hidden="true" fill="currentColor" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 16 16"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"/></svg>
+      <span id="selected-repo-name"></span>
+      <button id="btn-change-repo" type="button">Change<span class="sr-only"> repository</span></button>
+    </div>
+    <div id="repo-results" class="repo-results" hidden></div>
+    <div id="branch-row" class="branch-row" hidden>
+      <span class="branch-label" id="branch-label">Branch</span>
+      <button id="btn-branch" aria-describedby="branch-label" class="branch-btn" type="button" aria-haspopup="listbox" aria-expanded="false"></button>
+    </div>
+    <div id="branch-results" class="repo-results" hidden role="listbox" aria-label="Branches"></div>
+    <p id="repo-note" class="hint" hidden></p>
+    <label id="remote-control-row" class="ws-row">
+      <input type="checkbox" id="chk-remote-control" checked>
+      <span>Enable remote control</span>
+    </label>
+    <button id="btn-launch" class="btn btn-primary btn-big" type="submit" disabled aria-describedby="provider-capability-note launch-hint">Start session</button>
+    <p id="launch-hint" class="hint">Choose Claude or Codex to enable Start.</p>
+  </form>
+</div>
+
+<div id="sheet-confirm" class="sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 id="confirm-title" class="sheet-title"></h2>
+  <p id="confirm-body" class="sheet-body"></p>
+  <label id="ws-row" class="ws-row" hidden>
+    <input type="checkbox" id="chk-delete-ws">
+    <span id="ws-label">Also delete the workspace folder</span>
+  </label>
+  <label id="chat-row" class="ws-row" hidden>
+    <input type="checkbox" id="chk-delete-chat">
+    <span>Also delete its chat from Claude</span>
+  </label>
+  <button id="btn-resume" class="btn btn-primary btn-big" hidden>Resume session</button>
+  <a id="btn-open-claude" class="btn btn-ghost btn-big" target="_blank" rel="noopener" data-close hidden>Open old chat in Claude</a>
+  <button id="btn-web-term" class="btn btn-ghost btn-big" hidden>Open web terminal</button>
+  <button id="btn-copy-cmd" class="btn btn-ghost btn-big" hidden>Copy terminal command</button>
+  <button id="btn-copy-managed" class="btn btn-ghost btn-big" hidden>Copy background command</button>
+  <p id="copy-cmd-hint" class="hint" hidden></p>
+  <button id="btn-confirm" class="btn btn-danger btn-big"></button>
+  <button class="btn btn-ghost btn-big" data-close>Keep it</button>
+</div>
+
+<div id="sheet-menu" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-menu-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-menu-heading">Coding Sessions</h2>
+  <section class="settings-section" aria-labelledby="settings-preferences">
+    <h3 id="settings-preferences">Preferences</h3>
+    <label class="appearance-setting" for="theme-preference"><span class="setting-label"><svg aria-hidden="true" class="menu-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="18"
+  height="18"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M12 2v2" />
+  <path d="M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715" />
+  <path d="M16 12a4 4 0 0 0-4-4" />
+  <path d="m19 5-1.256 1.256" />
+  <path d="M20 12h2" />
+</svg>
+Appearance</span><select id="theme-preference"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <label class="ws-row">
+    <input type="checkbox" id="chk-notify">
+    <span>Notify me when a session needs my answer</span>
+  </label>
+  </section>
+  <section class="settings-section" aria-labelledby="settings-agents">
+    <h3 id="settings-agents">Agents &amp; projects</h3>
+    <button id="btn-agent-auth" class="row-btn row-with-icon"><svg aria-hidden="true" class="menu-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="18"
+  height="18"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="m14.305 19.53.923-.382" />
+  <path d="m15.228 16.852-.923-.383" />
+  <path d="m16.852 15.228-.383-.923" />
+  <path d="m16.852 20.772-.383.924" />
+  <path d="m19.148 15.228.383-.923" />
+  <path d="m19.53 21.696-.382-.924" />
+  <path d="M2 21a8 8 0 0 1 10.434-7.62" />
+  <path d="m20.772 16.852.924-.383" />
+  <path d="m20.772 19.148.924.383" />
+  <circle cx="10" cy="8" r="5" />
+  <circle cx="18" cy="18" r="3" />
+</svg>
+Agent authentication…</button>
+    <button id="btn-commands" class="row-btn">Commands — add another agent</button>
+    <button id="btn-projects" class="row-btn">Projects…</button>
+    <div class="menu-group">
+    <label class="label" for="input-prefix">Session name prefix</label>
+    <input id="input-prefix" class="field" type="text" placeholder="e.g. srv-" maxlength="12"
+           autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="hint">Added to every new session name, so server work is easy to identify.</p>
+  </div>
+  </section>
+  <section class="settings-section" aria-labelledby="settings-access">
+    <h3 id="settings-access">Connections &amp; access</h3>
+    <button id="btn-connect" class="row-btn">Connect Claude or Codex…</button>
+    <button id="btn-cli-access" class="row-btn">CLI &amp; MCP access…</button>
+    <button id="btn-github-auth" class="row-btn">GitHub access (gh)…</button>
+    <button id="btn-browser-auth" class="row-btn">Claude.ai browser (chat deletion)…</button>
+    <button id="btn-add-passkey" class="row-btn">Add Face ID / Touch ID on this device</button>
+  </section>
+  <section class="settings-section" aria-labelledby="settings-server">
+    <h3 id="settings-server">Server &amp; history</h3>
+    <button id="btn-cli-updates" class="row-btn row-with-icon"><svg aria-hidden="true" class="menu-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="18"
+  height="18"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+  <path d="M21 3v5h-5" />
+  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+  <path d="M8 16H3v5" />
+</svg>
+CLI updates…</button>
+    <button id="btn-web-terminal" class="row-btn row-with-icon"><svg aria-hidden="true" class="menu-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="18"
+  height="18"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M12 19h8" />
+  <path d="m4 17 6-6-6-6" />
+</svg>
+Open a terminal on the server…</button>
+    <button id="btn-clear-archive" class="row-btn">Clear ended history…</button>
+    <button id="btn-end-all" class="row-btn row-danger">End all sessions…</button>
+  </section>
+  <div class="settings-footer"><button id="btn-logout" class="row-btn">Sign out</button></div>
+</div>
+
+<div id="sheet-cli-updates" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-updates-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-cli-updates-heading">CLI updates</h2>
+  <p class="sheet-body">Keep Codex, Claude Code, and Command Code up to date on this server.</p>
+  <dl id="cli-update-versions" class="cli-update-details"></dl>
+  <label class="ws-row">
+    <input type="checkbox" id="chk-cli-updates" disabled>
+    <span>Update automatically every 24 hours</span>
+  </label>
+  <p class="hint">Runs daily at 06:00 Bangladesh time (00:00 UTC). Missed runs catch up when the server comes back online. Pausing the schedule does not stop an update already running.</p>
+  <p id="cli-update-status" class="sheet-body" role="status" aria-live="polite">Checking…</p>
+  <p id="cli-update-next" class="hint"></p>
+  <p id="cli-update-last" class="hint"></p>
+  <p class="hint">New sessions use the updated versions. Existing sessions are not restarted.</p>
+  <button id="btn-cli-update-now" class="btn btn-primary btn-big" disabled>Update now</button>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-agent-auth" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-agent-auth-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-agent-auth-heading">Agent authentication</h2>
+  <p class="sheet-body">View and manage the accounts used by agents on this server.</p>
+  <fieldset class="provider-fieldset provider-fieldset-auth">
+    <legend class="sr-only">Agent</legend>
+    <div id="auth-provider-picker" class="provider-picker">
+      <label class="provider-pick" data-auth-provider-card="claude">
+        <input type="radio" name="auth-provider" value="claude">
+        <span class="provider-mark provider-mark-claude" aria-hidden="true">C</span>
+        <span class="provider-copy">
+          <span class="provider-name">Claude</span>
+          <span class="provider-detail">Setup-token sign in</span>
+        </span>
+      </label>
+      <label class="provider-pick" data-auth-provider-card="codex">
+        <input type="radio" name="auth-provider" value="codex" aria-describedby="auth-provider-note" disabled>
+        <span class="provider-mark provider-mark-codex" aria-hidden="true">X</span>
+        <span class="provider-copy">
+          <span class="provider-name">Codex</span>
+          <span class="provider-detail">Device-code sign in</span>
+        </span>
+      </label>
+      <label class="provider-pick" data-auth-provider-card="command-code">
+        <input type="radio" name="auth-provider" value="command-code" aria-describedby="auth-provider-note" disabled>
+        <span class="provider-mark provider-mark-command-code" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6 6 6-6 6M13 18h6"/></svg></span>
+        <span class="provider-copy">
+          <span class="provider-name">Command Code</span>
+          <span id="auth-command-code-detail" class="provider-detail">API key sign in</span>
+        </span>
+      </label>
+    </div>
+    <p id="auth-provider-note" class="provider-note" aria-live="polite"></p>
+  </fieldset>
+  <div id="agent-account-details" class="account-details" aria-live="polite" hidden>
+    <p id="agent-account-state" class="sheet-body"></p>
+    <dl class="cli-update-details">
+      <dt>Account</dt><dd id="agent-account-email"></dd>
+      <dt>Plan</dt><dd id="agent-account-plan"></dd>
+      <dt>Organization</dt><dd id="agent-account-org"></dd>
+      <dt>Signed in since</dt><dd id="agent-account-since"></dd>
+    </dl>
+  </div>
+  <p id="agent-account-note" class="hint">Choose an agent to see its account. Changes apply to the server account; existing sessions may need to sign in again.</p>
+  <button id="btn-auth-provider-continue" class="btn btn-primary btn-big" disabled>Sign in</button>
+  <button id="btn-agent-signout" class="btn btn-ghost btn-big" hidden>Sign out</button>
+  <button id="btn-agent-account-refresh" class="btn btn-ghost btn-big">Refresh accounts</button>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-auth" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-auth-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-auth-heading">Sign in to Claude</h2>
+  <p class="sheet-body">If sessions fail to start because the server's Claude login expired, redo it here.</p>
+  <a id="auth-link" class="btn btn-primary btn-big" target="_blank" rel="noopener" hidden>Open login page</a>
+  <p id="auth-wait" class="hint">Starting…</p>
+  <form id="form-auth-code" hidden>
+    <input id="input-auth-code" class="field" type="text" placeholder="Paste the code here"
+           autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <button class="btn btn-primary btn-big" type="submit">Submit code</button>
+  </form>
+  <pre id="auth-tail" class="auth-tail" hidden></pre>
+  <button id="btn-auth-restart" class="btn btn-primary btn-big" hidden>Start over</button>
+  <button id="btn-auth-cancel" class="btn btn-ghost btn-big">Cancel</button>
+</div>
+
+<div id="sheet-codex-auth" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-codex-auth-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-codex-auth-heading">Sign in to Codex</h2>
+  <p class="sheet-body">Authorize the Codex CLI used by sessions on this server. Credentials never pass through this page.</p>
+  <div id="codex-auth-region" class="auth-status" role="status" aria-live="polite" aria-atomic="true">
+    <p id="codex-auth-message">Starting device sign-in…</p>
+    <div id="codex-auth-code-wrap" class="device-code-wrap" hidden>
+      <span class="label">Device code</span>
+      <output id="codex-auth-code" class="device-code"></output>
+    </div>
+  </div>
+  <a id="codex-auth-link" class="btn btn-primary btn-big" target="_blank" rel="noopener" hidden>Open verification page</a>
+  <button id="btn-codex-auth-copy" class="btn btn-ghost btn-big" hidden>Copy device code</button>
+  <button id="btn-codex-auth-retry" class="btn btn-primary btn-big" hidden>Retry</button>
+  <button id="btn-codex-auth-cancel" class="btn btn-ghost btn-big">Cancel</button>
+  <button id="btn-codex-auth-close" class="btn btn-ghost btn-big" hidden>Done</button>
+</div>
+
+<div id="sheet-github" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-github-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-github-heading">GitHub access</h2>
+  <p class="sheet-body">Paste a personal access token so sessions can use <code>gh</code> and push over https. The token is stored by the GitHub CLI on the server — never in this app.</p>
+  <p id="github-status" class="hint">Checking…</p>
+  <form id="form-github-token">
+    <input id="input-github-token" class="field" type="password" placeholder="ghp_… or github_pat_…"
+           autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <p class="hint">Create one at github.com → Settings → Developer settings → Personal access tokens (scopes: repo, read:org, workflow).</p>
+    <button class="btn btn-primary btn-big" type="submit">Save token</button>
+  </form>
+  <button id="btn-github-logout" class="btn btn-danger btn-big" hidden>Remove GitHub access</button>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-browser" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-browser-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-browser-heading">Claude.ai browser</h2>
+  <p class="sheet-body">A signed-in browser on the server deletes chats from Claude when you ask for it while ending a session. Sign in again if deletions start failing.</p>
+  <p id="browser-queue" class="hint" hidden></p>
+  <button id="btn-browser-start" class="btn btn-primary btn-big">Sign in — email me a code</button>
+  <p id="browser-wait" class="hint" hidden></p>
+  <form id="form-browser-code" hidden>
+    <input id="input-browser-code" class="field" type="text" placeholder="Paste the emailed code"
+           autocomplete="one-time-code" autocapitalize="off" spellcheck="false" required>
+    <button class="btn btn-primary btn-big" type="submit">Submit code</button>
+  </form>
+  <button id="btn-browser-cancel" class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-projects" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-projects-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-projects-heading">Projects</h2>
+  <p class="sheet-body">Sessions can only start inside these folders.</p>
+  <div id="project-list"></div>
+  <form id="form-project" class="proj-form">
+    <input id="input-proj-path" class="field" type="text" placeholder="/var/www/…" autocapitalize="off" spellcheck="false" required>
+    <input id="input-proj-label" class="field" type="text" placeholder="Label (optional)" maxlength="60">
+    <label class="ws-row">
+      <input type="checkbox" id="chk-create-folder">
+      <span>Create the folder if it doesn’t exist</span>
+    </label>
+    <button class="btn btn-primary btn-big" type="submit">Add project</button>
+  </form>
+</div>
+
+<div id="sheet-commands" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-commands-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-commands-heading">Commands</h2>
+  <p class="sheet-body">Register any CLI agent on this server and it joins Claude, Codex and Command Code in the agent picker. It gets a managed session, a web terminal and history — but no remote control, chat link, or conversation resume.</p>
+  <div id="command-list"></div>
+  <form id="form-command" class="proj-form">
+    <input id="input-command-label" class="field" type="text" placeholder="Name (e.g. Gemini)" maxlength="40" autocapitalize="off" required>
+    <input id="input-command-bin" class="field" type="text" placeholder="Binary (e.g. gemini or /usr/local/bin/gemini)" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <input id="input-command-args" class="field" type="text" placeholder="Arguments, space separated (optional)" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <input id="input-command-env" class="field" type="text" placeholder="Token env var, e.g. GEMINI_API_KEY (optional)" autocapitalize="characters" autocorrect="off" spellcheck="false">
+    <button class="btn btn-primary btn-big" type="submit">Add command</button>
+  </form>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-command-token" class="sheet" role="dialog" aria-modal="true" aria-labelledby="command-token-title" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 id="command-token-title" class="sheet-title">Agent token</h2>
+  <p id="command-token-body" class="sheet-body"></p>
+  <form id="form-command-token" class="proj-form">
+    <input id="input-command-token" class="field" type="password" placeholder="Paste the token" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button class="btn btn-primary btn-big" type="submit">Save token</button>
+  </form>
+  <button id="btn-command-token-clear" class="row-btn row-danger" hidden>Remove stored token</button>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-connect" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-connect-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-connect-heading">Connect Claude or Codex</h2>
+  <p class="sheet-body">Each app signs in once with your passkey and an Allow, then drives your sessions as tools. Only press Allow right after you started the connection yourself.</p>
+
+  <div class="menu-group">
+    <label class="label">Claude app — phone, web, desktop</label>
+    <div class="copybox" role="button" tabindex="0" data-copy="cmd-claude-app" data-toast="URL copied" aria-label="Copy">
+      <pre id="cmd-claude-app" class="cmd"></pre>
+      <span class="copy-chip">Copy</span>
+    </div>
+    <p class="hint">Settings → Connectors → Add custom connector, paste the URL, leave the OAuth fields empty. One connector covers all three apps.</p>
+  </div>
+
+  <div class="menu-group">
+    <label class="label">Claude Code</label>
+    <div class="copybox" role="button" tabindex="0" data-copy="cmd-claude-code" data-toast="Command copied — paste it in a terminal" aria-label="Copy">
+      <pre id="cmd-claude-code" class="cmd"></pre>
+      <span class="copy-chip">Copy</span>
+    </div>
+    <p class="hint">Run it in a terminal, then type <code>/mcp</code> in Claude Code → xcloud-sessions → Authenticate.</p>
+  </div>
+
+  <div class="menu-group">
+    <label class="label">Codex</label>
+    <div class="copybox" role="button" tabindex="0" data-copy="cmd-codex" data-toast="Command copied — paste it in a terminal" aria-label="Copy">
+      <pre id="cmd-codex" class="cmd"></pre>
+      <span class="copy-chip">Copy</span>
+    </div>
+    <p class="hint">Run it in a terminal; Codex opens the sign-in page itself.</p>
+  </div>
+
+  <p class="hint">No browser on that machine? Generate a token under CLI &amp; MCP access instead.</p>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-cli" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-cli-heading">CLI &amp; MCP access</h2>
+  <p class="sheet-body">Tokens for the <code>xcm</code> command-line client. Each one has full control of your sessions — treat it like a password.</p>
+  <div id="cli-token-list"></div>
+  <div id="cli-token-new" class="menu-group" hidden>
+    <label class="label">New token — copy it now, it won't be shown again</label>
+    <input id="cli-token-value" class="field" type="text" readonly onclick="this.select()">
+    <button id="btn-cli-copy" class="btn btn-primary btn-big">Copy token</button>
+    <label class="label">Claude Code with this token</label>
+    <div class="copybox" role="button" tabindex="0" data-copy="cmd-claude-code-token" data-toast="Command copied — paste it in a terminal" aria-label="Copy">
+      <pre id="cmd-claude-code-token" class="cmd"></pre>
+      <span class="copy-chip">Copy</span>
+    </div>
+    <label class="label">Codex with this token</label>
+    <div class="copybox" role="button" tabindex="0" data-copy="cmd-codex-token" data-toast="Command copied — keep XCS_TOKEN in a secret store" aria-label="Copy">
+      <pre id="cmd-codex-token" class="cmd"></pre>
+      <span class="copy-chip">Copy</span>
+    </div>
+    <p class="hint">Codex reads the token from <code>XCS_TOKEN</code>; keep its value in a secret store (Next Term Secrets, Keychain), not in a shell file. Claude Code saves this header in <code>~/.claude.json</code> as plain text.</p>
+  </div>
+  <form id="form-cli-token" class="proj-form">
+    <input id="input-cli-label" class="field" type="text" placeholder="Label (e.g. MacBook)" maxlength="60" autocapitalize="off">
+    <button class="btn btn-primary btn-big" type="submit">Generate token</button>
+  </form>
+  <h2 class="sheet-title" style="margin-top:22px">Connected apps</h2>
+  <p class="sheet-body">Apps signed in to the MCP connector at <code>/mcp</code> — Claude, Claude Code, Codex. A token above also works there as a fixed <code>Authorization: Bearer</code> header.</p>
+  <div id="mcp-connection-list"></div>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/agent-auth.js?v=7"></script>
+<script src="/session-search.js?v=1"></script>
+<script src="/session-status.js?v=1"></script>
+<script src="/app.js?v=48"></script>
+</body>
+</html>
