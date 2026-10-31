@@ -36,7 +36,7 @@ type HookEnvironment = Record<string, string | undefined>;
 type DatabaseOpener = (path: string) => Database;
 
 function openExistingDatabase(path: string): Database {
-  return new Database(path, { create: false });
+  return new Database(path, { readwrite: true, create: false });
 }
 
 /** Run one hook payload without writing its contents or errors to stdout. */

@@ -24,6 +24,7 @@ function harness(over: Partial<McpDeps> = {}) {
     listRepos: async () => ["me/a", "me/b"],
     providers: () => [
       { id: "claude", name: "Claude", remoteControl: true, turnState: true },
+      { id: "codex", name: "Codex", remoteControl: false, turnState: true },
       { id: "command-code", name: "Command Code", remoteControl: false, turnState: false },
     ],
     launch: async ({ name }) => ({ ok: true, id: `m:cs-${name}` }),
@@ -180,4 +181,41 @@ test("MCP reports confirmed startup trust as asking, preserving unready lifecycl
   expect(sessionState(pending, true)).toBe("asking");
   expect(sessionState({ ...pending, status: "ended" }, true)).toBe("ended");
   expect(sessionState({ ...pending, startupWaitingForTrust: false }, true)).toBe("starting");
+});
+
+const codexIdle = `>_ OpenAI Codex (v0.166.0)
+/tmp/project
+› Ask Codex to do anything
+GPT-5.6-Sol xhigh Fast · /tmp/project
+? for shortcuts   ⚠ 9 warnings · f2 to view`;
+
+test("MCP can send the first Codex prompt before SessionStart, only into a confirmed current input", async () => {
+  const pending = session({ provider: "codex", phase: "awaiting_session_start", startupInputReady: true, waiting: false });
+  const { deps, sent } = harness({ listSessions: async () => [pending], readScreen: async () => ({ ok: true, value: codexIdle }) });
+  expect(sessionState(pending, true)).toBe("running");
+  expect(sessionState({ ...pending, waiting: true }, true)).toBe("running");
+  expect((await call(deps, "list_sessions")).structuredContent.sessions[0]).toMatchObject({ state: "running", activity: "ready", startup_input_ready: true });
+  expect((await call(deps, "launch_session", { name: "demo", agent: "codex", project_id: 1, prompt: "test prompt" })).structuredContent.prompt_sent).toBe(true);
+  expect(sent).toEqual([["m:cs-demo", "test prompt", true]]);
+  expect(pending.phase).toBe("awaiting_session_start");
+});
+
+test("MCP never submits an initial prompt into trust, unknown startup, failed state or a stale input behind an overlay", async () => {
+  const cases: Array<[Partial<SessionInfo>, string]> = [
+    [{ startupInputReady: false }, codexIdle],
+    [{ startupWaitingForTrust: true }, codexIdle],
+    [{ phase: "failed" }, codexIdle],
+    [{}, "Trust these hooks?\n› 1. Trust and continue"],
+    [{}, "Trust this folder?\n› 1. Trust and continue\n2. Back to Agent Command Center"],
+    [{}, "Starting Codex"],
+    [{}, codexIdle + "\nWarnings · 1 of 9 · Startup\nesc dismiss & close"],
+  ];
+  for (const [flags, viewport] of cases) {
+    const { deps, sent } = harness({
+      listSessions: async () => [session({ provider: "codex", phase: "awaiting_session_start", startupInputReady: true, ...flags })],
+      readScreen: async () => ({ ok: true, value: viewport }),
+    });
+    expect((await call(deps, "launch_session", { name: "demo", agent: "codex", project_id: 1, prompt: "test prompt" })).structuredContent.prompt_sent).toBe(false);
+    expect(sent).toEqual([]);
+  }
 });

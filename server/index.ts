@@ -25,6 +25,8 @@ import { fetchBranches, fetchPull, parsePullRef, parseRepoRef } from "./repo-ref
 import * as oauth from "./oauth";
 import { handleOAuthRoute, mcpUnauthorized } from "./oauth-route";
 import { handleMcpPost, type McpDeps } from "./mcp";
+import { handleCommunicatorRequest } from "./communicator-mcp";
+import { communicator } from "./communicator-runtime";
 import * as sessionIo from "./session-io";
 import { cliUpdates } from "./cli-updates";
 import { handleCliUpdatesRoute } from "./cli-updates-route";
@@ -205,6 +207,8 @@ const server = Bun.serve({
       clientIp: (r) => clientIp(r, srv),
     });
     if (oauthResponse) return oauthResponse;
+
+    if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req);
 
     if (path === "/mcp") {
       if (!isMcpAuthed(req)) return mcpUnauthorized(auth.ORIGIN);
@@ -678,3 +682,8 @@ const server = Bun.serve({
 });
 
 console.log(`xcloud-sessions listening on http://127.0.0.1:${server.port} (rpID: ${auth.RP_ID})`);
+
+// Live agents survive service restarts; retain their credentials until their launch ends.
+setInterval(() => {
+  void communicator.prune().catch(() => console.error("Communicator retention cleanup failed."));
+}, 6 * 60 * 60 * 1000).unref();

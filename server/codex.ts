@@ -3,7 +3,7 @@ import { accessSync, constants, lstatSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import { isCodexSessionId } from "./codex-state";
 
-export const MINIMUM_CODEX_VERSION = [0, 146, 0] as const;
+export const MINIMUM_CODEX_VERSION = [0, 166, 0] as const;
 export const CODEX_PREFLIGHT_COMMAND_TIMEOUT_MS = 5_000;
 export const CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 export const CODEX_MANAGED_BUN_PATH = "/usr/local/lib/xcloud-sessions/bin/bun";
@@ -50,6 +50,7 @@ export interface CodexInvocationOptions {
   dbPath: string;
   resumeId?: string | null;
   unrestricted?: boolean;
+  mcpArgs?: string[];
 }
 
 /** Build an argv vector; callers must never reconstruct it from a shell string. */
@@ -66,12 +67,13 @@ export function buildCodexInvocation(options: CodexInvocationOptions): CodexInvo
     || (resumeId != null && !isCodexSessionId(resumeId))
   ) return null;
 
-  const argv = [bin, ...(options.unrestricted ? ["--dangerously-bypass-approvals-and-sandbox"] : []), "-C", normalize(cwd)];
+  const argv = [bin, "--no-daemon", ...(options.unrestricted ? ["--dangerously-bypass-approvals-and-sandbox"] : []), "-C", normalize(cwd)];
   if (options.unrestricted) {
     // Use a table value: Codex splits dotted override keys even inside quoted paths.
     const projectKey = JSON.stringify(normalize(cwd)).replace(/\x7f/g, "\\u007f");
     argv.push("-c", `projects={${projectKey}={trust_level="trusted"}}`);
   }
+  if (options.mcpArgs) argv.push(...options.mcpArgs);
   if (resumeId) argv.push("resume", resumeId.toLowerCase());
   return {
     argv,

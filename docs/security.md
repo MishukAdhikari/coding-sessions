@@ -25,6 +25,7 @@ Register a passkey after initial password sign-in. An MCP authorization is acces
 | Custom-command and app-managed Command Code tokens | Versioned AES-256-GCM ciphertext when a key is configured; random nonce and context-bound authentication prevent swapping ciphertext between commands/credential purposes |
 | Native provider and GitHub authentication | CLI-managed files in the instance home; not automatically encrypted by the application's token encryption |
 | Browser sessions, CLI bearer tokens, OAuth codes/access/refresh tokens | Hashes in SQLite; raw bearer values still require protection wherever the client stores them |
+| Built-in communicator credentials | Random per-launch capabilities; only hashes are stored in SQLite, with raw values passed through explicit child environment. They cannot authenticate to the operator MCP endpoint. |
 | Workspaces, transcripts, setup logs, backups | May contain secrets or source code; not automatically encrypted or redacted as a whole |
 
 The protected-file reader rejects final-component symlinks, nonregular files, group/other permissions, and oversized files. Protect the containing directories too. The installer provisions root-private source credentials; the runtime receives readable snapshots for its service identity.
@@ -70,3 +71,12 @@ The separate chat-management browser login requires an explicit `CAI_EMAIL` and 
 ## Existing production deployments
 
 The installer refuses to adopt unmanaged accounts and paths. A legacy deployment may depend on inherited environment values, an existing host-wide Codex policy, custom update control privileges, or detached sessions. Inventory these dependencies, back up state and keys, and plan migration explicitly. Do not run a fresh-instance installer over a live personal deployment or silently change its approval posture.
+
+
+## Session communication
+
+The built-in communicator has a separate credential audience and five mailbox tools. It derives sender identity from the current launch credential, restricts inbox/history reads to that participant, and binds messages to immutable launch UUIDs. Ending, failing, or replacing a launch invalidates access; service restarts preserve access for surviving launches. The bridge accepts only this instance's numeric-loopback HTTP endpoint and refuses redirects.
+
+Messages are stored in the private application database for 30 days. They are not encrypted separately from that database and may contain source code or sensitive text. Treat database backups accordingly. Message attribution is not authorization: a peer cannot grant additional task scope or override provider approvals. No messages are injected into terminal input or approval dialogs.
+
+These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.

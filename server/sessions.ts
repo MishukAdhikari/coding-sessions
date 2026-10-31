@@ -1,5 +1,8 @@
 import { config } from "./config";
-import { CODEX_READINESS_TIMEOUT_ERROR, codexProcessMatchesLaunch, createStartupTrustProbe } from "./codex-startup";
+import { Communicator } from "./communicator";
+import { communicator } from "./communicator-runtime";
+import { communicatorEnvironment, providerCommunicatorArgs } from "./communicator-config";
+import { CODEX_READINESS_TIMEOUT_ERROR, createStartupProbe, type CodexStartupObservation } from "./codex-startup";
 import { childEnvironment } from "./child-env";
 import { DB_PATH, db, getMeta } from "./db";
 import { queueChatDeletion } from "./claude-chat";
@@ -35,15 +38,8 @@ const IS_DARWIN = process.platform === "darwin"; // local dev on a Mac; the serv
 const ACTIVE_CPU_PCT = 5; // Process CPU indicator only; turn state comes from agent evidence.
 const STARTING_GRACE_MS = 15 * 60_000; // screen alive but claude not yet up → "starting"
 const SCREEN_DISCOVERY_GRACE_MS = 30_000;
-export const CODEX_SESSION_START_TIMEOUT_SEC = 2 * 60;
-const startupTrustProbe = createStartupTrustProbe();
+const startupProbe = createStartupProbe();
 const CODEX_EARLY_EXIT_ERROR = "Codex exited before its managed SessionStart hook reported readiness.";
-
-export function codexSessionStartTimedOut(phase: string | null, childUptimeSec: number): boolean {
-  return phase === "awaiting_session_start"
-    && Number.isFinite(childUptimeSec)
-    && childUptimeSec > CODEX_SESSION_START_TIMEOUT_SEC;
-}
 
 export interface SessionInfo {
   id: string;            // "m:<screen>" | "e:<pid>"
@@ -66,6 +62,7 @@ export interface SessionInfo {
   asking: boolean;         // Claude asked a question and is blocked on your reply (a stronger "waiting")
   telemetryUnknown: boolean; // Activity evidence is stale or absent while the process is live
   activity?: SessionActivity;
+  startupInputReady?: boolean; // Live input evidence; SessionStart still owns conversation readiness.
   startupWaitingForTrust?: boolean; // A live pre-hook Codex TUI needs a folder-trust decision.
   turnComplete?: boolean; // Codex Stop, distinct from its initial SessionStart readiness
   claudeUrl: string | null;
@@ -487,19 +484,13 @@ export interface LaunchRow {
   resume_archive_id: number | null;
 }
 
-export function reconcileCodexStartup(database: Database, launch: LaunchRow, uptimeSec: number, trustPrompt: boolean) {
-  if (trustPrompt) {
+export function reconcileCodexStartup(database: Database, launch: LaunchRow, observation: CodexStartupObservation) {
+  if (observation !== "unknown") {
     database.query(
       "UPDATE launches SET phase = 'awaiting_session_start', error_message = NULL " +
       "WHERE launch_id = ? AND screen = ? AND provider = 'codex' AND phase = 'failed' AND error_message = ? " +
       "AND NOT EXISTS (SELECT 1 FROM codex_launch_state WHERE launch_id = launches.launch_id)",
     ).run(launch.launch_id, launch.screen, CODEX_READINESS_TIMEOUT_ERROR);
-  } else if (codexSessionStartTimedOut(launch.phase, uptimeSec)) {
-    database.query(
-      "UPDATE launches SET phase = 'failed', error_message = ? WHERE launch_id = ? AND screen = ? " +
-      "AND provider = 'codex' AND phase = 'awaiting_session_start' " +
-      "AND NOT EXISTS (SELECT 1 FROM codex_launch_state WHERE launch_id = launches.launch_id)",
-    ).run(CODEX_READINESS_TIMEOUT_ERROR, launch.launch_id, launch.screen);
   }
   const current = database.query(
     "SELECT phase, error_message FROM launches WHERE launch_id = ? AND screen = ? AND provider = 'codex'",
@@ -508,7 +499,8 @@ export function reconcileCodexStartup(database: Database, launch: LaunchRow, upt
   return {
     phase: current?.phase ?? launch.phase,
     error: current?.error_message ?? (current ? null : launch.error_message),
-    waitingForTrust: !!current && current.phase === "awaiting_session_start" && !hasState && trustPrompt,
+    waitingForTrust: !!current && current.phase === "awaiting_session_start" && !hasState && observation === "trust",
+    inputReady: !!current && current.phase === "awaiting_session_start" && !hasState && observation === "input",
   };
 }
 
@@ -576,6 +568,73 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
   return { ok: true };
 }
 
+export interface CommunicatingSessionOptions {
+  screen: string;
+  name: string;
+  projectPath: string;
+  provider: "claude" | "command-code";
+  providerBin?: string;
+  remoteControl: number;
+  resumeId?: string | null;
+  claudeUrl?: string | null;
+  resumeArchiveId?: number | null;
+  command: (mcpArgs: string[]) => string;
+  env?: Record<string, string>;
+}
+interface CommunicatingSessionRuntime {
+  database: Database;
+  communicator: Communicator;
+  configure: (provider: "claude" | "command-code", cwd: string, bin?: string) => Promise<string[]>;
+  spawn: typeof mux.spawn;
+  hasHolder: (screen: string) => Promise<boolean>;
+  uuid: () => string;
+  now: () => number;
+}
+const communicatingRuntime: CommunicatingSessionRuntime = {
+  database: db, communicator, configure: (provider, cwd, bin) => providerCommunicatorArgs(provider, cwd, { commandCodeBin: bin }),
+  spawn: mux.spawn, hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
+};
+
+/** Reserve identity before the child can initialize MCP; restore previous history if spawn fails. */
+export async function startCommunicatingSession(options: CommunicatingSessionOptions, runtime: CommunicatingSessionRuntime = communicatingRuntime): Promise<{ ok: true } | { ok: false; error: string }> {
+  let args: string[];
+  try { args = await runtime.configure(options.provider, options.projectPath, options.providerBin); }
+  catch (error) { return { ok: false, error: safeLaunchError((error as Error).message, "Could not configure session communication.") }; }
+  const database = runtime.database;
+  const previous = database.query(`SELECT ${launchColumns} FROM launches WHERE screen=?`).get(options.screen) as LaunchRow | null;
+  if (previous?.phase === "preparing" || (previous && previous.provider !== options.provider)) return { ok: false, error: "Another managed launch already owns this session name." };
+  try {
+    if (await runtime.hasHolder(options.screen)) return { ok: false, error: "A session with this name is already running." };
+  } catch { return { ok: false, error: "Could not verify whether this session is already running." }; }
+  const current = database.query("SELECT launch_id,phase,created_at FROM launches WHERE screen=?").get(options.screen) as Pick<LaunchRow, "launch_id" | "phase" | "created_at"> | null;
+  if (current?.launch_id !== previous?.launch_id || current?.phase !== previous?.phase || current?.created_at !== previous?.created_at) {
+    return { ok: false, error: "Another launch reserved this session name while checking its holder." };
+  }
+  const launchId = runtime.uuid();
+  try {
+    database.query(`INSERT INTO launches (${launchColumns}) VALUES (?,?,?,?,?,?,?,?,?,'preparing',NULL,?)
+      ON CONFLICT(screen) DO UPDATE SET name=excluded.name,project_path=excluded.project_path,created_at=excluded.created_at,
+      claude_url=excluded.claude_url,resume_id=excluded.resume_id,remote_control=excluded.remote_control,provider=excluded.provider,
+      launch_id=excluded.launch_id,phase=excluded.phase,error_message=NULL,resume_archive_id=excluded.resume_archive_id`)
+      .run(options.screen,options.name,options.projectPath,runtime.now(),options.claudeUrl??null,options.resumeId??null,options.remoteControl,options.provider,launchId,options.resumeArchiveId??null);
+    const { token } = runtime.communicator.prepare(launchId);
+    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...options.env, ...communicatorEnvironment(token, config.port) } });
+    if (result.code !== 0) throw new Error(safeLaunchError(result.err, "Session failed to start."));
+    database.query("UPDATE launches SET phase='ready' WHERE launch_id=? AND phase='preparing'").run(launchId);
+    if (options.resumeArchiveId != null) database.query("DELETE FROM archive WHERE id=?").run(options.resumeArchiveId);
+    return { ok: true };
+  } catch (error) {
+    runtime.communicator.revoke(launchId);
+    database.transaction(() => {
+      if (!database.query("SELECT 1 FROM launches WHERE screen=? AND launch_id=?").get(options.screen,launchId)) return;
+      database.query("DELETE FROM launches WHERE launch_id=?").run(launchId);
+      if (previous) database.query(`INSERT INTO launches (${launchColumns}) VALUES (${Array(12).fill("?").join(",")})`)
+        .run(previous.screen,previous.name,previous.project_path,previous.created_at,previous.claude_url,previous.resume_id,previous.remote_control,previous.provider,previous.launch_id,previous.phase,previous.error_message,previous.resume_archive_id);
+    })();
+    return { ok: false, error: safeLaunchError((error as Error).message, "Session failed to start.") };
+  }
+}
+
 export interface ManagedCommandCodeStart {
   screen: string;
   name: string;
@@ -608,19 +667,10 @@ export async function startManagedCommandCode(options: ManagedCommandCodeStart):
   });
   if (!argv) return { ok: false, error: "Could not construct a safe Command Code launch command." };
 
-  const inner = `${options.setupPrefix ?? ""}cd ${shellQuote(options.projectPath)} && exec ${argv.map(shellQuote).join(" ")}`;
-  const { code, err } = await mux.spawn(options.screen, inner, { env: commandCodeEnv() });
-  if (code !== 0) return { ok: false, error: safeLaunchError(err, "session failed to start Command Code") };
-
-  db.query(
-    "INSERT INTO launches (screen, name, project_path, created_at, resume_id, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, ?, 0, 'command-code', ?, 'ready', NULL, NULL) " +
-    "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, " +
-    "created_at = excluded.created_at, resume_id = excluded.resume_id, remote_control = 0, provider = excluded.provider, " +
-    "launch_id = excluded.launch_id, phase = 'ready', error_message = NULL, resume_archive_id = NULL",
-  ).run(options.screen, options.name, options.projectPath, Date.now(), options.resumeId ?? null, randomUUID());
-  // The conversation moved back out of history the moment it started running again.
-  if (options.resumeArchiveId != null) db.query("DELETE FROM archive WHERE id = ?").run(options.resumeArchiveId);
-  return { ok: true };
+  return startCommunicatingSession({
+    ...options, provider: "command-code", providerBin: preflight.bin, remoteControl: 0, env: commandCodeEnv(),
+    command: () => `${options.setupPrefix ?? ""}cd ${shellQuote(options.projectPath)} && exec ${argv.map(shellQuote).join(" ")}`,
+  });
 }
 
 export function screenlessLaunchAction(
@@ -820,22 +870,21 @@ export async function listSessions(): Promise<SessionInfo[]> {
     const proc = findProviderProcess(procs, screenEntry[0], "codex");
     if (!proc) continue;
     claimedScreens.add(launch.screen);
-    let startupWaitingForTrust = false;
-    const mayWaitForTrust = launch.phase === "awaiting_session_start"
+    let observation: CodexStartupObservation = "unknown";
+    const mayObserveStartup = launch.phase === "awaiting_session_start"
       || (launch.phase === "failed" && launch.error_message === CODEX_READINESS_TIMEOUT_ERROR);
     const holder = holders.find(item => item.name === launch.screen && item.pid === screenEntry[0]);
-    if (mayWaitForTrust && launch.launch_id && holder
-      && !db.query("SELECT 1 FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id)
-      && codexProcessMatchesLaunch(proc.pid, launch.launch_id, launch.screen, DB_PATH)) {
-      const prompt = await startupTrustProbe(launch.launch_id, proc.pid, {
+    if (mayObserveStartup && launch.launch_id && holder
+      && !db.query("SELECT 1 FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id)) {
+      observation = await startupProbe(launch.launch_id, proc.pid, {
         backend: holder.backend, screen: launch.screen, zmxBin: mux.ZMX_BIN,
-      });
-      startupWaitingForTrust = prompt && codexProcessMatchesLaunch(proc.pid, launch.launch_id, launch.screen, DB_PATH);
+      }, DB_PATH);
     }
-    const startup = reconcileCodexStartup(db, launch, proc.etimes, startupWaitingForTrust);
+    const startup = reconcileCodexStartup(db, launch, observation);
     launch.phase = startup.phase;
     launch.error_message = startup.error;
-    startupWaitingForTrust = startup.waitingForTrust;
+    const startupWaitingForTrust = startup.waitingForTrust;
+    const startupInputReady = startup.inputReady;
     const state = launch.launch_id
       ? db.query("SELECT session_id, model, turn_state, last_event, updated_at FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id) as
           { session_id: string | null; model: string | null; turn_state: string; last_event: string; updated_at: number } | null
@@ -851,7 +900,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       phase: launch.phase,
       errorMessage: launch.error_message,
       name: launch.name,
-      status: ready || launch.phase === "failed" ? "running" : "starting",
+      status: ready || startupInputReady || launch.phase === "failed" ? "running" : "starting",
       workspace: isWorkspacePath(project),
       project,
       projectLabel: projectLabelFor(project),
@@ -860,6 +909,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       cpu: proc.pcpu,
       active: proc.pcpu >= ACTIVE_CPU_PCT,
       startupWaitingForTrust,
+      startupInputReady,
       busy: ready && activity.busy,
       waiting: startupWaitingForTrust || (ready && activity.waiting),
       asking: startupWaitingForTrust || (ready && activity.asking),
@@ -1176,19 +1226,12 @@ export async function launchWorkspaceSession(name: string, repoInput: string, re
 
   const claudeBin = Bun.which("claude") ?? join(homedir(), ".local", "bin", "claude");
   const trustScript = new URL("./trust.ts", import.meta.url).pathname;
-  const inner =
+  return startCommunicatingSession({
+    screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: remoteControl ? 1 : 0,
+    command: mcp =>
     `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${config.unrestrictedAgents ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
-    `exec ${shellQuote(claudeBin)} ${remoteControl ? `--remote-control '${name}' ` : ""}${claudePermissionArgs()}`;
-  const { code, err } = await mux.spawn(screenName, inner);
-  if (code !== 0) return { ok: false, error: err || "session failed to start" };
-
-  db.query(
-    "INSERT INTO launches (screen, name, project_path, created_at, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', NULL, NULL) " +
-    "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, " +
-    "created_at = excluded.created_at, remote_control = excluded.remote_control, provider = excluded.provider, " +
-    "launch_id = excluded.launch_id, phase = excluded.phase, error_message = NULL, resume_archive_id = NULL",
-  ).run(screenName, name, ws, Date.now(), remoteControl ? 1 : 0, provider, randomUUID());
-  return { ok: true };
+    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${remoteControl ? `--remote-control '${name}' ` : ""}${claudePermissionArgs()}`,
+  });
 }
 
 /* ---------- Synced Launch (xcm CLI) ---------- */
@@ -1232,7 +1275,7 @@ export function normalizeCodexResumeId(resumeId: string | null | undefined): str
 }
 
 function safeLaunchError(raw: string, fallback: string): string {
-  const value = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  const value = raw.replace(/cscomm_[A-Za-z0-9_-]{43}/g, "[redacted]").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return (value || fallback).slice(0, 240);
 }
 
@@ -1249,7 +1292,7 @@ export interface ManagedCodexRuntime {
   database: Database;
   dbPath: string;
   preflight: () => ReturnType<typeof preflightCodex>;
-  execute: (command: string[]) => Promise<{ code: number; out: string; err: string }>;
+  execute: (command: string[], env?: Record<string, string>) => Promise<{ code: number; out: string; err: string }>;
   uuid: () => string;
   now: () => number;
 }
@@ -1279,6 +1322,7 @@ export async function startManagedCodex(
   }
 
   const launchId = runtime.uuid();
+  const mcpArgs = await providerCommunicatorArgs("codex", options.projectPath);
   const invocation = buildCodexInvocation({
     bin: preflight.bin,
     cwd: options.projectPath,
@@ -1287,6 +1331,7 @@ export async function startManagedCodex(
     dbPath: runtime.dbPath,
     resumeId: options.resumeId,
     unrestricted: config.unrestrictedAgents,
+    mcpArgs,
   });
   const command = invocation ? buildCodexScreenCommand(invocation) : null;
   if (!command) return { ok: false, error: "Could not construct a safe Codex launch command." };
@@ -1308,8 +1353,14 @@ export async function startManagedCodex(
     return { ok: false, error: `A managed session record already owns “${options.name}”.` };
   }
 
-  const result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`));
+  const launchCommunicator = new Communicator(runtime.database, { isLive: async () => false });
+  let result: { code: number; out: string; err: string };
+  try {
+    const { token } = launchCommunicator.prepare(launchId);
+    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), communicatorEnvironment(token, config.port));
+  } catch { result = { code: 1, out: "", err: "Could not start Codex with its session communicator." }; }
   if (result.code !== 0) {
+    launchCommunicator.revoke(launchId);
     const error = safeLaunchError(result.err, "session failed to start Codex");
     runtime.database.query(
       "UPDATE launches SET phase = 'failed', error_message = ? WHERE launch_id = ? AND provider = 'codex'",
@@ -1448,17 +1499,13 @@ export async function launchSynced(
   const promptArg = prompt && prompt.trim() ? " " + shellQuote(prompt) : "";
   const claudeBin = Bun.which("claude") ?? join(homedir(), ".local", "bin", "claude");
   const trustScript = new URL("./trust.ts", import.meta.url).pathname;
-  const inner =
+  const started = await startCommunicatingSession({
+    screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: 1, resumeId: rid,
+    command: mcp =>
     `cd ${shellQuote(ws)} && ${config.unrestrictedAgents ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
-    `exec ${shellQuote(claudeBin)} ${resumeArg}${opts.autoMode && config.unrestrictedAgents ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs()}${promptArg}`;
-  const { code, err } = await mux.spawn(screenName, inner);
-  if (code !== 0) return { ok: false, error: err || "session failed to start" };
-
-  db.query(
-    "INSERT INTO launches (screen, name, project_path, created_at, resume_id, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, ?, 1, 'claude', ?, 'ready', NULL, NULL) " +
-    "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, created_at = excluded.created_at, " +
-    "resume_id = excluded.resume_id, remote_control = 1, provider = 'claude', launch_id = excluded.launch_id, phase = 'ready', error_message = NULL, resume_archive_id = NULL",
-  ).run(screenName, name, ws, Date.now(), rid, randomUUID());
+    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg}${opts.autoMode && config.unrestrictedAgents ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs()}${promptArg}`,
+  });
+  if (!started.ok) return started;
   const archived = db.query(
     "SELECT id FROM archive WHERE name = ? AND provider = 'claude' AND (? IS NULL OR resume_id = ?) ORDER BY ended_at DESC LIMIT 1",
   ).get(name, rid, rid) as { id: number } | null;
@@ -1561,17 +1608,10 @@ export async function launchSession(name: string, projectId: number, remoteContr
   // Remote control off → a plain TUI session in the screen, reachable through the
   // web terminal instead of the Claude app. Everything else is identical.
   const rc = remoteControl ? `--remote-control '${name}' ` : "";
-  const inner = `cd ${shellQuote(project.path)} && exec ${shellQuote(claudeBin)} ${rc}${claudePermissionArgs()}`;
-  const { code, err } = await mux.spawn(screenName, inner);
-  if (code !== 0) return { ok: false, error: err || "session failed to start" };
-
-  db.query(
-    "INSERT INTO launches (screen, name, project_path, created_at, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', NULL, NULL) " +
-    "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, " +
-    "created_at = excluded.created_at, remote_control = excluded.remote_control, provider = excluded.provider, " +
-    "launch_id = excluded.launch_id, phase = excluded.phase, error_message = NULL, resume_archive_id = NULL",
-  ).run(screenName, name, project.path, Date.now(), remoteControl ? 1 : 0, provider, randomUUID());
-  return { ok: true };
+  return startCommunicatingSession({
+    screen: screenName, name, projectPath: project.path, provider: "claude", remoteControl: remoteControl ? 1 : 0,
+    command: mcp => `cd ${shellQuote(project.path)} && exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${rc}${claudePermissionArgs()}`,
+  });
 }
 
 /** Find the provider's actual interactive child inside a managed screen. */
@@ -1774,18 +1814,11 @@ export async function resumeArchived(id: number, expectedProvider: SessionProvid
   const resumeArg = plan.arg === "--resume" ? `--resume '${rid}'` : "--continue";
   const claudeBin = Bun.which("claude") ?? join(homedir(), ".local", "bin", "claude");
   const rc = row.remote_control === 0 ? "" : `--remote-control '${name}' `;
-  const inner = `cd ${shellQuote(proj)} && exec ${shellQuote(claudeBin)} ${resumeArg} ${rc}${claudePermissionArgs()}`;
-  const { code, err } = await mux.spawn(screenName, inner);
-  if (code !== 0) return { ok: false, error: err || "session failed to start" };
-
-  db.query(
-    "INSERT INTO launches (screen, name, project_path, created_at, claude_url, resume_id, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', NULL, NULL) " +
-    "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, created_at = excluded.created_at, " +
-    "claude_url = excluded.claude_url, resume_id = excluded.resume_id, remote_control = excluded.remote_control, provider = excluded.provider, " +
-    "launch_id = excluded.launch_id, phase = excluded.phase, error_message = NULL, resume_archive_id = NULL",
-  ).run(screenName, name, proj, Date.now(), row.claude_url, row.resume_id, row.remote_control ?? 1, provider, randomUUID());
-  db.query("DELETE FROM archive WHERE id = ?").run(id);
-  return { ok: true };
+  return startCommunicatingSession({
+    screen: screenName, name, projectPath: proj, provider: "claude", remoteControl: row.remote_control ?? 1,
+    claudeUrl: row.claude_url, resumeId: row.resume_id, resumeArchiveId: id,
+    command: mcp => `cd ${shellQuote(proj)} && exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg} ${rc}${claudePermissionArgs()}`,
+  });
 }
 
 export async function deleteArchived(id: number, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string }> {

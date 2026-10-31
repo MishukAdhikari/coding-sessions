@@ -20,6 +20,19 @@ export function isCodexFolderTrustPrompt(text: string): boolean {
   return choices.slice(reject + 1).every(line => /^(?:Press )?(?:enter|esc|escape)\b.*(?:confirm|continue|cancel|back)/i.test(line));
 }
 
+export function isCodexInputReady(text: string): boolean {
+  const lines = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r/g, "")
+    .split("\n").slice(-40).map(line => line.trim()).filter(Boolean);
+  const prompt = lines.findLastIndex(line => line === "› Ask Codex to do anything");
+  if (prompt < 0 || !lines.slice(0, prompt).some(line => /^>_ OpenAI Codex \(v\d+\.\d+\.\d+\)$/.test(line))) return false;
+  const footer = lines.slice(prompt + 1);
+  return footer.length === 2
+    && /^[A-Za-z0-9][^·]* · (?:\/|~)/.test(footer[0]!)
+    && /^\? for shortcuts(?:\s+.*)?$/.test(footer[1]!);
+}
+
+export type CodexStartupObservation = "unknown" | "trust" | "input";
+
 export function matchesCodexLaunchMarkers(raw: string, launchId: string, screen: string, dbPath: string): boolean {
   const entries = raw.split("\0");
   const prefix = entries.some(entry => /^(CS_LAUNCH_ID|CS_SCREEN|CS_DB_PATH)=/.test(entry)) ? "CS_" : "X" + "CS_";
@@ -111,15 +124,27 @@ export async function readStartupViewport(target: StartupTerminal, dependencies:
   finally { if (directory) rmSync(directory, { recursive: true, force: true }); }
 }
 
-export function createStartupTrustProbe(read: (target: StartupTerminal) => Promise<string | null> = readStartupViewport, now = Date.now) {
-  const cache = new Map<string, { at: number; value: Promise<boolean> }>();
-  return (launchId: string, pid: number, target: StartupTerminal): Promise<boolean> => {
-    const key = `${launchId}:${pid}:${target.backend}:${target.screen}`;
-    const old = cache.get(key);
-    if (old && now() - old.at < 10_000) return old.value;
-    if (cache.size >= 128) cache.delete(cache.keys().next().value!);
-    const value = read(target).then(text => text !== null && isCodexFolderTrustPrompt(text)).catch(() => false);
-    cache.set(key, { at: now(), value });
-    return value;
+export function createStartupProbe(
+  read: (target: StartupTerminal) => Promise<string | null> = readStartupViewport,
+  now = Date.now,
+  matches = codexProcessMatchesLaunch,
+) {
+  const cache = new Map<string, { at: number; value: Promise<CodexStartupObservation> }>();
+  return async (launchId: string, pid: number, target: StartupTerminal, dbPath: string): Promise<CodexStartupObservation> => {
+    if (!matches(pid, launchId, target.screen, dbPath)) return "unknown";
+    const key = `${launchId}:${pid}:${target.backend}:${target.screen}:${dbPath}`;
+    let cached = cache.get(key);
+    if (!cached || now() - cached.at >= 10_000) {
+      if (cache.size >= 128) cache.delete(cache.keys().next().value!);
+      const value = read(target).then((text): CodexStartupObservation => {
+        if (text === null) return "unknown";
+        if (isCodexFolderTrustPrompt(text)) return "trust";
+        return isCodexInputReady(text) ? "input" : "unknown";
+      }).catch((): CodexStartupObservation => "unknown");
+      cached = { at: now(), value };
+      cache.set(key, cached);
+    }
+    const observation = await cached.value;
+    return matches(pid, launchId, target.screen, dbPath) ? observation : "unknown";
   };
 }

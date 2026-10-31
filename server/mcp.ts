@@ -8,6 +8,7 @@
  */
 import type { ArchivedInfo, SessionInfo } from "./sessions";
 import type { IoResult } from "./session-io";
+import { isCodexInputReady } from "./codex-startup";
 import { sessionActivity } from "./session-activity";
 import type { SessionProvider } from "./session-provider";
 
@@ -50,6 +51,7 @@ export type SessionState = "starting" | "working" | "asking" | "waiting" | "runn
 export function sessionState(s: SessionInfo | undefined, turnState: boolean): SessionState {
   if (!s || s.status === "ended") return "ended";
   if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupWaitingForTrust) return "asking";
+  if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupInputReady) return "running";
   if (s.status === "starting") return "starting";
   if (!turnState || s.telemetryUnknown) return "running";
   if (s.asking) return "asking";
@@ -66,6 +68,7 @@ function summarize(s: SessionInfo, turnState: boolean) {
     state: sessionState(s, turnState),
     activity: sessionActivity(s),
     ...(s.startupWaitingForTrust ? { startup_waiting_for_trust: true } : {}),
+    ...(s.startupInputReady ? { startup_input_ready: true } : {}),
     managed: s.kind === "managed",
     project: s.projectLabel ?? s.project,
     folder: s.project,
@@ -283,12 +286,17 @@ async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Pr
   let same = 0;
   while (deps.now() < deadline) {
     const s = await findSession(deps, id);
-    if (s?.status === "running") {
+    const preHookCodex = s?.provider === "codex" && s.phase !== "ready";
+    if (s?.status === "running" && s.phase !== "failed" && !s.startupWaitingForTrust
+      && (!preHookCodex || (s.phase === "awaiting_session_start" && s.startupInputReady))) {
       const screen = await deps.readScreen(id, 40);
-      const text = screen.ok ? screen.value.trim() : "";
+      const text = screen.ok && (!preHookCodex || isCodexInputReady(screen.value)) ? screen.value.trim() : "";
       same = text && text === last ? same + 1 : 0;
       last = text;
       if (same >= 2) return true;
+    } else {
+      same = 0;
+      last = "";
     }
     await deps.sleep(1500);
   }

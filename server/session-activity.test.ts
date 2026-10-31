@@ -56,3 +56,11 @@ test("confirmed pre-hook folder trust waits for input without claiming readiness
   expect(sessionActivity({ ...pending, status: "ended" })).toBe("ended");
   expect(sessionActivity({ ...pending, startupWaitingForTrust: false })).toBe("starting");
 });
+
+test("pre-hook input readiness is visible without claiming hook readiness or completion", () => {
+  const pending = session({ provider: "codex", phase: "awaiting_session_start", status: "running", startupInputReady: true });
+  expect(sessionActivity(pending)).toBe("ready");
+  expect(sessionActivity({ ...pending, startupWaitingForTrust: true })).toBe("waiting");
+  expect(sessionActivity({ ...pending, phase: "failed" })).toBe("failed");
+  expect(sessionActivity({ ...pending, status: "ended" })).toBe("ended");
+});
