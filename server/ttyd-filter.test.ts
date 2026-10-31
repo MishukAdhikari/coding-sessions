@@ -70,13 +70,13 @@ test("mouse passthrough keeps enables and reports but still recolours bold", () 
   expect(filterUpstream(report)).toBe("0");
 });
 
-test("XCS_TERM_MOUSE=off strips the mouse even where passthrough was asked for", () => {
-  const prev = process.env.XCS_TERM_MOUSE;
-  process.env.XCS_TERM_MOUSE = "off";
+test("CS_TERM_MOUSE=off strips the mouse even where passthrough was asked for", () => {
+  const prev = process.env.CS_TERM_MOUSE;
+  process.env.CS_TERM_MOUSE = "off";
   try {
     expect(filterDownstream(`0${E}[?1000hx`, { mouse: true })).toBe("0x");
     expect(filterUpstream(`0${E}[<0;1;1M`, { mouse: true })).toBe("0");
   } finally {
-    if (prev === undefined) delete process.env.XCS_TERM_MOUSE; else process.env.XCS_TERM_MOUSE = prev;
+    if (prev === undefined) delete process.env.CS_TERM_MOUSE; else process.env.CS_TERM_MOUSE = prev;
   }
 });

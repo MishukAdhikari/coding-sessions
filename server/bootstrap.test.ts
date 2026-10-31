@@ -17,10 +17,10 @@ test("explicit protected bootstrap file is required and weak values fail", () =>
   const dir = mkdtempSync(join(tmpdir(), "xcs-bootstrap-"));
   try {
     const path = join(dir, "password");
-    expect(() => bootstrapPassword(dir, { XCS_ADMIN_PASSWORD_FILE: path })).toThrow();
+    expect(() => bootstrapPassword(dir, { CS_ADMIN_PASSWORD_FILE: path })).toThrow();
     writeFileSync(path, "too-short", { mode: 0o600 });
-    expect(() => bootstrapPassword(dir, { XCS_ADMIN_PASSWORD_FILE: path })).toThrow();
+    expect(() => bootstrapPassword(dir, { CS_ADMIN_PASSWORD_FILE: path })).toThrow();
     writeFileSync(path, "a-long-fixture-password");
-    expect(bootstrapPassword(dir, { XCS_ADMIN_PASSWORD_FILE: path }).password).toBe("a-long-fixture-password");
+    expect(bootstrapPassword(dir, { CS_ADMIN_PASSWORD_FILE: path }).password).toBe("a-long-fixture-password");
   } finally { rmSync(dir, { recursive: true }); }
 });

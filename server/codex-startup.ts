@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,8 +22,12 @@ export function isCodexFolderTrustPrompt(text: string): boolean {
 
 export function matchesCodexLaunchMarkers(raw: string, launchId: string, screen: string, dbPath: string): boolean {
   const entries = raw.split("\0");
-  return [["XCS_LAUNCH_ID", launchId], ["XCS_SCREEN", screen], ["XCS_DB_PATH", dbPath]]
-    .every(([key, value]) => entries.filter(entry => entry.startsWith(`${key}=`)).length === 1 && entries.includes(`${key}=${value}`));
+  const prefix = entries.some(entry => /^(CS_LAUNCH_ID|CS_SCREEN|CS_DB_PATH)=/.test(entry)) ? "CS_" : "X" + "CS_";
+  return [["LAUNCH_ID", launchId], ["SCREEN", screen], ["DB_PATH", dbPath]]
+    .every(([suffix, value]) => {
+      const key = `${prefix}${suffix}`;
+      return entries.filter(entry => entry.startsWith(`${key}=`)).length === 1 && entries.includes(`${key}=${value}`);
+    });
 }
 
 function readBounded(path: string, privateFile = false): string | null {
@@ -87,7 +92,7 @@ export async function readStartupViewport(target: StartupTerminal, dependencies:
   if (target.backend === "zmx") return target.zmxBin ? run([target.zmxBin, "history", target.screen]) : null;
   let directory: string | undefined;
   try {
-    const base = resolve(dependencies.runtimeDirectory ?? process.env.XCS_RUNTIME_DIR ?? join(homedir(), ".local", "state", "xcloud-sessions"));
+    const base = resolve(dependencies.runtimeDirectory ?? readCsSetting(process.env, "CS_RUNTIME_DIR") ?? join(homedir(), ".local", "state", "xcloud-sessions"));
     mkdirSync(base, { recursive: true, mode: 0o700 });
     const stat = lstatSync(base);
     if (!stat.isDirectory() || realpathSync(base) !== base || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.()) return null;

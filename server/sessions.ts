@@ -1196,7 +1196,7 @@ export async function launchWorkspaceSession(name: string, repoInput: string, re
 /** Safe single-quoting for embedding arbitrary text (a prompt) in a bash -lc string. */
 const shellQuote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
-const CODEX_ENV_KEYS = ["XCS_DB_PATH", "XCS_LAUNCH_ID", "XCS_SCREEN"] as const;
+const CODEX_ENV_KEYS = ["CS_DB_PATH", "CS_LAUNCH_ID", "CS_SCREEN"] as const;
 
 /** Quote the already-validated invocation exactly once at the bash/screen boundary. */
 export function buildCodexScreenCommand(invocation: CodexInvocation): string | null {

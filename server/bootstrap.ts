@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { readProtectedSecret } from "./secrets";
 
 /** The password itself never goes to stdout, argv or the service environment. */
 export function bootstrapPassword(dataDir: string, env: Record<string, string | undefined> = process.env) {
-  const configured = env.XCS_ADMIN_PASSWORD_FILE || (env.CREDENTIALS_DIRECTORY ? join(env.CREDENTIALS_DIRECTORY, "admin-password") : null);
+  const configured = readCsSetting(env, "CS_ADMIN_PASSWORD_FILE") || (env.CREDENTIALS_DIRECTORY ? join(env.CREDENTIALS_DIRECTORY, "admin-password") : null);
   const path = configured || join(dataDir, "bootstrap-password");
   if (!configured && !existsSync(path)) writeFileSync(path, randomBytes(24).toString("base64url") + "\n", { mode: 0o600, flag: "wx" });
   const password = readProtectedSecret(path).trim();

@@ -49,7 +49,7 @@ test("managed Codex ownership follows process ancestry to the real TUI child", (
   expect(findProviderProcess(procs, 999, "codex")).toBeNull();
 });
 
-test("the screen boundary inherits the service environment and injects only bounded XCS markers", () => {
+test("the screen boundary inherits the service environment and injects only bounded CS markers", () => {
   const invocation = buildCodexInvocation({
     bin: "/usr/bin/codex",
     cwd: "/srv/project's-copy",
@@ -61,9 +61,9 @@ test("the screen boundary inherits the service environment and injects only boun
   expect(invocation).not.toBeNull();
 
   const command = buildCodexScreenCommand(invocation!);
-  expect(command).toStartWith("exec env XCS_DB_PATH=");
-  expect(command).toContain("XCS_LAUNCH_ID=");
-  expect(command).toContain("XCS_SCREEN=");
+  expect(command).toStartWith("exec env CS_DB_PATH=");
+  expect(command).toContain("CS_LAUNCH_ID=");
+  expect(command).toContain("CS_SCREEN=");
   expect(command).toContain("'/srv/project'\\''s-copy'");
   expect(command).toContain(`'resume' '${resumeId}'`);
   expect(command).not.toContain("--last");

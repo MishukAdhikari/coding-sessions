@@ -182,16 +182,16 @@ PATH=$instance_home/.local/bin:/opt/xcloud-sessions/$instance/current/bin:/usr/l
 PORT=$port
 ORIGIN=$origin
 RP_ID=$host
-XCS_DATA_DIR=$instance_home/data
-XCS_RUNTIME_DIR=$instance_home/run
+CS_DATA_DIR=$instance_home/data
+CS_RUNTIME_DIR=$instance_home/run
 SCREENDIR=$instance_home/run/screen
-XCS_AGENT_PERMISSIONS=standard
-XCS_CHILD_ENV=filtered
-XCS_TRUST_PROXY=1
-XCS_MUX=screen
-XCS_CLI_UPDATE_TIMER=xcloud-sessions-update@$instance.timer
-XCS_CLI_UPDATE_SERVICE=xcloud-sessions-update@$instance.service
-XCS_CLI_UPDATE_CONTROL=0
+CS_AGENT_PERMISSIONS=standard
+CS_CHILD_ENV=filtered
+CS_TRUST_PROXY=1
+CS_MUX=screen
+CS_CLI_UPDATE_TIMER=xcloud-sessions-update@$instance.timer
+CS_CLI_UPDATE_SERVICE=xcloud-sessions-update@$instance.service
+CS_CLI_UPDATE_CONTROL=0
 ENV
   chmod 0600 "$config_root/$instance.env"
 else

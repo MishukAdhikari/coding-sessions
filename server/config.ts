@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { isAbsolute, resolve } from "node:path";
 
 type Environment = Record<string, string | undefined>;
@@ -18,16 +19,16 @@ export function readConfig(env: Environment) {
   }
   const cookieSecure = env.COOKIE_SECURE !== "0";
   if (!cookieSecure && !local) throw new Error("Secure cookies cannot be disabled for a non-loopback origin.");
-  const permissions = env.XCS_AGENT_PERMISSIONS ?? "standard";
-  if (!["standard", "unrestricted"].includes(permissions)) throw new Error("XCS_AGENT_PERMISSIONS must be standard or unrestricted.");
-  const dataDir = env.XCS_DATA_DIR ?? new URL("../data", import.meta.url).pathname;
-  if (!isAbsolute(dataDir)) throw new Error("XCS_DATA_DIR must be an absolute path.");
-  const repository = env.XCS_DEFAULT_REPO ?? "";
-  if (repository && !/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("XCS_DEFAULT_REPO must be owner/repository.");
-  const repoOwners = (env.XCS_GITHUB_OWNERS ?? "").split(",").map(value => value.trim()).filter(Boolean);
-  if (repoOwners.some(owner => !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(owner))) throw new Error("XCS_GITHUB_OWNERS must contain comma-separated GitHub owners.");
+  const permissions = readCsSetting(env, "CS_AGENT_PERMISSIONS") ?? "standard";
+  if (!["standard", "unrestricted"].includes(permissions)) throw new Error("CS_AGENT_PERMISSIONS must be standard or unrestricted.");
+  const dataDir = readCsSetting(env, "CS_DATA_DIR") ?? new URL("../data", import.meta.url).pathname;
+  if (!isAbsolute(dataDir)) throw new Error("CS_DATA_DIR must be an absolute path.");
+  const repository = readCsSetting(env, "CS_DEFAULT_REPO") ?? "";
+  if (repository && !/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("CS_DEFAULT_REPO must be owner/repository.");
+  const repoOwners = (readCsSetting(env, "CS_GITHUB_OWNERS") ?? "").split(",").map(value => value.trim()).filter(Boolean);
+  if (repoOwners.some(owner => !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(owner))) throw new Error("CS_GITHUB_OWNERS must contain comma-separated GitHub owners.");
   return { port, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
-    unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: env.XCS_TRUST_PROXY === "1" };
+    unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: readCsSetting(env, "CS_TRUST_PROXY") === "1" };
 }
 
 export const config = readConfig(process.env);

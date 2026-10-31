@@ -98,9 +98,9 @@ test("builds stable new and exact-resume invocations with bounded app markers", 
       "/srv/project",
     ],
     env: {
-      XCS_DB_PATH: "/srv/app/data/app.db",
-      XCS_LAUNCH_ID: launchId,
-      XCS_SCREEN: "cs-demo",
+      CS_DB_PATH: "/srv/app/data/app.db",
+      CS_LAUNCH_ID: launchId,
+      CS_SCREEN: "cs-demo",
     },
   });
 

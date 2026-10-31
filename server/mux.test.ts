@@ -49,9 +49,9 @@ test("attach argv per holder; zmx joins only a listed session and never inherits
   expect(attachArgv({ name: "cs-a", backend: "screen" })).toEqual(["screen", "-x", "cs-a"]);
 });
 
-test("XCS_MUX=screen forces the legacy holder for new sessions", () => {
-  const prev = process.env.XCS_MUX;
-  process.env.XCS_MUX = "screen";
+test("CS_MUX=screen forces the legacy holder for new sessions", () => {
+  const prev = process.env.CS_MUX;
+  process.env.CS_MUX = "screen";
   try { expect(newSessionBackend()).toBe("screen"); }
-  finally { if (prev === undefined) delete process.env.XCS_MUX; else process.env.XCS_MUX = prev; }
+  finally { if (prev === undefined) delete process.env.CS_MUX; else process.env.CS_MUX = prev; }
 });

@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
@@ -72,7 +73,7 @@ export function createSecretCodec(key: Uint8Array | null): SecretCodec {
 }
 
 export function loadTokenKey(env: Record<string, string | undefined> = process.env): Uint8Array | null {
-  const explicitPath = env.XCS_TOKEN_KEY_FILE;
+  const explicitPath = readCsSetting(env, "CS_TOKEN_KEY_FILE");
   const path = explicitPath || (env.CREDENTIALS_DIRECTORY ? join(env.CREDENTIALS_DIRECTORY, "token-encryption-key") : null);
   if (!path) return null;
   // A configured credential directory means the credential is required. Missing

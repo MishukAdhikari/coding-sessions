@@ -9,13 +9,13 @@ bun install --frozen-lockfile
 ORIGIN=http://localhost:9121 RP_ID=localhost COOKIE_SECURE=0 bun run dev
 ```
 
-Use this loopback-only mode for development. The default state directory is `data/` beside the application; it is created with private permissions. Set `XCS_DATA_DIR` to an absolute path when you need separate state. The first run without a supplied password creates `data/bootstrap-password`; read it locally, not from logs:
+Use this loopback-only mode for development. The default state directory is `data/` beside the application; it is created with private permissions. Set `CS_DATA_DIR` to an absolute path when you need separate state. The first run without a supplied password creates `data/bootstrap-password`; read it locally, not from logs:
 
 ```bash
 cat data/bootstrap-password
 ```
 
-If an existing password hash is present, startup does not reset it. Do not delete authentication rows as a casual development reset on shared state. Use a new private `XCS_DATA_DIR` for a clean disposable instance.
+If an existing password hash is present, startup does not reset it. Do not delete authentication rows as a casual development reset on shared state. Use a new private `CS_DATA_DIR` for a clean disposable instance.
 
 ## HTTPS and passkeys
 
@@ -39,7 +39,7 @@ Leave secure cookies enabled for HTTPS. Passkeys are bound to the relying-party 
 
 Install `ttyd` and GNU screen before starting the server; executable locations can be resolved at startup. On macOS, `brew install ttyd screen` supplies these dependencies. Authenticate provider CLIs under the same account that runs the app, using disposable credentials when testing destructive authentication actions.
 
-Workspaces live under the running account's `~/workspaces`. There is no built-in personal project or default GitHub repository: add projects yourself, or configure `XCS_DEFAULT_REPO=owner/repository`. Standard launches retain trust and approval prompts. `XCS_CHILD_ENV=filtered` forwards a small operational environment, not every variable in your shell. Use explicit provider credentials rather than turning on `inherit` to hide a test failure.
+Workspaces live under the running account's `~/workspaces`. There is no built-in personal project or default GitHub repository: add projects yourself, or configure `CS_DEFAULT_REPO=owner/repository`. Standard launches retain trust and approval prompts. `CS_CHILD_ENV=filtered` forwards a small operational environment, not every variable in your shell. Use explicit provider credentials rather than turning on `inherit` to hide a test failure.
 
 Managed Codex sessions require the installed root-owned requirements, hook sources, and interpreter documented in [installer operations](../deploy/README.md). Do not weaken those checks for macOS development. Use reducer/preflight fixtures locally and perform managed launch/resume checks in an isolated Ubuntu VM.
 

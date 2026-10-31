@@ -1,8 +1,9 @@
+import { readCsSetting } from "./environment";
 import { mkdirSync, lstatSync, realpathSync, chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 
-export function createTerminalSocket(base = process.env.XCS_RUNTIME_DIR ?? join(homedir(), ".local", "state", "xcloud-sessions")) {
+export function createTerminalSocket(base = readCsSetting(process.env, "CS_RUNTIME_DIR") ?? join(homedir(), ".local", "state", "xcloud-sessions")) {
   const root = resolve(base, "terminals");
   for (let path = root; path !== resolve(path, ".."); path = resolve(path, "..")) {
     try { if (lstatSync(path).isSymbolicLink()) throw new Error("Terminal runtime path cannot contain symlinks."); }
@@ -18,7 +19,7 @@ export function createTerminalSocket(base = process.env.XCS_RUNTIME_DIR ?? join(
   const cleanup = () => rmSync(directory, { recursive: true, force: true });
   if (Buffer.byteLength(socketPath) > 100 || /[\s:%?#\\]/.test(socketPath)) {
     cleanup();
-    throw new Error("Set XCS_RUNTIME_DIR to a shorter private absolute path without URL delimiters.");
+    throw new Error("Set CS_RUNTIME_DIR to a shorter private absolute path without URL delimiters.");
   }
   return { socketPath, cleanup };
 }

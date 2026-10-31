@@ -165,7 +165,7 @@ export async function open(target: TermTarget): Promise<{ ok: true; id: string; 
   let socket: ReturnType<typeof createTerminalSocket>;
   try { socket = createTerminalSocket(); } catch {
     if (ephemeral) await mux.quit(screenName, backend).catch(() => {});
-    return { ok: false, error: "Could not create a private terminal socket. Check XCS_RUNTIME_DIR permissions and path length." };
+    return { ok: false, error: "Could not create a private terminal socket. Check CS_RUNTIME_DIR permissions and path length." };
   }
   const { socketPath } = socket;
   const base = `/term/${id}`;

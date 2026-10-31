@@ -73,8 +73,8 @@ codex mcp add xcloud-sessions --url https://sessions.example.com/mcp
 xcloud-sessions` repeats it. Without a browser:
 
 ```bash
-export XCS_TOKEN=xcm_…
-codex mcp add xcloud-sessions --url https://sessions.example.com/mcp --bearer-token-env-var XCS_TOKEN
+export CS_TOKEN=xcm_…
+codex mcp add xcloud-sessions --url https://sessions.example.com/mcp --bearer-token-env-var CS_TOKEN
 ```
 
 ## Auth details

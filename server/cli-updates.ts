@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { childEnvironment } from "./child-env";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -7,11 +8,11 @@ type Runner = (argv: string[]) => Promise<CommandResult>;
 export type UpdateAction = "enable" | "disable" | "run";
 
 export function updateSettings(env: Record<string, string | undefined> = process.env) {
-  const timer = env.XCS_CLI_UPDATE_TIMER ?? "update-coding-clis.timer";
-  const service = env.XCS_CLI_UPDATE_SERVICE ?? "update-coding-clis.service";
+  const timer = readCsSetting(env, "CS_CLI_UPDATE_TIMER") ?? "update-coding-clis.timer";
+  const service = readCsSetting(env, "CS_CLI_UPDATE_SERVICE") ?? "update-coding-clis.service";
   if (!/^[a-zA-Z0-9_@.-]+\.timer$/.test(timer) || !/^[a-zA-Z0-9_@.-]+\.service$/.test(service)
     || timer.startsWith("-") || service.startsWith("-")) throw new Error("Invalid CLI update unit name.");
-  return { timer, service, controllable: env.XCS_CLI_UPDATE_CONTROL !== "0" };
+  return { timer, service, controllable: readCsSetting(env, "CS_CLI_UPDATE_CONTROL") !== "0" };
 }
 const VERSION_COMMANDS: Array<{ name: string; argv: string[] }> = [
   { name: "codex", argv: ["codex", "--version"] },

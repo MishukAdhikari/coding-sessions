@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 /**
  * Output/input filtering for the web terminal relay.
  *
@@ -10,7 +11,7 @@
  *      - upstream (browser→server): drop any reports that still slip through.
  *    zmx bridges pass the mouse through (`{ mouse: true }`): nothing emulates
  *    the terminal in between, and the mouse is how Claude's fullscreen renderer
- *    scrolls, selects and expands. `XCS_TERM_MOUSE=off` strips it everywhere.
+ *    scrolls, selects and expands. `CS_TERM_MOUSE=off` strips it everywhere.
  *
  * 2. Bold accent — Claude renders `/commands` (and other emphasis) as plain bold
  *    (`ESC[1m`), which a terminal can't turn into a colour on its own. We rewrite
@@ -54,7 +55,7 @@ export interface FilterOptions {
   mouse?: boolean;
 }
 
-const mouseAllowed = (opts?: FilterOptions): boolean => !!opts?.mouse && process.env.XCS_TERM_MOUSE !== "off";
+const mouseAllowed = (opts?: FilterOptions): boolean => !!opts?.mouse && readCsSetting(process.env, "CS_TERM_MOUSE") !== "off";
 
 export type Frame = string | ArrayBuffer | Uint8Array;
 

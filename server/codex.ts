@@ -71,9 +71,9 @@ export function buildCodexInvocation(options: CodexInvocationOptions): CodexInvo
   return {
     argv,
     env: {
-      XCS_DB_PATH: normalize(dbPath),
-      XCS_LAUNCH_ID: launchId.toLowerCase(),
-      XCS_SCREEN: screen,
+      CS_DB_PATH: normalize(dbPath),
+      CS_LAUNCH_ID: launchId.toLowerCase(),
+      CS_SCREEN: screen,
     },
   };
 }

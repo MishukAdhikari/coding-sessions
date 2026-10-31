@@ -79,14 +79,16 @@ test("key loading uses protected files, canonical base64, explicit precedence an
   const key = randomBytes(32);
   writeFileSync(file, key.toString("base64") + "\n", { mode: 0o600 });
   expect(loadTokenKey({ CREDENTIALS_DIRECTORY: dir })).toEqual(key);
-  expect(loadTokenKey({ XCS_TOKEN_KEY_FILE: file, CREDENTIALS_DIRECTORY: "/missing" })).toEqual(key);
-  expect(loadTokenKey({ XCS_TOKEN_KEY: key.toString("base64") })).toBeNull();
+  expect(loadTokenKey({ CS_TOKEN_KEY_FILE: file, CREDENTIALS_DIRECTORY: "/missing" })).toEqual(key);
+  expect(loadTokenKey({ XCS_TOKEN_KEY_FILE: file })).toEqual(key);
+  expect(() => loadTokenKey({ CS_TOKEN_KEY_FILE: join(dir, "missing"), XCS_TOKEN_KEY_FILE: file })).toThrow();
+  expect(loadTokenKey({ CS_TOKEN_KEY: key.toString("base64") })).toBeNull();
   expect(loadTokenKey({})).toBeNull();
-  expect(() => loadTokenKey({ XCS_TOKEN_KEY_FILE: join(dir, "missing") })).toThrow();
+  expect(() => loadTokenKey({ CS_TOKEN_KEY_FILE: join(dir, "missing") })).toThrow();
   expect(() => loadTokenKey({ CREDENTIALS_DIRECTORY: join(dir, "missing") })).toThrow();
   for (const invalid of ["", "not-base64", Buffer.alloc(31).toString("base64"), key.toString("base64").replace(/=$/, "")]) {
     writeFileSync(file, invalid);
-    expect(() => loadTokenKey({ XCS_TOKEN_KEY_FILE: file })).toThrow();
+    expect(() => loadTokenKey({ CS_TOKEN_KEY_FILE: file })).toThrow();
   }
 });
 

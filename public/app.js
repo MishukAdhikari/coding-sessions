@@ -1665,7 +1665,7 @@
   const MCP_URL = `${location.origin}/mcp`;
   const connectCommands = (token) => token ? {
     "cmd-claude-code-token": `claude mcp add --transport http -s user xcloud-sessions ${MCP_URL} --header "Authorization: Bearer ${token}"`,
-    "cmd-codex-token": `codex mcp add xcloud-sessions --url ${MCP_URL} --bearer-token-env-var XCS_TOKEN`,
+    "cmd-codex-token": `codex mcp add xcloud-sessions --url ${MCP_URL} --bearer-token-env-var CS_TOKEN`,
   } : {
     "cmd-claude-app": MCP_URL,
     "cmd-claude-code": `claude mcp add --transport http -s user xcloud-sessions ${MCP_URL}`,

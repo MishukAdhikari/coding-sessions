@@ -22,12 +22,12 @@ test("only the complete current folder-trust dialog is evidence of pending input
 });
 
 test("process marker binding requires the exact launch, screen and database", () => {
-  const raw = "XCS_LAUNCH_ID=first\0XCS_SCREEN=cs-demo\0XCS_DB_PATH=/data/app.db\0";
+  const raw = "CS_LAUNCH_ID=first\0CS_SCREEN=cs-demo\0CS_DB_PATH=/data/app.db\0";
   expect(matchesCodexLaunchMarkers(raw, "first", "cs-demo", "/data/app.db")).toBe(true);
   expect(matchesCodexLaunchMarkers(raw, "second", "cs-demo", "/data/app.db")).toBe(false);
   expect(matchesCodexLaunchMarkers(raw, "first", "cs-other", "/data/app.db")).toBe(false);
   expect(matchesCodexLaunchMarkers(raw, "first", "cs-demo", "/other/app.db")).toBe(false);
-  expect(matchesCodexLaunchMarkers(raw + "XCS_LAUNCH_ID=second\0", "first", "cs-demo", "/data/app.db")).toBe(false);
+  expect(matchesCodexLaunchMarkers(raw + "CS_LAUNCH_ID=second\0", "first", "cs-demo", "/data/app.db")).toBe(false);
 });
 
 test("startup probes share pending reads, expire after ten seconds and isolate replacement launches", async () => {

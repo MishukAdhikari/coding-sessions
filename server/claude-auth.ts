@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { childEnvironment } from "./child-env";
 import { readClaudeIdentity } from "./account-identity";
 import { existsSync, readFileSync, unlinkSync, mkdirSync, lstatSync, realpathSync, chmodSync, mkdtempSync, rmSync, openSync, closeSync, constants } from "node:fs";
@@ -16,7 +17,7 @@ import { recordAccountLogin } from "./account-history";
  */
 
 const AUTH_SCREEN = "xs-claude-auth";
-export function privateAuthFiles(base = process.env.XCS_RUNTIME_DIR ?? join(homedir(), ".local", "state", "xcloud-sessions")) {
+export function privateAuthFiles(base = readCsSetting(process.env, "CS_RUNTIME_DIR") ?? join(homedir(), ".local", "state", "xcloud-sessions")) {
   const directory = resolve(base, "auth");
   let ancestor = directory;
   while (ancestor !== resolve(ancestor, "..")) {

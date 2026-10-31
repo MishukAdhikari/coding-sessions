@@ -46,9 +46,11 @@ export function handleCodexHookPayload(
   openDatabase: DatabaseOpener = openExistingDatabase,
   now = Date.now(),
 ): boolean {
-  const dbPath = environment.XCS_DB_PATH;
-  const screen = environment.XCS_SCREEN;
-  const launchId = environment.XCS_LAUNCH_ID;
+  // This hook is installed standalone; retain one complete legacy marker family for running sessions.
+  const prefix = ["CS_DB_PATH", "CS_SCREEN", "CS_LAUNCH_ID"].some(key => environment[key] !== undefined) ? "CS_" : "X" + "CS_";
+  const dbPath = environment[`${prefix}DB_PATH`];
+  const screen = environment[`${prefix}SCREEN`];
+  const launchId = environment[`${prefix}LAUNCH_ID`];
   if (
     !dbPath
     || !isAbsolute(dbPath)

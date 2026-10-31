@@ -531,11 +531,11 @@ Open a terminal on the server…</button>
       <span class="copy-chip">Copy</span>
     </div>
     <label class="label">Codex with this token</label>
-    <div class="copybox" role="button" tabindex="0" data-copy="cmd-codex-token" data-toast="Command copied — keep XCS_TOKEN in a secret store" aria-label="Copy">
+    <div class="copybox" role="button" tabindex="0" data-copy="cmd-codex-token" data-toast="Command copied — keep CS_TOKEN in a secret store" aria-label="Copy">
       <pre id="cmd-codex-token" class="cmd"></pre>
       <span class="copy-chip">Copy</span>
     </div>
-    <p class="hint">Codex reads the token from <code>XCS_TOKEN</code>; keep its value in a secret store (Next Term Secrets, Keychain), not in a shell file. Claude Code saves this header in <code>~/.claude.json</code> as plain text.</p>
+    <p class="hint">Codex reads the token from <code>CS_TOKEN</code>; keep its value in a secret store (Next Term Secrets, Keychain), not in a shell file. Claude Code saves this header in <code>~/.claude.json</code> as plain text.</p>
   </div>
   <form id="form-cli-token" class="proj-form">
     <input id="input-cli-label" class="field" type="text" placeholder="Label (e.g. MacBook)" maxlength="60" autocapitalize="off">
@@ -552,6 +552,6 @@ Open a terminal on the server…</button>
 <script src="/agent-auth.js?v=7"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=2"></script>
-<script src="/app.js?v=50"></script>
+<script src="/app.js?v=51"></script>
 </body>
 </html>

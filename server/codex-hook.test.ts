@@ -30,18 +30,18 @@ test("hook handler opens only an existing marked database and applies normalized
     prompt: "must not be stored",
   };
   expect(handleCodexHookPayload(payload, {
-    XCS_DB_PATH: "/srv/app.db",
-    XCS_SCREEN: "cs-demo",
-    XCS_LAUNCH_ID: launchId,
+    CS_DB_PATH: "/srv/app.db",
+    CS_SCREEN: "cs-demo",
+    CS_LAUNCH_ID: launchId,
   }, openDatabase, 10)).toBe(true);
   expect(database.query("SELECT session_id, turn_state FROM codex_launch_state").get()).toEqual({
     session_id: sessionId,
     turn_state: "waiting",
   });
   expect(handleCodexHookPayload(payload, {
-    XCS_DB_PATH: "relative.db",
-    XCS_SCREEN: "cs-demo",
-    XCS_LAUNCH_ID: launchId,
+    CS_DB_PATH: "relative.db",
+    CS_SCREEN: "cs-demo",
+    CS_LAUNCH_ID: launchId,
   }, openDatabase, 11)).toBe(false);
   database.close();
 });
@@ -60,13 +60,28 @@ test("hook handler never opens storage without every app launch marker", () => {
   };
   const environments = [
     {},
-    { XCS_DB_PATH: "/srv/app.db", XCS_SCREEN: "cs-demo" },
-    { XCS_DB_PATH: "/srv/app.db", XCS_LAUNCH_ID: launchId },
-    { XCS_SCREEN: "cs-demo", XCS_LAUNCH_ID: launchId },
+    { CS_DB_PATH: "/srv/app.db", CS_SCREEN: "cs-demo" },
+    { CS_DB_PATH: "/srv/app.db", CS_LAUNCH_ID: launchId },
+    { CS_SCREEN: "cs-demo", CS_LAUNCH_ID: launchId },
   ];
 
   for (const environment of environments) {
     expect(handleCodexHookPayload(payload, environment, openDatabase, 10)).toBe(false);
   }
   expect(opens).toBe(0);
+});
+
+test("standalone managed hook accepts existing legacy launches without mixing marker families", () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, launch_id) VALUES ('cs-demo', 'demo', '/srv/project', 1, 'codex', ?)").run(launchId);
+  const payload = { session_id: sessionId, cwd: "/srv/project", hook_event_name: "SessionStart", source: "startup" };
+  const legacy = { XCS_DB_PATH: "/srv/app.db", XCS_SCREEN: "cs-demo", XCS_LAUNCH_ID: launchId };
+  let opens = 0;
+  const open = () => { opens++; return database; };
+  expect(handleCodexHookPayload(payload, { ...legacy, CS_SCREEN: "cs-other" }, open, 10)).toBe(false);
+  expect(opens).toBe(0);
+  expect(handleCodexHookPayload(payload, legacy, open, 10)).toBe(true);
+  expect(database.query("SELECT phase FROM launches").get()).toEqual({ phase: "ready" });
+  database.close();
 });

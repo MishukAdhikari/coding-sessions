@@ -10,7 +10,7 @@ Use a dedicated VM for an untrusted workload. A stronger service-to-runner bound
 
 ## Network and access
 
-Terminate HTTPS at a trusted reverse proxy and keep the application listener inaccessible to untrusted direct clients. Forward WebSocket upgrades for terminals. Enable `XCS_TRUST_PROXY=1` only when the proxy overwrites forwarded client headers and clients cannot bypass it.
+Terminate HTTPS at a trusted reverse proxy and keep the application listener inaccessible to untrusted direct clients. Forward WebSocket upgrades for terminals. Enable `CS_TRUST_PROXY=1` only when the proxy overwrites forwarded client headers and clients cannot bypass it.
 
 Register a passkey after initial password sign-in. An MCP authorization is access to this instance, not permission to one isolated project. Review client consent and revoke unused CLI/OAuth access. Report suspected vulnerabilities privately using [SECURITY.md](../SECURITY.md).
 
@@ -20,8 +20,8 @@ Register a passkey after initial password sign-in. An MCP authorization is acces
 |---|---|
 | Non-secret configuration | `.env` or systemd `EnvironmentFile`; contains hostnames, paths, and behavior switches |
 | Administrator bootstrap password | Installer creates a root-private file delivered through `LoadCredential=admin-password`; SQLite stores a password hash |
-| Local bootstrap password | Without a supplied credential, first startup writes a private `XCS_DATA_DIR/bootstrap-password`; logs contain only its location |
-| App token encryption key | `LoadCredential=token-encryption-key` or `XCS_TOKEN_KEY_FILE`; canonical base64 encoding of exactly 32 random bytes |
+| Local bootstrap password | Without a supplied credential, first startup writes a private `CS_DATA_DIR/bootstrap-password`; logs contain only its location |
+| App token encryption key | `LoadCredential=token-encryption-key` or `CS_TOKEN_KEY_FILE`; canonical base64 encoding of exactly 32 random bytes |
 | Custom-command and app-managed Command Code tokens | Versioned AES-256-GCM ciphertext when a key is configured; random nonce and context-bound authentication prevent swapping ciphertext between commands/credential purposes |
 | Native provider and GitHub authentication | CLI-managed files in the instance home; not automatically encrypted by the application's token encryption |
 | Browser sessions, CLI bearer tokens, OAuth codes/access/refresh tokens | Hashes in SQLite; raw bearer values still require protection wherever the client stores them |
@@ -35,7 +35,9 @@ Environment secrets can spread into child processes and diagnostics. Linux `/pro
 
 ## Defaults and compatibility
 
-New deployments use `XCS_AGENT_PERMISSIONS=standard`: the application does not add provider bypass flags. Provider settings and tool-specific policies still matter. `XCS_CHILD_ENV=filtered` forwards operational variables and explicit per-provider values instead of the whole service environment. The filter is exposure reduction, not isolation from account-owned files or SSH-agent access.
+Configuration and new managed launches use the `CS_` prefix. Earlier prefixed settings remain readable during upgrades; `CS_` takes precedence. Existing encrypted tokens and live Codex launches remain compatible. Update the root-owned managed hook alongside the application before starting new Codex sessions.
+
+New deployments use `CS_AGENT_PERMISSIONS=standard`: the application does not add provider bypass flags. Provider settings and tool-specific policies still matter. `CS_CHILD_ENV=filtered` forwards operational variables and explicit per-provider values instead of the whole service environment. The filter is exposure reduction, not isolation from account-owned files or SSH-agent access.
 
 Explicit `unrestricted` and `inherit` modes support deliberate legacy behavior. Review them before enabling either. No credential-pointer filtering can make arbitrary same-account shell access safe for mutually untrusted users.
 

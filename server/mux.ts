@@ -1,3 +1,4 @@
+import { readCsSetting } from "./environment";
 import { childEnvironment } from "./child-env";
 /**
  * The terminal holder a Session lives in — the thing that keeps an agent running
@@ -10,7 +11,7 @@ import { childEnvironment } from "./child-env";
  *    reattach is rehydrated from libghostty-vt (scrollback + screen, in colour).
  *  - GNU screen (legacy): a full terminal emulator in the middle. Still used to
  *    list, attach and end sessions that were started under it, and for new
- *    sessions when zmx is missing or `XCS_MUX=screen` forces it.
+ *    sessions when zmx is missing or `CS_MUX=screen` forces it.
  *
  * Both are addressed by the same name (`cs-<name>`, `webterm-<id>`), so the
  * launches table and every id the frontend sees stay backend-neutral.
@@ -53,7 +54,7 @@ export const ZMX_BIN = findZmx();
 
 /** Backend for sessions started from now on. */
 export function newSessionBackend(): MuxBackend {
-  if (process.env.XCS_MUX === "screen") return "screen";
+  if (readCsSetting(process.env, "CS_MUX") === "screen") return "screen";
   return ZMX_BIN ? "zmx" : "screen";
 }
 
