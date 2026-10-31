@@ -12,7 +12,7 @@
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=39">
+<link rel="stylesheet" href="/app.css?v=40">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -259,11 +259,11 @@ Agent authentication…</button>
   </section>
   <section class="settings-section" aria-labelledby="settings-access">
     <h3 id="settings-access">Connections &amp; access</h3>
-    <button id="btn-connect" class="row-btn">Connect Claude or Codex…</button>
-    <button id="btn-cli-access" class="row-btn">CLI &amp; MCP access…</button>
-    <button id="btn-github-auth" class="row-btn">GitHub access (gh)…</button>
-    <button id="btn-browser-auth" class="row-btn">Claude.ai browser (chat deletion)…</button>
-    <button id="btn-add-passkey" class="row-btn">Add Face ID / Touch ID on this device</button>
+    <button id="btn-connect" class="row-btn connection-row"><span>Connect Claude or Codex…</span><span id="connection-connect" class="connection-status" role="status">Checking…</span><span id="connection-connect-detail" class="connection-detail"></span></button>
+    <button id="btn-cli-access" class="row-btn connection-row"><span>CLI &amp; MCP access…</span><span id="connection-cli" class="connection-status" role="status">Checking…</span><span id="connection-cli-detail" class="connection-detail"></span></button>
+    <button id="btn-github-auth" class="row-btn connection-row"><span>GitHub access (gh)…</span><span id="connection-github" class="connection-status" role="status">Checking…</span><span id="connection-github-detail" class="connection-detail"></span></button>
+    <button id="btn-browser-auth" class="row-btn connection-row"><span>Claude.ai browser…</span><span id="connection-browser" class="connection-status" role="status">Checking…</span><span id="connection-browser-detail" class="connection-detail"></span></button>
+    <button id="btn-add-passkey" class="row-btn connection-row"><span>Add Face ID / Touch ID</span><span id="connection-passkey" class="connection-status" role="status">Checking…</span><span id="connection-passkey-detail" class="connection-detail"></span></button>
   </section>
   <section class="settings-section" aria-labelledby="settings-server">
     <h3 id="settings-server">Server &amp; history</h3>
@@ -552,6 +552,7 @@ Open a terminal on the server…</button>
 <script src="/agent-auth.js?v=7"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=2"></script>
-<script src="/app.js?v=51"></script>
+<script src="/connection-status.js?v=1"></script>
+<script src="/app.js?v=52"></script>
 </body>
 </html>
