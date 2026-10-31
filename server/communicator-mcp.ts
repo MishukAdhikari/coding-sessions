@@ -26,7 +26,7 @@ const error = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0",
 const result = (id: unknown, value: unknown) => ({ jsonrpc: "2.0", id, result: value });
 const response = (value: unknown, status = 200) => Response.json(value, { status, headers: { "cache-control": "no-store" } });
 
-async function readBody(req: Request): Promise<string | null> {
+export async function readBody(req: Request): Promise<string | null> {
   const reader = req.body?.getReader();
   if (!reader) return "";
   const chunks: Uint8Array[] = [];

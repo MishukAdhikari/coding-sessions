@@ -1638,6 +1638,9 @@
     }
   }
 
+  const connectorsUI = window.createConnectorsUI({ $, api, openSheet, showToast, agoStr, escapeHtml });
+  $("btn-connectors").addEventListener("click", () => connectorsUI.open());
+
   $("btn-cli-access").addEventListener("click", () => {
     $("cli-token-new").hidden = true;
     $("input-cli-label").value = "";

@@ -26,6 +26,8 @@ Register a passkey after initial password sign-in. An MCP authorization is acces
 | Native provider and GitHub authentication | CLI-managed files in the instance home; not automatically encrypted by the application's token encryption |
 | Browser sessions, CLI bearer tokens, OAuth codes/access/refresh tokens | Hashes in SQLite; raw bearer values still require protection wherever the client stores them |
 | Built-in communicator credentials | Random per-launch capabilities; only hashes are stored in SQLite, with raw values passed through explicit child environment. They cannot authenticate to the operator MCP endpoint. |
+| External MCP connector tokens | AES-256-GCM ciphertext bound to the connector; saving is refused when no key is configured (no plaintext fallback). Write-only over the API, opened only to make an upstream request, never passed to agents. |
+| Connector launch capabilities | Random per-launch `csconn_` values, hashed in SQLite, passed through explicit child environment. A separate audience from the communicator and the operator endpoint. |
 | Workspaces, transcripts, setup logs, backups | May contain secrets or source code; not automatically encrypted or redacted as a whole |
 
 The protected-file reader rejects final-component symlinks, nonregular files, group/other permissions, and oversized files. Protect the containing directories too. The installer provisions root-private source credentials; the runtime receives readable snapshots for its service identity.
@@ -80,3 +82,9 @@ The built-in communicator has a separate credential audience and five mailbox to
 Messages are stored in the private application database for 30 days. They are not encrypted separately from that database and may contain source code or sensitive text. Treat database backups accordingly. Message attribution is not authorization: a peer cannot grant additional task scope or override provider approvals. No messages are injected into terminal input or approval dialogs.
 
 These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
+
+## External MCP connectors
+
+Outbound connectors ([details](connectors.md)) keep the upstream token in the server and give each launch its own capability. The gateway checks liveness, connector state, launch grant and tool grant on every call, cancels running calls when access changes, and discards results that finish after a revocation. Upstream error text is replaced by local messages, the exact token is scrubbed from tool results, and only curated read-only tools can be granted. The endpoint is a fixed preset (HTTPS, or loopback HTTP for testing); redirects and metadata-supplied URLs are not followed.
+
+The token is not passed to agents, but it is decrypted inside the service process, and the encryption key is readable by the service account. Agents running as that same Unix account can, with effort, read account-owned files and processes. This design prevents accidental exposure and keeps grants enforceable for cooperating agents; it is not isolation from a hostile agent. For that, run the credential holder under a separate account or machine.

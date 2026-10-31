@@ -139,6 +139,8 @@ or terminal output. Unknown provider status is distinct from signed out.
 
 ## Built-in session communicator
 
+To let agents use **another** service's MCP tools (Coding Sessions connecting out), see [external MCP connectors](connectors.md).
+
 New and resumed managed Claude, Codex, and Command Code sessions automatically receive a separate MCP server named `coding_sessions_communicator`. No operator token, API key, or extra `.env` value is needed for this connection. Older running sessions keep their current configuration; end and resume them when convenient to load it.
 
 This connector exchanges messages between participating sessions on this instance. It cannot read terminal screens, press keys, approve prompts, change accounts, or start/end sessions. The external operator connector described above remains separate.

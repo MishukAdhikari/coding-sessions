@@ -1,6 +1,8 @@
 import { config } from "./config";
 import { Communicator } from "./communicator";
-import { communicator } from "./communicator-runtime";
+import { communicator, connectors } from "./communicator-runtime";
+import type { Connectors } from "./connectors";
+import { installCollaborationSkill } from "./collaboration-skill";
 import { communicatorEnvironment, providerCommunicatorArgs } from "./communicator-config";
 import { CODEX_READINESS_TIMEOUT_ERROR, createStartupProbe, type CodexStartupObservation } from "./codex-startup";
 import { childEnvironment } from "./child-env";
@@ -584,21 +586,27 @@ export interface CommunicatingSessionOptions {
 interface CommunicatingSessionRuntime {
   database: Database;
   communicator: Communicator;
-  configure: (provider: "claude" | "command-code", cwd: string, bin?: string) => Promise<string[]>;
+  /** Absent in tests that predate connectors: launches then carry no connector entry. */
+  connectors?: Pick<Connectors, "available" | "prepare" | "revoke">;
+  installSkill?: () => void;
+  configure: (provider: "claude" | "command-code", cwd: string, bin?: string, withConnectors?: boolean) => Promise<string[]>;
   spawn: typeof mux.spawn;
   hasHolder: (screen: string) => Promise<boolean>;
   uuid: () => string;
   now: () => number;
 }
 const communicatingRuntime: CommunicatingSessionRuntime = {
-  database: db, communicator, configure: (provider, cwd, bin) => providerCommunicatorArgs(provider, cwd, { commandCodeBin: bin }),
+  database: db, communicator, connectors, installSkill: installCollaborationSkill,
+  configure: (provider, cwd, bin, withConnectors) => providerCommunicatorArgs(provider, cwd, { commandCodeBin: bin, connectors: withConnectors }),
   spawn: mux.spawn, hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
 };
 
 /** Reserve identity before the child can initialize MCP; restore previous history if spawn fails. */
 export async function startCommunicatingSession(options: CommunicatingSessionOptions, runtime: CommunicatingSessionRuntime = communicatingRuntime): Promise<{ ok: true } | { ok: false; error: string }> {
   let args: string[];
-  try { args = await runtime.configure(options.provider, options.projectPath, options.providerBin); }
+  // Decided once, so the configured entry and the capability below always agree.
+  const withConnectors = runtime.connectors?.available() ?? false;
+  try { args = await runtime.configure(options.provider, options.projectPath, options.providerBin, withConnectors); }
   catch (error) { return { ok: false, error: safeLaunchError((error as Error).message, "Could not configure session communication.") }; }
   const database = runtime.database;
   const previous = database.query(`SELECT ${launchColumns} FROM launches WHERE screen=?`).get(options.screen) as LaunchRow | null;
@@ -618,13 +626,16 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
       launch_id=excluded.launch_id,phase=excluded.phase,error_message=NULL,resume_archive_id=excluded.resume_archive_id`)
       .run(options.screen,options.name,options.projectPath,runtime.now(),options.claudeUrl??null,options.resumeId??null,options.remoteControl,options.provider,launchId,options.resumeArchiveId??null);
     const { token } = runtime.communicator.prepare(launchId);
-    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...options.env, ...communicatorEnvironment(token, config.port) } });
+    const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
+    runtime.installSkill?.();
+    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...options.env, ...communicatorEnvironment(token, config.port, connectorToken) } });
     if (result.code !== 0) throw new Error(safeLaunchError(result.err, "Session failed to start."));
     database.query("UPDATE launches SET phase='ready' WHERE launch_id=? AND phase='preparing'").run(launchId);
     if (options.resumeArchiveId != null) database.query("DELETE FROM archive WHERE id=?").run(options.resumeArchiveId);
     return { ok: true };
   } catch (error) {
     runtime.communicator.revoke(launchId);
+    runtime.connectors?.revoke(launchId);
     database.transaction(() => {
       if (!database.query("SELECT 1 FROM launches WHERE screen=? AND launch_id=?").get(options.screen,launchId)) return;
       database.query("DELETE FROM launches WHERE launch_id=?").run(launchId);
@@ -1295,10 +1306,14 @@ export interface ManagedCodexRuntime {
   execute: (command: string[], env?: Record<string, string>) => Promise<{ code: number; out: string; err: string }>;
   uuid: () => string;
   now: () => number;
+  connectors?: Pick<Connectors, "available" | "prepare" | "revoke">;
+  installSkill?: () => void;
 }
 
 const defaultManagedCodexRuntime: ManagedCodexRuntime = {
   database: db,
+  connectors,
+  installSkill: installCollaborationSkill,
   dbPath: DB_PATH,
   preflight: () => preflightCodex(),
   execute: run,
@@ -1322,7 +1337,8 @@ export async function startManagedCodex(
   }
 
   const launchId = runtime.uuid();
-  const mcpArgs = await providerCommunicatorArgs("codex", options.projectPath);
+  const withConnectors = runtime.connectors?.available() ?? false;
+  const mcpArgs = await providerCommunicatorArgs("codex", options.projectPath, { connectors: withConnectors });
   const invocation = buildCodexInvocation({
     bin: preflight.bin,
     cwd: options.projectPath,
@@ -1357,10 +1373,13 @@ export async function startManagedCodex(
   let result: { code: number; out: string; err: string };
   try {
     const { token } = launchCommunicator.prepare(launchId);
-    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), communicatorEnvironment(token, config.port));
+    const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
+    runtime.installSkill?.();
+    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), communicatorEnvironment(token, config.port, connectorToken));
   } catch { result = { code: 1, out: "", err: "Could not start Codex with its session communicator." }; }
   if (result.code !== 0) {
     launchCommunicator.revoke(launchId);
+    runtime.connectors?.revoke(launchId);
     const error = safeLaunchError(result.err, "session failed to start Codex");
     runtime.database.query(
       "UPDATE launches SET phase = 'failed', error_message = ? WHERE launch_id = ? AND provider = 'codex'",

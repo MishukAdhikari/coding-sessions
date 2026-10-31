@@ -193,4 +193,53 @@ export function applyDatabaseSchema(database: Database): void {
       last_used_at INTEGER
     );
   `);
+
+  // Outbound MCP connectors (Coding Sessions → another service). Separate from the
+  // inbound oauth_* tables above. credential is always AES-GCM sealed; see connectors.ts.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_connectors (
+      id                TEXT PRIMARY KEY,
+      preset            TEXT NOT NULL UNIQUE,
+      enabled           INTEGER NOT NULL DEFAULT 1,
+      credential        TEXT,
+      credential_set_at INTEGER,
+      granted_tools     TEXT NOT NULL DEFAULT '[]',
+      default_providers TEXT NOT NULL DEFAULT '[]',
+      catalog           TEXT,
+      catalog_at        INTEGER,
+      catalog_stale     INTEGER NOT NULL DEFAULT 0,
+      identity          TEXT,
+      check_status      TEXT,
+      check_at          INTEGER,
+      check_ok_at       INTEGER,
+      created_at        INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_capabilities (
+      launch_id  TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      revoked_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_launch_grants (
+      connector_id TEXT NOT NULL REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+      launch_id    TEXT NOT NULL,
+      granted_at   INTEGER NOT NULL,
+      PRIMARY KEY (connector_id, launch_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_audit (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      at           INTEGER NOT NULL,
+      connector_id TEXT NOT NULL,
+      launch_id    TEXT,
+      provider     TEXT,
+      session_name TEXT,
+      tool         TEXT NOT NULL,
+      outcome      TEXT NOT NULL,
+      duration_ms  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS connector_audit_at_idx ON connector_audit (connector_id, at);
+  `);
 }
