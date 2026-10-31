@@ -1,7 +1,46 @@
 (() => {
   const state = (tone, label, detail) => ({ tone, label, detail });
   const array = (value) => { if (!Array.isArray(value)) throw new Error("Missing status"); return value; };
+  const time = value => {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+  };
   const describe = {
+    updates: data => {
+      if (typeof data.available !== "boolean") throw new Error("Missing status");
+      if (!data.available) return state("neutral", "Not set up", "Automatic CLI updates are not installed on this server.");
+      if (data.running) return state("warning", "Updating", "New sessions will use the updated versions. Existing sessions keep running.");
+      if (data.result === "failed") return state("warning", "Needs attention", "The last update failed. Open for details and retry options.");
+      const next = time(data.nextRun);
+      const last = data.result === "success" ? "Last update succeeded." : "No completed update yet.";
+      return state(data.enabled ? "positive" : "neutral", data.enabled ? "Daily" : "Paused",
+        `${data.enabled ? next ? `Next: ${next}.` : "Automatic updates every 24 hours." : "Automatic updates are paused."} ${last}`);
+    },
+    history: data => {
+      const count = array(data.archived).length;
+      return state("neutral", `${count} ended`, "Clears this list only. Conversations and workspace folders stay.");
+    },
+    sessions: data => {
+      const count = array(data.sessions).filter(session => session.status === "running" || session.status === "starting").length;
+      return state("neutral", `${count} live`, "Closes listed sessions. Saved conversations remain available.");
+    },
+    agents: data => {
+      const accounts = array(data.accounts);
+      const connected = accounts.filter(account => account.installed === true && account.loggedIn === true).length;
+      const unknown = accounts.filter(account => account.installed !== false && typeof account.loggedIn !== "boolean").length;
+      return state(unknown ? "warning" : connected ? "positive" : "neutral",
+        unknown && !connected ? "Unknown" : `${connected} connected`,
+        unknown ? `Sign-in could not be verified for ${unknown} ${unknown === 1 ? "agent" : "agents"}.` : "");
+    },
+    commands: data => {
+      const count = array(data.commands).length;
+      return state("neutral", `${count} ${count === 1 ? "command" : "commands"}`, "");
+    },
+    projects: data => {
+      const count = array(data.projects).length;
+      return state("neutral", `${count} ${count === 1 ? "project" : "projects"}`, "");
+    },
     connect: data => {
       const apps = array(data.connections);
       return apps.length
@@ -52,6 +91,8 @@
     document.getElementById(`connection-${key}-detail`).textContent = value.detail;
   }
   const endpoints = {
+    updates: "/api/cli-updates", history: "/api/sessions", sessions: "/api/sessions",
+    agents: "/api/agent-accounts", commands: "/api/commands", projects: "/api/projects",
     connect: "/api/mcp-connections", cli: "/api/cli-tokens", github: "/api/github-auth/status",
     browser: "/api/browser-auth/status", passkey: "/api/passkeys",
   };
@@ -62,10 +103,12 @@
     controller?.abort();
     const request = controller = new AbortController();
     const timeout = setTimeout(() => request.abort(), 8000);
+    const requests = new Map();
     await Promise.allSettled(Object.entries(endpoints).map(async ([key, path]) => {
       render(key, state("neutral", "Checking…", ""));
       try {
-        const data = await api(path, { signal: request.signal });
+        if (!requests.has(path)) requests.set(path, api(path, { signal: request.signal }));
+        const data = await requests.get(path);
         if (current === generation) render(key, describe[key](data));
       } catch {
         if (current === generation) render(key, state("warning", "Check failed", "Status is unavailable. Reopen Settings to retry."));

@@ -315,3 +315,8 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .connection-status[data-tone="warning"] { color: var(--status-working); }
 .connection-detail { grid-column: 1 / -1; color: var(--text-secondary); font-size: var(--type-menu-label); line-height: 1.5; overflow-wrap: anywhere; }
 .connection-detail:empty { display: none; }
+.connection-action { display: flex; align-items: center; gap: var(--space-2); }
+.connection-action .menu-icon { flex: none; }
+.settings-section #btn-commands, .settings-section #btn-projects { padding-inline-start: var(--menu-icon-space); }
+#btn-web-terminal .connection-action { grid-column: 1 / -1; }
+.logout-detail { display: block; margin-top: var(--space-1); }
