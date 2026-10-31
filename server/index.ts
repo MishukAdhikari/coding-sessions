@@ -26,7 +26,9 @@ import * as oauth from "./oauth";
 import { handleOAuthRoute, mcpUnauthorized } from "./oauth-route";
 import { handleMcpPost, type McpDeps } from "./mcp";
 import { handleCommunicatorRequest } from "./communicator-mcp";
-import { communicator } from "./communicator-runtime";
+import { communicator, connectors } from "./communicator-runtime";
+import { handleConnectorRequest } from "./connector-mcp";
+import { handleConnectorsRoute } from "./connectors-route";
 import * as sessionIo from "./session-io";
 import { cliUpdates } from "./cli-updates";
 import { handleCliUpdatesRoute } from "./cli-updates-route";
@@ -209,6 +211,7 @@ const server = Bun.serve({
     if (oauthResponse) return oauthResponse;
 
     if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req);
+    if (path === "/mcp/connectors") return handleConnectorRequest(connectors, req);
 
     if (path === "/mcp") {
       if (!isMcpAuthed(req)) return mcpUnauthorized(auth.ORIGIN);
@@ -282,6 +285,11 @@ const server = Bun.serve({
       controller: cliUpdates,
     });
     if (cliUpdatesResponse) return cliUpdatesResponse;
+
+    const connectorsResponse = await handleConnectorsRoute(req, {
+      cookieName: COOKIE_NAME, checkBrowserSession: auth.checkAuthSession, isAuthenticated: isAuthed, connectors,
+    });
+    if (connectorsResponse) return connectorsResponse;
 
     const githubAuthResponse = await handleGithubAuthRoute(req, {
       cookieName: COOKIE_NAME,
@@ -686,4 +694,5 @@ console.log(`xcloud-sessions listening on http://127.0.0.1:${server.port} (rpID:
 // Live agents survive service restarts; retain their credentials until their launch ends.
 setInterval(() => {
   void communicator.prune().catch(() => console.error("Communicator retention cleanup failed."));
+  void connectors.prune().catch(() => console.error("Connector retention cleanup failed."));
 }, 6 * 60 * 60 * 1000).unref();

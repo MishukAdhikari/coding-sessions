@@ -47,6 +47,16 @@
         ? state("positive", "Connected", `${apps.length} ${apps.length === 1 ? "app has" : "apps have"} authorized access.`)
         : state("neutral", "Not connected", "No apps linked through browser sign-in. Token access is managed below.");
     },
+    connectors: data => {
+      const connectors = array(data.connectors);
+      if (!connectors.length) return state("neutral", "Not set up", "Give agents read-only tools from another service, such as the xcdev lab.");
+      const connected = connectors.filter(c => c.state === "connected").length;
+      const sessions = new Set(connectors.flatMap(c => array(c.launches).filter(l => l.granted).map(l => l.launch_id))).size;
+      const attention = connectors.some(c => ["auth_failed", "forbidden", "unavailable", "needs_credential"].includes(c.state));
+      return state(attention ? "warning" : connected ? "positive" : "neutral",
+        attention ? "Needs attention" : connected ? `${connected} connected` : connectors.every(c => c.state === "disabled") ? "Disabled" : "Not checked",
+        `${sessions} ${sessions === 1 ? "session has" : "sessions have"} access. Read-only.`);
+    },
     cli: data => {
       const tokens = array(data.tokens);
       return tokens.length
@@ -93,7 +103,7 @@
   const endpoints = {
     updates: "/api/cli-updates", history: "/api/sessions", sessions: "/api/sessions",
     agents: "/api/agent-accounts", commands: "/api/commands", projects: "/api/projects",
-    connect: "/api/mcp-connections", cli: "/api/cli-tokens", github: "/api/github-auth/status",
+    connect: "/api/mcp-connections", cli: "/api/cli-tokens", connectors: "/api/connectors", github: "/api/github-auth/status",
     browser: "/api/browser-auth/status", passkey: "/api/passkeys",
   };
   let generation = 0;

@@ -1,5 +1,5 @@
 /* xCloud Sessions — service worker: network-first app shell, offline fallback */
-const CACHE = "xs-v63";
+const CACHE = "xs-v64";
 const ASSETS = [
   "/",
   "/app.css",
@@ -8,6 +8,7 @@ const ASSETS = [
   "/session-search.js",
   "/session-status.js",
   "/connection-status.js",
+  "/connectors.js",
   "/fonts/instrument-sans.ttf",
   "/agent-auth.js",
   "/app.js",
