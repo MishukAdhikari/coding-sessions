@@ -496,6 +496,7 @@
     $("app").inert = true;
     $("scrim").hidden = false;
     openSheetEl.hidden = false;
+    if (id === "sheet-menu") globalThis.connectionStatus?.refresh(api);
     if (back && id === "sheet-agent-auth") agentAuth?.refreshAccounts();
     requestAnimationFrame(() => {
       if (openSheetEl !== sheet) return;

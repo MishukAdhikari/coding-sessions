@@ -307,3 +307,11 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .settings-section .label { font-size: var(--type-menu-label); font-weight: 500; }
 .settings-section h3 { font-size: var(--type-menu-label); }
 .settings-section .ws-row { font-size: var(--type-menu-helper); }
+
+.settings-section .row-btn.connection-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); align-items: start; padding-block: var(--space-3); padding-inline-start: 0; }
+.connection-status { display: inline-flex; align-items: center; gap: var(--space-1); padding-top: 3px; font-size: var(--type-menu-label); font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.connection-status svg { width: 14px; height: 14px; flex: none; }
+.connection-status[data-tone="positive"] { color: var(--status-positive); }
+.connection-status[data-tone="warning"] { color: var(--status-working); }
+.connection-detail { grid-column: 1 / -1; color: var(--text-secondary); font-size: var(--type-menu-label); line-height: 1.5; overflow-wrap: anywhere; }
+.connection-detail:empty { display: none; }
