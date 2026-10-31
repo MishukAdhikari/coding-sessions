@@ -1,6 +1,6 @@
 # Coding Sessions
 
-**v0.1.0 preview (prerelease).** See [validation coverage and remaining checks](deploy/VALIDATION.md). Full systemd lifecycle, provider OAuth, and provider sandbox compatibility are not yet verified across the supported Ubuntu matrix.
+**v0.1.1 preview (prerelease).** See [validation coverage and remaining checks](deploy/VALIDATION.md). Full systemd lifecycle, provider OAuth, and provider sandbox compatibility are not yet verified across the supported Ubuntu matrix.
 
 A self-hosted control panel for Claude Code, Codex, Command Code, and other CLI agents. Start sessions from your phone, reconnect to their terminals, inspect activity, and resume supported conversations. An authenticated MCP endpoint lets compatible clients manage the same sessions.
 
