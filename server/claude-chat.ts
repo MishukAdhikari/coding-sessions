@@ -98,13 +98,24 @@ export function retryFailed(): number {
 
 let loginProc: ReturnType<typeof Bun.spawn> | null = null;
 
+/** End the whole login group: xvfb-run, Xvfb, node and Chromium (killing xvfb-run alone leaves them). */
+function stopLogin() {
+  if (loginProc && loginProc.exitCode === null) {
+    try { process.kill(-loginProc.pid, "SIGTERM"); } catch { loginProc.kill(); }
+  }
+  loginProc = null;
+}
+
+/** Starting again (or "Send a new code") replaces any login still waiting, so the new email's code is the one used. */
 export function startBrowserAuth(): { ok: boolean; error?: string } {
-  if (loginProc && loginProc.exitCode === null) return { ok: true }; // already running
   const email = process.env.CAI_EMAIL?.trim();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Configure CAI_EMAIL before starting browser login." };
+  stopLogin();
   try { unlinkSync(STATUS_FILE); } catch {}
+  try { unlinkSync(CODE_FILE); } catch {}
   rmSync(join(BROWSER_DIR, "profile", "SingletonLock"), { force: true });
-  loginProc = Bun.spawn(["xvfb-run", "-a", "node", join(ROOT, "scripts", "browser-login.cjs")], {
+  // setsid gives the login its own process group, so stopLogin can end all of it.
+  loginProc = Bun.spawn(["setsid", "xvfb-run", "-a", "node", join(ROOT, "scripts", "browser-login.cjs")], {
     stdout: "ignore", stderr: "ignore", env: childEnvironment({ NODE_PATH: NODE_MODULES, CAI_EMAIL: email }),
   });
   return { ok: true };
@@ -126,7 +137,6 @@ export function submitBrowserCode(code: string): { ok: boolean; error?: string }
 }
 
 export function cancelBrowserAuth(): { ok: boolean } {
-  loginProc?.kill();
-  loginProc = null;
+  stopLogin();
   return { ok: true };
 }

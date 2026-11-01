@@ -11,13 +11,32 @@ const path = require("path");
 const DIR = path.join(process.env.HOME, ".config", "claude-browser");
 const STATUS = path.join(DIR, "auth-status.json");
 const CODE_FILE = path.join(DIR, "code.txt");
+const LOG_FILE = path.join(DIR, "login.log");
+const SHOT_FILE = path.join(DIR, "last-failure.png");
 const EMAIL = (process.env.CAI_EMAIL || "").trim();
 
-const setStatus = (state, message = "") =>
+const setStatus = (state, message = "") => {
   fs.writeFileSync(STATUS, JSON.stringify({ state, message, at: Date.now() }), { mode: 0o600 });
+  log(`status ${state}${message ? `: ${message}` : ""}`);
+};
+// Step log for diagnosing failed sign-ins. Never write the code itself here.
+const log = (line) => { try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 }); } catch {} };
+let page = null;
+async function recordFailure(reason) {
+  log(`failure: ${reason}`);
+  if (!page) return;
+  log(`url: ${page.url()}`);
+  const text = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+  log(`page text: ${text.replace(/\s+/g, " ").slice(0, 600)}`);
+  await page.screenshot({ path: SHOT_FILE }).catch(() => {});
+}
+const CODE_INPUT = 'input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="text"]:visible, input:not([type]):visible';
+const REJECTED = /invalid|incorrect|expired|wrong code/i;
 
 (async () => {
   fs.mkdirSync(path.join(DIR, "profile"), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(LOG_FILE, "", { mode: 0o600 });
+  log("login started");
   try { fs.unlinkSync(CODE_FILE); } catch {}
   if (!EMAIL || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(EMAIL)) {
     setStatus("error", "Configure CAI_EMAIL before starting browser login.");
@@ -28,7 +47,7 @@ const setStatus = (state, message = "") =>
     headless: false, viewport: { width: 1280, height: 900 },
     args: ["--disable-blink-features=AutomationControlled"],
   });
-  const page = ctx.pages()[0] || (await ctx.newPage());
+  page = ctx.pages()[0] || (await ctx.newPage());
   await page.goto("https://claude.ai/login", { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForTimeout(6000);
 
@@ -43,7 +62,9 @@ const setStatus = (state, message = "") =>
   await email.fill(EMAIL);
   await page.waitForTimeout(500);
   await page.locator('button:has-text("email"), button[type="submit"]').first().click();
-  await page.waitForTimeout(6000);
+  const codeBox = await page.locator(CODE_INPUT).first().waitFor({ timeout: 30000 }).then(() => true, () => false);
+  log(codeBox ? "code box shown" : "code box not found yet");
+  if (!codeBox) await recordFailure("no code box after sending the email");
   setStatus("code_sent", `Code emailed to ${EMAIL}.`);
 
   let code = null;
@@ -56,17 +77,39 @@ const setStatus = (state, message = "") =>
     await page.waitForTimeout(2000);
   }
   if (!code) { setStatus("error", "Timed out waiting for the code."); await ctx.close(); process.exit(1); }
+  log(`code received (${code.length} characters)`);
 
-  const codeInput = page.locator('input[type="text"], input[inputmode="numeric"], input[autocomplete="one-time-code"]').first();
-  await codeInput.waitFor({ timeout: 15000 });
-  await codeInput.fill(code);
+  // Type it like a person: works for one field and for one-box-per-digit fields that auto-advance.
+  const codeInput = page.locator(CODE_INPUT).first();
+  await codeInput.waitFor({ timeout: 20000 });
+  await codeInput.click();
+  await codeInput.fill("").catch(() => {});
+  await page.keyboard.type(code, { delay: 90 });
   await page.waitForTimeout(800);
   await page.keyboard.press("Enter");
-  await page.waitForTimeout(9000);
-  await page.goto("https://claude.ai/", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
-  await page.waitForTimeout(5000);
-  const ok = !page.url().includes("login");
-  setStatus(ok ? "success" : "error", ok ? "Signed in." : "Code rejected — try again.");
+  await page.waitForTimeout(1500);
+  const verify = page.locator('button:visible:not([disabled])').filter({ hasText: /verify|continue|sign in|log in/i }).first();
+  if (page.url().includes("login") && await verify.count()) { log("clicking verify button"); await verify.click().catch(() => {}); }
+
+  let outcome = "pending";
+  for (let i = 0; i < 40 && outcome === "pending"; i++) {
+    await page.waitForTimeout(1000);
+    if (!page.url().includes("login")) outcome = "success";
+    else if (REJECTED.test(await page.locator("body").innerText({ timeout: 2000 }).catch(() => ""))) outcome = "rejected";
+  }
+  if (outcome === "pending") {
+    await page.goto("https://claude.ai/", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(5000);
+    if (!page.url().includes("login")) outcome = "success";
+  }
+  log(`outcome: ${outcome}`);
+  if (outcome === "success") setStatus("success", "Signed in.");
+  else {
+    await recordFailure(outcome);
+    setStatus("error", outcome === "rejected"
+      ? "claude.ai says the code is invalid or expired — send a new code."
+      : "claude.ai didn't finish signing in — try again (details saved on the server).");
+  }
   await ctx.close();
-  process.exit(ok ? 0 : 1);
-})().catch(async (e) => { setStatus("error", e.message.slice(0, 200)); process.exit(1); });
+  process.exit(outcome === "success" ? 0 : 1);
+})().catch(async (e) => { await recordFailure(e.message); setStatus("error", e.message.slice(0, 200)); process.exit(1); });
