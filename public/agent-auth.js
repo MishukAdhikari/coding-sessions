@@ -505,7 +505,57 @@
 
     function stopBrowserPoll() {
       if (browserPoll) { clearInterval(browserPoll); browserPoll = null; }
+      stopLive();
     }
+
+    /* Live view: claude.ai sometimes asks for a human check (a CAPTCHA) after the code. The
+       server browser's screen is shown here and the person's taps and drags are replayed there. */
+    let liveTimer = null;
+    let liveOn = false;
+    function nextLiveFrame(delay) {
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => {
+        if (!liveOn || $("sheet-browser").hidden) return stopLive();
+        $("browser-live-img").src = `/api/browser-auth/screen?t=${Date.now()}`;
+      }, delay);
+    }
+    function startLive() {
+      if (liveOn) return;
+      liveOn = true;
+      nextLiveFrame(0);
+    }
+    function stopLive() {
+      liveOn = false;
+      clearTimeout(liveTimer);
+      liveTimer = null;
+    }
+    $("browser-live-img").addEventListener("load", () => { if (liveOn) nextLiveFrame(500); });
+    $("browser-live-img").addEventListener("error", () => { if (liveOn) nextLiveFrame(1500); });
+
+    let liveDown = null;
+    const liveFraction = (event) => {
+      const rect = $("browser-live-img").getBoundingClientRect();
+      const clamp = (v) => Math.min(1, Math.max(0, v));
+      return { x: clamp((event.clientX - rect.left) / rect.width), y: clamp((event.clientY - rect.top) / rect.height), rect };
+    };
+    $("browser-live-img").addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      $("browser-live-img").setPointerCapture?.(event.pointerId);
+      liveDown = liveFraction(event);
+    });
+    $("browser-live-img").addEventListener("pointerup", (event) => {
+      if (!liveDown) return;
+      const start = liveDown;
+      liveDown = null;
+      const end = liveFraction(event);
+      const moved = Math.hypot((end.x - start.x) * end.rect.width, (end.y - start.y) * end.rect.height);
+      const input = moved < 8 ? { type: "click", x: start.x, y: start.y }
+        : { type: "drag", x: start.x, y: start.y, x2: end.x, y2: end.y };
+      api("/api/browser-auth/input", { method: "POST", body: JSON.stringify(input) })
+        .then(() => nextLiveFrame(300))
+        .catch((error) => showToast(error.message));
+    });
+    $("browser-live-img").addEventListener("pointercancel", () => { liveDown = null; });
 
     /**
      * One place decides what the sheet offers, so the start button and the code form never
@@ -517,7 +567,9 @@
       const wait = $("browser-wait");
       // After a success the button stays as "Sign in again": the login can expire later, or the
       // account can change, and the sheet must always offer a way back in.
-      start.hidden = step === "starting" || step === "code_sent" || step === "submitting";
+      start.hidden = step === "starting" || step === "code_sent" || step === "submitting" || step === "human_check";
+      $("browser-live").hidden = step !== "human_check";
+      if (step === "human_check") startLive(); else stopLive();
       start.disabled = step === "starting";
       start.textContent = step === "error" ? "Try again — email me a code"
         : step === "success" ? "Sign in again" : "Sign in — email me a code";
@@ -555,6 +607,10 @@
       account.hidden = !status.email;
       account.textContent = status.email ? `Codes are emailed to ${status.email}.` : "";
       if (status.state === "starting") browserStep("starting", "Opening claude.ai…");
+      else if (status.state === "human_check") {
+        submittingCode = false;
+        browserStep("human_check", status.message || "claude.ai wants to check you're human — solve it below.");
+      }
       else if (status.state === "code_sent") {
         // Keep "signing in…" while a submitted code is being checked; polling must not undo it.
         if (!submittingCode) browserStep("code_sent", status.message || "Code emailed — paste it below.");

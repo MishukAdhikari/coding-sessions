@@ -7,7 +7,7 @@ import { childEnvironment } from "./child-env";
  *  - the login flow for the PWA's "claude.ai browser" re-auth sheet.
  */
 import { db } from "./db";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,8 @@ const STATUS_FILE = join(BROWSER_DIR, "auth-status.json");
 const CODE_FILE = join(BROWSER_DIR, "code.txt");
 const LOGIN_PID_FILE = join(BROWSER_DIR, "login.pid");
 const PROFILE_EMAIL_FILE = join(BROWSER_DIR, "profile-email");
+const LIVE_FILE = join(BROWSER_DIR, "live.jpg");
+const INPUT_FILE = join(BROWSER_DIR, "input.jsonl");
 const ROOT = new URL("..", import.meta.url).pathname;
 const NODE_MODULES = join(ROOT, "node_modules");
 
@@ -149,8 +151,7 @@ export async function startBrowserAuth(): Promise<{ ok: boolean; error?: string 
   // Wait out a deletion run: it has the profile open.
   for (let i = 0; i < 240 && processing; i++) await Bun.sleep(500);
   if (processing) return { ok: false, error: "Chat deletion is using the browser — try again in a minute." };
-  try { unlinkSync(STATUS_FILE); } catch {}
-  try { unlinkSync(CODE_FILE); } catch {}
+  for (const file of [STATUS_FILE, CODE_FILE, LIVE_FILE, INPUT_FILE]) rmSync(file, { force: true });
   // A profile signed in to another account would delete (or report "already gone") the wrong chats.
   let profileEmail = "";
   try { profileEmail = readFileSync(PROFILE_EMAIL_FILE, "utf8").trim(); } catch {}
@@ -179,6 +180,30 @@ export function browserAuthStatus(): { running: boolean; state: string; message:
 export function submitBrowserCode(code: string): { ok: boolean; error?: string } {
   if (!/^[\w-]{4,60}$/.test(code)) return { ok: false, error: "That doesn't look like a code." };
   writeFileSync(CODE_FILE, code, { mode: 0o600 });
+  return { ok: true };
+}
+
+/** The running login's live view, while it waits for a human check. */
+export function browserScreen(): Blob | null {
+  return loginRunning() && existsSync(LIVE_FILE) ? Bun.file(LIVE_FILE) : null;
+}
+
+export type BrowserInput =
+  | { type: "click"; x: number; y: number }
+  | { type: "drag"; x: number; y: number; x2: number; y2: number };
+
+const fraction = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+
+/** Queue a tap or drag (fractions of the live image) for the login script to replay. */
+export function sendBrowserInput(body: unknown): { ok: boolean; error?: string } {
+  const ev = (body ?? {}) as Record<string, unknown>;
+  let input: BrowserInput;
+  if (ev.type === "click" && fraction(ev.x) && fraction(ev.y)) input = { type: "click", x: ev.x, y: ev.y };
+  else if (ev.type === "drag" && fraction(ev.x) && fraction(ev.y) && fraction(ev.x2) && fraction(ev.y2))
+    input = { type: "drag", x: ev.x, y: ev.y, x2: ev.x2, y2: ev.y2 };
+  else return { ok: false, error: "Bad input." };
+  if (!loginRunning()) return { ok: false, error: "No sign-in is running." };
+  appendFileSync(INPUT_FILE, JSON.stringify(input) + "\n", { mode: 0o600 });
   return { ok: true };
 }
 

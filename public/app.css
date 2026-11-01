@@ -12,6 +12,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .btn.is-busy:disabled { opacity: .8; cursor: progress; }
 .btn.is-busy::before { content: ""; width: 16px; height: 16px; margin-right: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; vertical-align: -3px; animation: btn-spin .8s linear infinite; }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
+.browser-live img { display: block; width: 100%; min-height: 120px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: #fff; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: crosshair; }
 @media (prefers-reduced-motion: reduce) { .btn.is-busy::before { animation-duration: 2.4s; } }
 a { color: var(--action-primary); text-underline-offset: 3px; }
 :focus-visible { outline: 3px solid var(--action-primary); outline-offset: 3px; }
