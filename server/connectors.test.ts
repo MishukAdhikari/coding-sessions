@@ -500,3 +500,34 @@ test("settings routes require a browser session and never return the credential"
   const bad = await handleConnectorsRoute(new Request(`http://x/api/connectors/${f.id}/tools`, { method: "POST", headers: cookie, body: JSON.stringify({ tools: ["not_offered"] }) }), deps);
   expect(bad!.status).toBe(400);
 });
+
+test("auth mode is explicit; credential, URL and mode changes advance the auth epoch; OAuth without a grant never goes anonymous", async () => {
+  const mock = mockUpstream();
+  const f = fixture(mock);
+  const epoch = (id: string) => (f.database.query("SELECT auth_epoch FROM mcp_connectors WHERE id=?").get(id) as { auth_epoch: number }).auth_epoch;
+  const bearer = await f.connectors.add({ name: "Bearer", url: mock.url, token: CANARY });
+  const open = await f.connectors.add({ name: "Open", url: mock.url });
+  expect(bearer.auth.mode).toBe("bearer");
+  expect(open.auth.mode).toBe("none");
+  const start = epoch(bearer.id);
+  expect(f.connectors.setCredential(bearer.id, null).auth.mode).toBe("none");
+  expect(epoch(bearer.id)).toBe(start + 1);
+  expect(f.connectors.setCredential(bearer.id, CANARY).auth.mode).toBe("bearer");
+  expect(epoch(bearer.id)).toBe(start + 2);
+  await f.connectors.setUrl(bearer.id, mock.url.replace("/mcp", "/mcp2"));
+  expect(epoch(bearer.id)).toBe(start + 3);
+
+  // Switching to OAuth clears any bearer token and, with no grant yet, sends nothing upstream.
+  await f.connectors.setUrl(bearer.id, mock.url);
+  f.connectors.setCredential(bearer.id, CANARY);
+  const oauth = f.connectors.setAuthMode(bearer.id, "oauth");
+  expect(oauth.auth.mode).toBe("oauth");
+  expect(oauth.credential.set).toBe(false);
+  expect(() => f.connectors.setCredential(bearer.id, CANARY)).toThrow(/OAuth/);
+  const before = mock.seen.length;
+  const checked = await f.connectors.check(bearer.id);
+  expect(checked.state).toBe("auth_failed");
+  expect(mock.seen.length).toBe(before);
+  expect(() => f.connectors.setAuthMode(bearer.id, "magic" as never)).toThrow(ConnectorError);
+  expect(f.connectors.setAuthMode(bearer.id, "none").auth.mode).toBe("none");
+});

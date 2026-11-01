@@ -74,7 +74,8 @@ Use [.env.example](.env.example) for non-secret configuration. Keep secrets out 
 | Admin password | Password hash in SQLite; bootstrap file remains sensitive |
 | Custom-command and app-managed Command Code API tokens | AES-256-GCM ciphertext in SQLite when the encryption key is configured |
 | Native provider and GitHub logins | Provider-managed files in the service account's home |
-| Browser session, CLI bearer, OAuth code/access/refresh tokens | Hashes in SQLite |
+| Browser session, CLI bearer, and inbound OAuth code/access/refresh tokens (apps connecting to Coding Sessions) | Hashes in SQLite |
+| External MCP connector credentials (bearer tokens; outbound OAuth access/refresh tokens and client secrets) | AES-256-GCM ciphertext in SQLite; refused without the encryption key |
 
 Legacy instances without an encryption key retain plaintext app-token compatibility. Adding a key encrypts subsequent token writes; it does not automatically rewrite old rows or backups. The application decrypts tokens for provider delivery, so encryption at rest does not hide them from the running account. Details: [secret handling and recovery](docs/security.md).
 

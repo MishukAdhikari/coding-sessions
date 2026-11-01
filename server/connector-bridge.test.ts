@@ -167,3 +167,61 @@ test("managed launches receive a separate connector capability through env only,
   expect(await startCommunicatingSession(options("fails"), runtime(1) as any)).toMatchObject({ ok: false });
   await expect(connectors.identity(seen.CS_CONNECTOR_TOKEN!)).rejects.toThrow();
 });
+
+test("an OAuth token reflected by a tool never reaches the agent through the real bridge, across a refresh", async () => {
+  const issued: string[] = [];
+  let next = 0;
+  const fresh = () => { const token = `oauth_canary_${++next}_${randomBytes(6).toString("hex")}`; issued.push(token); return token; };
+  let refresh = fresh();
+  let access = fresh();
+  const server = Bun.serve({ port: 0, async fetch(req) {
+    const url = new URL(req.url);
+    const body = await req.text();
+    if (url.pathname === "/token") {
+      const form = new URLSearchParams(body);
+      if (form.get("refresh_token") !== refresh) return Response.json({ error: "invalid_grant" }, { status: 400 });
+      access = fresh(); refresh = fresh();
+      return Response.json({ access_token: access, token_type: "Bearer", expires_in: 3600, refresh_token: refresh });
+    }
+    const auth = req.headers.get("authorization") ?? "";
+    if (!auth.startsWith("Bearer oauth_canary_")) return new Response("no", { status: 401 });
+    const msg = JSON.parse(body);
+    if (msg.id === undefined) return new Response(null, { status: 202 });
+    const sent = auth.slice(7);
+    const result = msg.method === "initialize" ? { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: `srv ${sent}` }, instructions: sent }
+      : msg.method === "tools/list" ? { tools: [{ name: "reflect", description: `reflects ${sent}`, inputSchema: { type: "object" } }] }
+      : { content: [{ type: "text", text: `token=${sent}` }], structuredContent: { sent } };
+    return Response.json({ jsonrpc: "2.0", id: msg.id, result });
+  } });
+  cleanup.push(() => server.stop(true));
+  const base = `http://127.0.0.1:${server.port}`;
+  const database = new Database(":memory:"); applyDatabaseSchema(database);
+  const key = randomBytes(32);
+  let clock = Date.now();
+  const connectors = new Connectors({ database, isLive: async () => true, codec: () => createSecretCodec(key), env: { CS_CONNECTOR_ALLOW_LOOPBACK: "1" }, now: () => clock });
+  const { id } = await connectors.add({ name: "Lab", url: `${base}/mcp` });
+  connectors.setAuthMode(id, "oauth");
+  const epoch = (database.query("SELECT auth_epoch FROM mcp_connectors WHERE id=?").get(id) as { auth_epoch: number }).auth_epoch;
+  expect(connectors.oauth.commitGrant({ connectorId: id, epoch, issuer: base, resource: `${base}/mcp`, clientId: "c", registration: "dcr", tokenEndpoint: `${base}/token`,
+    tokenAuthMethod: "none", accessToken: access, refreshToken: refresh, expiresAt: clock + 3600_000, identity: null })).toBe(true);
+  await connectors.check(id);
+  connectors.setTools(id, ["reflect"]);
+  connectors.setDefaultProviders(id, ["claude"]);
+  const launchId = randomUUID();
+  database.query("INSERT INTO launches (screen,name,project_path,created_at,provider,launch_id,phase) VALUES ('cs-r','r','/srv',1,'claude',?,'ready')").run(launchId);
+  const capability = connectors.prepare(launchId)!;
+  const gateway = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: req => handleConnectorRequest(connectors, req) });
+  cleanup.push(() => gateway.stop(true));
+  const b = bridge(`http://127.0.0.1:${gateway.port}/mcp/connectors`, capability);
+  await b.request("initialize", {});
+  const listed = await b.request("tools/list");
+  const first = await b.request("tools/call", { name: "lab__reflect", arguments: {} });
+  clock += 3_590_000; // the next call refreshes first
+  const second = await b.request("tools/call", { name: "lab__reflect", arguments: {} });
+  b.child.stdin.end();
+  await b.child.exited;
+  expect(issued.length).toBe(4);
+  const output = JSON.stringify([listed, first, second, b.rows, connectors.list(), database.query("SELECT catalog, server_info FROM mcp_connectors").all()]);
+  for (const token of issued) expect(output).not.toContain(token);
+  expect(JSON.stringify(second)).toContain("[redacted]");
+});

@@ -216,7 +216,10 @@ export function applyDatabaseSchema(database: Database): void {
       check_detail      TEXT,
       check_at          INTEGER,
       check_ok_at       INTEGER,
-      created_at        INTEGER NOT NULL
+      created_at        INTEGER NOT NULL,
+      auth_mode         TEXT NOT NULL DEFAULT 'none',
+      auth_epoch        INTEGER NOT NULL DEFAULT 0,
+      token_version     INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS connector_capabilities (
@@ -246,6 +249,85 @@ export function applyDatabaseSchema(database: Database): void {
     );
     CREATE INDEX IF NOT EXISTS connector_audit_at_idx ON connector_audit (connector_id, at);
   `);
+
+  // Auth mode is explicit: an existing token means bearer, none means anonymous. auth_epoch
+  // changes with URL, mode, account or disconnect and invalidates everything bound to it;
+  // token_version changes only when an OAuth grant is refreshed. See connector-oauth-store.ts.
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'none'");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN auth_epoch INTEGER NOT NULL DEFAULT 0");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
+  database.exec(`
+    UPDATE mcp_connectors SET auth_mode='bearer' WHERE auth_mode='none' AND credential IS NOT NULL;
+
+    -- Every secret column is sealed with AAD bound to connector, epoch and purpose.
+    CREATE TABLE IF NOT EXISTS connector_oauth_grants (
+      connector_id    TEXT PRIMARY KEY REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+      auth_epoch      INTEGER NOT NULL,
+      token_version   INTEGER NOT NULL,
+      status          TEXT NOT NULL,
+      issuer          TEXT NOT NULL,
+      resource        TEXT NOT NULL,
+      client_id       TEXT NOT NULL,
+      registration    TEXT NOT NULL,
+      -- Frozen from the authorization-server metadata accepted at sign-in; never re-derived later.
+      token_endpoint      TEXT NOT NULL,
+      revocation_endpoint TEXT,
+      token_auth_method   TEXT NOT NULL,
+      client_secret   TEXT,
+      access_token    TEXT,
+      refresh_token   TEXT,
+      expires_at      INTEGER,
+      scope           TEXT,
+      identity        TEXT,
+      connected_since INTEGER NOT NULL,
+      updated_at      INTEGER NOT NULL
+    );
+
+    -- Only a hash of the state is stored; it is single-use and bound to the initiating browser session.
+    CREATE TABLE IF NOT EXISTS connector_oauth_pending (
+      state_hash    TEXT PRIMARY KEY,
+      connector_id  TEXT NOT NULL REFERENCES mcp_connectors(id) ON DELETE CASCADE,
+      auth_epoch    INTEGER NOT NULL,
+      session_hash  TEXT NOT NULL,
+      issuer        TEXT NOT NULL,
+      resource      TEXT NOT NULL,
+      client_id     TEXT NOT NULL,
+      client_secret TEXT,
+      redirect_uri  TEXT NOT NULL,
+      registration        TEXT NOT NULL,
+      token_endpoint      TEXT NOT NULL,
+      revocation_endpoint TEXT,
+      token_auth_method   TEXT NOT NULL,
+      scope               TEXT,
+      verifier      TEXT NOT NULL,
+      nonce         TEXT,
+      created_at    INTEGER NOT NULL,
+      expires_at    INTEGER NOT NULL,
+      consumed_at   INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS connector_oauth_pending_connector_idx ON connector_oauth_pending (connector_id);
+  `);
+  // A client the operator registered with the provider (secret sealed, origin-bound), and
+  // metadata frozen at sign-in that later identity checks need: whether the provider promises an
+  // iss parameter on the callback (RFC 9207), and its JWKS and UserInfo endpoints.
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN oauth_client_id TEXT");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN oauth_client_secret TEXT");
+  // The exact issuer that client belongs to, pinned explicitly or at first sign-in.
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN oauth_client_issuer TEXT");
+  addColumn(database, "ALTER TABLE connector_oauth_pending ADD COLUMN iss_parameter INTEGER NOT NULL DEFAULT 0");
+  // Set while a refresh request may be in flight; found set with no refresh running (a restart
+  // mid-refresh), the grant needs a new sign-in rather than a retry with a possibly rotated token.
+  addColumn(database, "ALTER TABLE connector_oauth_grants ADD COLUMN refresh_pending INTEGER NOT NULL DEFAULT 0");
+  // Verified claims of the original sign-in (subject, audience, nonce, auth_time), never the raw ID token.
+  addColumn(database, "ALTER TABLE connector_oauth_grants ADD COLUMN oidc_context TEXT");
+  // Sign-in attempt generation: each start takes the next number, and only the latest attempt may
+  // create its pending row, complete, or commit. It does not touch the current grant.
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN oauth_attempt INTEGER NOT NULL DEFAULT 0");
+  addColumn(database, "ALTER TABLE connector_oauth_pending ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0");
+  for (const table of ["connector_oauth_pending", "connector_oauth_grants"]) {
+    addColumn(database, `ALTER TABLE ${table} ADD COLUMN jwks_uri TEXT`);
+    addColumn(database, `ALTER TABLE ${table} ADD COLUMN userinfo_endpoint TEXT`);
+  }
 }
 
 /**

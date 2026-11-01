@@ -14,8 +14,31 @@ export interface NetworkPolicy {
 export const networkPolicy = (env: Environment = process.env): NetworkPolicy =>
   ({ allowLoopback: readCsSetting(env, "CS_CONNECTOR_ALLOW_LOOPBACK") === "1" });
 
+/**
+ * A transport failure proven to happen before any request byte was sent: the name did not resolve,
+ * the connection was refused, or TLS verification failed during the handshake. Verified on Bun 1.3.14
+ * (a TLS-failing server saw zero requests). Everything else, e.g. ECONNRESET or a timeout, may have
+ * reached the server and is not one of these.
+ */
+export class PreSendError extends Error {
+  constructor(message: string, readonly code: string) { super(message); this.name = "PreSendError"; }
+}
+// Only codes with evidence that no request byte was sent (connection refused, TLS verification).
+// Unproven ones (e.g. EHOSTUNREACH, ENETUNREACH, EADDRNOTAVAIL) are deliberately absent: uncertain.
+const PRE_SEND_CODES = new Set([
+  "ECONNREFUSED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID", "CERT_REVOKED", "CERT_UNTRUSTED", "CERT_REJECTED",
+  "ERR_TLS_CERT_ALTNAME_INVALID", "HOSTNAME_MISMATCH",
+]);
+export const preSend = (error: unknown): PreSendError | null =>
+  error instanceof PreSendError ? error
+  : error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string" && PRE_SEND_CODES.has((error as NodeJS.ErrnoException).code!)
+    ? new PreSendError("The server could not be reached; nothing was sent.", (error as NodeJS.ErrnoException).code!) : null;
+
 export class DestinationError extends Error {
-  constructor(message: string) { super(message); this.name = "DestinationError"; }
+  /** True when the request had already been sent (the refusal concerns the response). */
+  constructor(message: string, readonly afterSend = false) { super(message); this.name = "DestinationError"; }
 }
 
 /**
@@ -30,8 +53,13 @@ export function addressAllowed(address: string, policy: NetworkPolicy): boolean 
   return range === "unicast" || (policy.allowLoopback && range === "loopback");
 }
 
-/** Syntax and literal-address checks for an operator-entered MCP server URL. */
-export function validateServerUrl(value: unknown, policy: NetworkPolicy): URL {
+/**
+ * Syntax and literal-address checks. "server" is an operator-entered MCP server URL, which may
+ * not carry a query (credentials go in the token field). "oauth" is an authorization-server
+ * endpoint from validated metadata, which legitimately may.
+ */
+export type UrlRole = "server" | "oauth";
+export function validateServerUrl(value: unknown, policy: NetworkPolicy, role: UrlRole = "server"): URL {
   if (typeof value !== "string" || value.length > 2048) throw new DestinationError("Enter the server's URL.");
   let url: URL;
   try { url = new URL(value.trim()); } catch { throw new DestinationError("That is not a valid URL."); }
@@ -41,7 +69,8 @@ export function validateServerUrl(value: unknown, policy: NetworkPolicy): URL {
     throw new DestinationError("Use an https:// URL.");
   }
   if (url.username || url.password) throw new DestinationError("Remove the user name or password from the URL; add a token instead.");
-  if (url.search || url.hash) throw new DestinationError("Remove the query or fragment from the URL; put credentials in the token field.");
+  if (url.hash) throw new DestinationError("Remove the fragment from the URL.");
+  if (url.search && role === "server") throw new DestinationError("Remove the query from the URL; put credentials in the token field.");
   if (isIP(host) && !addressAllowed(host, policy)) throw new DestinationError("That address is private, local or reserved, so it cannot be used.");
   if (loopbackName && !policy.allowLoopback) throw new DestinationError("Local addresses cannot be used.");
   return url;
@@ -69,11 +98,35 @@ function vettedLookup(policy: NetworkPolicy, resolver: Resolver) {
       }
       if (typeof options === "object" && options.all) callback(null, addresses);
       else callback(null, addresses[0]!.address, addresses[0]!.family);
-    }, error => callback(error, "", 0));
+    }, error => {
+      // Name resolution happens before any connection: whatever failed, nothing was sent.
+      const code = typeof (error as NodeJS.ErrnoException)?.code === "string" ? (error as NodeJS.ErrnoException).code! : "ENOTFOUND";
+      callback(new PreSendError("The server's name could not be resolved; nothing was sent.", code) as unknown as NodeJS.ErrnoException, "", 0);
+    });
   };
 }
 
-export interface SafeFetchOptions { policy: NetworkPolicy; resolver?: Resolver; ca?: string | Buffer; env?: Environment }
+export interface SafeFetchOptions { policy: NetworkPolicy; resolver?: Resolver; ca?: string | Buffer; env?: Environment; role?: UrlRole }
+/** Some edge protections challenge generic clients; identify ourselves plainly. */
+export const USER_AGENT = "Coding-Sessions/1.0 (+MCP connector)";
+
+/** Reads a response body as text with a hard byte cap, cancelling the stream past it. */
+export async function readBounded(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > maxBytes) { await reader.cancel().catch(() => {}); throw new DestinationError("The server's response was too large."); }
+      chunks.push(chunk.value);
+    }
+  } finally { try { reader.releaseLock(); } catch {} }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 const PROXY_VARIABLES = ["http_proxy", "https_proxy", "all_proxy"];
 /**
@@ -97,28 +150,31 @@ export function proxyConfigured(env: Environment = process.env): string | null {
 export function safeFetch(options: SafeFetchOptions): typeof fetch {
   const lookup = vettedLookup(options.policy, options.resolver ?? systemResolver);
   return (async (input: URL | string, init: RequestInit = {}) => {
-    const url = validateServerUrl(String(input), options.policy);
+    const url = validateServerUrl(String(input), options.policy, options.role ?? "server");
     const proxy = proxyConfigured(options.env ?? process.env);
     if (proxy) throw new DestinationError(`Connector requests are refused while ${proxy} is set for this service: a proxy would choose the destination itself.`);
     const signal = init.signal ?? undefined;
     const headers = Object.fromEntries(new Headers(init.headers).entries());
-    const body = typeof init.body === "string" ? init.body : "";
-    headers["content-length"] = String(Buffer.byteLength(body));
+    headers["user-agent"] ??= USER_AGENT;
+    const method = (init.method ?? "GET").toUpperCase();
+    // Only string bodies are sent (JSON-RPC, form-encoded); GET and HEAD carry none.
+    const body = method === "GET" || method === "HEAD" ? null : typeof init.body === "string" ? init.body : "";
+    if (body !== null) headers["content-length"] = String(Buffer.byteLength(body));
     const send = url.protocol === "https:" ? httpsRequest : httpRequest;
     return new Promise<Response>((resolve, reject) => {
       if (signal?.aborted) { reject(signal.reason ?? new Error("aborted")); return; }
       let settled = false;
       const fail = (error: unknown) => { if (!settled) { settled = true; reject(error); } req.destroy(); };
       const req = send(url, {
-        method: init.method ?? "GET", headers, lookup: lookup as never, agent: false,
+        method, headers, lookup: lookup as never, agent: false,
         // Explicit: an ambient NODE_TLS_REJECT_UNAUTHORIZED=0 must not disable verification here (verified on Linux).
         ...(url.protocol === "https:" ? { rejectUnauthorized: true, servername: url.hostname.replace(/^\[|\]$/g, ""), ...(options.ca ? { ca: options.ca } : {}) } : {}),
       }, (res: IncomingMessage) => {
         const status = res.statusCode;
         // Anything outside 200–599 cannot become a Response (a 600 would throw); redirects are never followed.
         // Both end the connection rather than draining a body the server controls.
-        if (typeof status !== "number" || !Number.isInteger(status) || status < 200 || status > 599) { res.destroy(); fail(new DestinationError("The server sent an invalid response.")); return; }
-        if (status >= 300 && status < 400) { res.destroy(); fail(new DestinationError("The server tried to redirect; redirects are not followed.")); return; }
+        if (typeof status !== "number" || !Number.isInteger(status) || status < 200 || status > 599) { res.destroy(); fail(new DestinationError("The server sent an invalid response.", true)); return; }
+        if (status >= 300 && status < 400) { res.destroy(); fail(new DestinationError("The server tried to redirect; redirects are not followed.", true)); return; }
         try {
           const responseHeaders = new Headers();
           for (const [name, value] of Object.entries(res.headers)) {
@@ -137,10 +193,10 @@ export function safeFetch(options: SafeFetchOptions): typeof fetch {
       const onAbort = () => fail(signal?.reason ?? new Error("aborted"));
       const cleanup = () => signal?.removeEventListener("abort", onAbort);
       signal?.addEventListener("abort", onAbort, { once: true });
-      req.on("error", error => { cleanup(); fail(error); });
-      req.on("close", () => { if (settled) return; cleanup(); fail(new DestinationError("The connection closed before a response.")); });
+      req.on("error", error => { cleanup(); fail(preSend(error) ?? error); });
+      req.on("close", () => { if (settled) return; cleanup(); fail(new DestinationError("The connection closed before a response.", true)); });
       req.on("response", res => res.on("close", cleanup));
-      req.end(body);
+      req.end(body ?? undefined);
     });
   }) as typeof fetch;
 }

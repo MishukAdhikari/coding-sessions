@@ -240,6 +240,8 @@ export function authorizationServerMetadata(origin: string) {
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [MCP_SCOPE],
+    // Every authorization response (code, denial, non-fatal error) already carries iss (RFC 9207).
+    authorization_response_iss_parameter_supported: true,
   };
 }
 

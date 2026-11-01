@@ -4,8 +4,10 @@ import { isDeepStrictEqual } from "node:util";
 import { createSecretCodec, loadTokenKey, type SecretCodec } from "./secrets";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { addressAllowed, DestinationError, networkPolicy, safeFetch, validateServerUrl, type NetworkPolicy, type Resolver } from "./connector-net";
+import { addressAllowed, DestinationError, networkPolicy, safeFetch, validateServerUrl, type NetworkPolicy, type Resolver, type UrlRole } from "./connector-net";
 import { UpstreamClient, UpstreamError, UpstreamRpcError, type UpstreamTool } from "./connector-upstream";
+import { ConnectorOAuthStore, type OAuthStatus } from "./connector-oauth-store";
+import { requestTokens, revokeTokens, sameAuthentication, scopeWithin, verifyIdToken } from "./connector-oauth-tokens";
 
 type Environment = Record<string, string | undefined>;
 export type Provider = "claude" | "codex" | "command-code";
@@ -16,8 +18,14 @@ export interface LaunchIdentity { launch_id: string; session_id: string; name: s
 export type ConnectorState = "disabled" | "needs_url" | "not_checked" | "connected" | "auth_failed" | "forbidden" | "blocked" | "unavailable";
 /** Upstream annotations, shown to the operator as the server's own claims. Never used to grant or to label tools for agents. */
 export interface ToolHints { readOnly?: boolean; destructive?: boolean; idempotent?: boolean; openWorld?: boolean }
+export type AuthMode = "none" | "bearer" | "oauth";
+const AUTH_MODES: readonly AuthMode[] = ["none", "bearer", "oauth"];
 export interface ConnectorView {
   id: string; name: string; namespace: string; url: string | null; host: string | null;
+  /** How requests authenticate. OAuth status is safe metadata only (no tokens). */
+  auth: { mode: AuthMode; oauth: OAuthStatus | null };
+  /** A client registered with the provider by the operator; the secret is write-only. */
+  oauth_client: { client_id: string; secret_set: boolean; issuer: string | null } | null;
   enabled: boolean; state: ConnectorState;
   credential: { set: boolean; set_at: number | null };
   server: { name: string; version: string | null } | null;
@@ -45,11 +53,26 @@ const CATALOG_TTL_MS = 15 * 60_000;
 const MAX_ARGS_BYTES = 64 * 1024;
 const PER_LAUNCH = 4;
 const PER_CONNECTOR = 8;
+/** Refresh an OAuth access token this long before it expires. */
+const REFRESH_SKEW_MS = 60_000;
+const RECENT_TOKENS = 8;
+/** Waits for a shared promise; only this waiter stops on its own cancellation. */
+function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new ConnectorError("unavailable", "Request cancelled."));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new ConnectorError("unavailable", "Request cancelled."));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
 
 interface Row {
   id: string; name: string; slug: string; url: string; enabled: number; credential: string | null; credential_set_at: number | null;
   granted_tools: string; default_providers: string; catalog: string | null; catalog_at: number | null; catalog_stale: number;
-  server_info: string | null; check_status: string | null; check_detail: string | null; check_at: number | null; check_ok_at: number | null; created_at: number;
+  server_info: string | null; check_status: string | null; check_detail: string | null;
+  auth_mode: AuthMode; auth_epoch: number; token_version: number;
+  oauth_client_id: string | null; oauth_client_secret: string | null; oauth_client_issuer: string | null; check_at: number | null; check_ok_at: number | null; created_at: number;
 }
 /** Exposed names must fit common client limits: letters, digits, _ and -, at most 64 characters. */
 const EXPOSED = /^[A-Za-z0-9_-]{1,64}$/;
@@ -144,10 +167,12 @@ export class Connectors {
   private readonly active = new Set<Active>();
   /** Latest-wins settings checks; replacing, disabling or removing aborts the one running. */
   private readonly checks = new Map<string, AbortController>();
+  readonly oauth: ConnectorOAuthStore;
   constructor(private readonly deps: ConnectorDependencies) {
     this.now = deps.now ?? Date.now;
     this.env = deps.env ?? process.env;
     this.policy = networkPolicy(this.env);
+    this.oauth = new ConnectorOAuthStore({ database: deps.database, codec: () => this.codec(), now: this.now });
   }
   private get db() { return this.deps.database; }
   private codec(): SecretCodec { return (this.deps.codec ?? (() => connectorCodec(this.env)))(); }
@@ -178,11 +203,13 @@ export class Connectors {
       const id = row.id;
       // Bound to the exact URL and token revision this client was made for: if either changes,
       // every later request from it (initialize, notifications, retries) fails before sending.
-      const bound = { url: row.url, credential: row.credential };
+      const bound = { url: row.url, credential: row.credential, epoch: row.auth_epoch };
       client = new UpstreamClient({
         url, now: this.now,
         fetch: this.deps.fetch ?? safeFetch({ policy: this.policy, resolver: this.deps.resolver, env: this.env }),
-        credential: () => this.credential(id, bound),
+        credential: signal => this.credential(id, bound, signal),
+        secrets: () => this.knownSecrets(id),
+        onAuthRejected: token => this.authRejected(id, bound.epoch, token),
         onToolsChanged: () => { this.db.query("UPDATE mcp_connectors SET catalog_stale=1 WHERE id=? AND url=?").run(id, bound.url); },
       });
       this.clients.set(id, client);
@@ -191,12 +218,49 @@ export class Connectors {
   }
   /** The token is bound to the connector and its origin; it is opened only for a request and never returned. */
   private context(id: string, url: string): string { return `mcp-connector:${id}:${new URL(url).origin}`; }
-  private credential(id: string, bound: { url: string; credential: string | null }): string | null {
+  private bound(id: string, bound: { url: string; credential: string | null; epoch: number }): Row {
     const row = this.row(id);
-    if (!row || !row.enabled || row.url !== bound.url || row.credential !== bound.credential) {
+    if (!row || !row.enabled || row.url !== bound.url || row.credential !== bound.credential || row.auth_epoch !== bound.epoch) {
       throw new ConnectorError("unavailable", "This connector changed; the request was not sent.");
     }
-    if (!row.credential) return null;
+    return row;
+  }
+
+  /**
+   * The credential for one request. An OAuth access token close to expiry is refreshed first
+   * (one shared refresh per grant version); after any await the binding is checked again, so a
+   * disconnect, URL or account change in between sends nothing.
+   */
+  private async credential(id: string, bound: { url: string; credential: string | null; epoch: number }, signal?: AbortSignal): Promise<string | null> {
+    let row = this.bound(id, bound);
+    // A connector that needs credentials never falls back to sending none.
+    if (row.auth_mode === "oauth") {
+      let grant = this.readUsableGrant(id, bound.epoch);
+      if (grant.refreshPending && !this.grantRefreshes.has(`${id}:${bound.epoch}:${grant.version}`)) {
+        // A refresh was claimed but no refresh is running: this process restarted mid-refresh. The
+        // server may already have rotated the refresh token, so retrying it is unsafe.
+        this.oauth.markReconnect(id, bound.epoch, grant.version);
+        throw new ConnectorError("unavailable", "This connector's sign-in was interrupted while refreshing. Sign in again in Settings.");
+      }
+      // Refresh early only when there is a refresh token; otherwise the access token is used until it
+      // actually expires (or the resource rejects it), then a new sign-in is needed.
+      const due = grant.refreshToken ? this.dueForRefresh(grant) : grant.expiresAt !== null && grant.expiresAt <= this.now();
+      if (grant.refreshPending || due) {
+        let failure: unknown = null;
+        try { await waitFor(this.refreshGrant(id, bound.epoch, grant.version), signal); } catch (error) { failure = error; }
+        row = this.bound(id, bound);
+        grant = this.readUsableGrant(id, bound.epoch);
+        // Accept any token still valid: short-lived tokens are legitimate, and a refresh that provably
+        // could not be sent leaves the current token usable until it expires.
+        if (grant.refreshPending || (grant.expiresAt !== null && grant.expiresAt <= this.now())) {
+          throw failure instanceof ConnectorError ? failure : new ConnectorError("unavailable", "This connector's sign-in could not be refreshed.");
+        }
+      }
+      this.remember(id, grant.accessToken, grant.version);
+      return grant.accessToken;
+    }
+    if (row.auth_mode === "bearer" && !row.credential) throw new ConnectorError("unavailable", "This connector needs its token.");
+    if (row.auth_mode === "none" || !row.credential) return null;
     if (!row.credential.startsWith(SEALED) || !row.url) throw new ConnectorError("unavailable", "This connector's token cannot be used.");
     try { return this.codec().openSecret(row.credential, this.context(id, row.url)); }
     catch (error) { throw error instanceof ConnectorError ? error : new ConnectorError("storage", "The connector token cannot be opened with this server's key."); }
@@ -207,6 +271,127 @@ export class Connectors {
     if (!sealed.startsWith(SEALED)) throw new ConnectorError("storage", "Connector tokens must be encrypted. Nothing was saved.");
     return sealed;
   }
+  /** Vetted transport for one URL role, sharing this registry's network policy. */
+  transport(role: UrlRole): typeof fetch {
+    return this.deps.fetch ?? safeFetch({ policy: this.policy, resolver: this.deps.resolver, env: this.env, role });
+  }
+  get networkPolicy(): NetworkPolicy { return this.policy; }
+
+  /** What the OAuth flow needs to start: the resource URL, the epoch and any preregistered client. */
+  oauthTarget(id: string): { url: URL; epoch: number; client: { id: string; secret: string | null; issuer: string | null } | null } {
+    const row = this.must(id);
+    if (row.auth_mode !== "oauth") return invalid("Switch this connector to OAuth sign-in first.");
+    const url = this.endpoint(row);
+    if (!url) return invalid("Set the server URL first.");
+    const client = row.oauth_client_id ? {
+      id: row.oauth_client_id,
+      secret: row.oauth_client_secret ? this.openClientSecret(id, url, row.oauth_client_secret) : null,
+      issuer: row.oauth_client_issuer,
+    } : null;
+    return { url, epoch: row.auth_epoch, client };
+  }
+
+  /**
+   * Starts a sign-in attempt: the current epoch and a new attempt number. Starting changes nothing
+   * else: the current grant, tool approvals and clients stay in use until a replacement is verified
+   * and committed (replaceOAuthGrant); a failed, cancelled, abandoned or superseded attempt leaves
+   * them as they were.
+   */
+  beginOAuthAttempt(id: string): { epoch: number; attempt: number } {
+    const row = this.must(id);
+    if (row.auth_mode !== "oauth") return invalid("Switch this connector to OAuth sign-in first.");
+    return { epoch: row.auth_epoch, attempt: this.oauth.beginAttempt(id, row.auth_epoch) };
+  }
+
+  /**
+   * Commits a verified sign-in for the epoch it started from, replacing any current grant. In one
+   * transaction: the new grant on a new epoch, tool approvals and discovery cleared (the account may
+   * differ). Then clients and calls of the old grant are cancelled. The old grant is not revoked at
+   * the provider: it may share a token or grant family with the new one (RFC 7009), so revoking it
+   * could revoke the new sign-in. Returns the view, or null when the connector changed or a newer
+   * sign-in was started meanwhile.
+   */
+  replaceOAuthGrant(input: Parameters<ConnectorOAuthStore["replaceGrant"]>[0]): ConnectorView | null {
+    const replaced = this.db.transaction(() => {
+      const next = this.oauth.replaceGrant(input);
+      if (next === null) return false;
+      this.db.query(`UPDATE mcp_connectors SET catalog=NULL,catalog_at=NULL,catalog_stale=0,server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,
+        granted_tools='[]' WHERE id=?`).run(input.connectorId);
+      return true;
+    })();
+    if (!replaced) return null;
+    this.invalidate(input.connectorId);
+    return this.view(input.connectorId);
+  }
+
+  private openClientSecret(id: string, url: URL, sealed: string): string {
+    if (!sealed.startsWith(SEALED)) throw new ConnectorError("storage", "The stored client secret is not encrypted and was not used.");
+    try { return this.codec().openSecret(sealed, `mcp-connector-oauth-client:${id}:${url.origin}`); }
+    catch (error) { throw error instanceof ConnectorError ? error : new ConnectorError("storage", "The client secret cannot be opened with this server's key."); }
+  }
+
+
+  /**
+   * Sets or clears a client the operator registered with the provider. Explicit actions only:
+   * - client_id: a string sets it; null clears the whole client; it must be present.
+   * - client_secret: a string sets it; null or "" clears it; omitted keeps the current secret
+   *   only when the client ID is unchanged.
+   * - issuer: a URL pins the client to that exact issuer; null leaves it to be pinned at the first
+   *   sign-in; omitted keeps the current pin only when the client ID is unchanged.
+   * The client is never used with another issuer. Any change starts a new epoch.
+   */
+  setOAuthClient(id: string, input: Record<string, unknown>): ConnectorView {
+    const row = this.must(id);
+    if (!Object.hasOwn(input, "client_id") || (input.client_id !== null && typeof input.client_id !== "string")) return invalid("Send client_id (a string, or null to remove the client).");
+    for (const key of ["client_secret", "issuer"]) {
+      if (Object.hasOwn(input, key) && input[key] !== null && typeof input[key] !== "string") return invalid(`${key} must be a string or null.`);
+    }
+    const clientId = typeof input.client_id === "string" ? input.client_id.trim() : "";
+    if (input.client_id !== null && !/^[\x21-\x7e]{1,512}$/.test(clientId)) return invalid("Enter the client ID as a single line without spaces.");
+    if (clientId && !row.url) return invalid("Set the server URL first.");
+    const same = !!clientId && clientId === row.oauth_client_id;
+    let secret: string | null = null;
+    if (clientId) {
+      if (typeof input.client_secret === "string" && input.client_secret.trim()) {
+        const value = input.client_secret.trim();
+        if (!/^[\x21-\x7e]{1,4096}$/.test(value)) return invalid("Enter the client secret as a single line without spaces.");
+        secret = this.codec().sealSecret(value, `mcp-connector-oauth-client:${id}:${new URL(row.url).origin}`);
+        if (!secret.startsWith(SEALED)) throw new ConnectorError("storage", "Connector secrets must be encrypted. Nothing was saved.");
+      } else if (!Object.hasOwn(input, "client_secret") && same) secret = row.oauth_client_secret;
+    }
+    let issuer: string | null = null;
+    if (clientId) {
+      if (typeof input.issuer === "string" && input.issuer.trim()) {
+        let pinned: URL;
+        try { pinned = validateServerUrl(input.issuer.trim(), this.policy, "oauth"); } catch (error) { return invalid(error instanceof DestinationError ? error.message : "Enter the issuer as an https:// URL."); }
+        if (pinned.search) return invalid("The issuer cannot contain a query.");
+        issuer = input.issuer.trim();
+      } else if (!Object.hasOwn(input, "issuer") && same) issuer = row.oauth_client_issuer;
+    }
+    this.db.transaction(() => {
+      this.db.query("UPDATE mcp_connectors SET oauth_client_id=?, oauth_client_secret=?, oauth_client_issuer=? WHERE id=?").run(clientId || null, secret, issuer, id);
+      this.oauth.advanceEpoch(id);
+    })();
+    this.invalidate(id);
+    return this.view(id);
+  }
+
+  /**
+   * Binds the preregistered client to the issuer chosen for this sign-in, before anything is sent
+   * with it. Refuses a different issuer than the pinned one, and a client changed meanwhile.
+   */
+  pinOAuthClientIssuer(id: string, epoch: number, clientId: string, issuer: string): void {
+    const row = this.must(id);
+    if (row.auth_epoch !== epoch || row.oauth_client_id !== clientId) return invalid("This connector changed; start the sign-in again.");
+    if (row.oauth_client_issuer && row.oauth_client_issuer !== issuer) {
+      return invalid(`The server now names a different authorization server (${issuer}) than the one this client is registered with. Replace the client details to continue.`);
+    }
+    if (!row.oauth_client_issuer) {
+      const pinned = this.db.query("UPDATE mcp_connectors SET oauth_client_issuer=? WHERE id=? AND auth_epoch=? AND oauth_client_id=? AND oauth_client_issuer IS NULL").run(issuer, id, epoch, clientId);
+      if (pinned.changes !== 1) return invalid("This connector changed; start the sign-in again.");
+    }
+  }
+
   private invalidate(id: string): void {
     this.checks.get(id)?.abort(); this.checks.delete(id);
     this.clients.get(id)?.close(); this.clients.delete(id);
@@ -256,8 +441,8 @@ export class Connectors {
     const id = randomUUID();
     const hasToken = typeof input.token === "string" && input.token.trim() !== "";
     const sealed = hasToken ? this.seal(id, url.href, input.token) : null;
-    this.db.query(`INSERT INTO mcp_connectors (id,name,slug,url,enabled,credential,credential_set_at,created_at) VALUES (?,?,?,?,1,?,?,?)`)
-      .run(id, name, this.slug(name), url.href, sealed, sealed ? this.now() : null, this.now());
+    this.db.query(`INSERT INTO mcp_connectors (id,name,slug,url,enabled,credential,credential_set_at,created_at,auth_mode) VALUES (?,?,?,?,1,?,?,?,?)`)
+      .run(id, name, this.slug(name), url.href, sealed, sealed ? this.now() : null, this.now(), sealed ? "bearer" : "none");
     return this.view(id);
   }
 
@@ -278,10 +463,14 @@ export class Connectors {
     if (before.url === url.href) return this.view(id);
     await this.vetDestination(url);
     // The row may have changed while DNS was resolving; apply only to the state that was checked.
-    const changed = this.db.query(`UPDATE mcp_connectors SET url=?,credential=NULL,credential_set_at=NULL,catalog=NULL,catalog_at=NULL,catalog_stale=0,
-      server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,granted_tools='[]' WHERE id=? AND url=? AND credential IS ?`)
-      .run(url.href, id, before.url, before.credential);
-    if (!changed.changes) throw new ConnectorError("invalid_request", "This connector changed while the URL was being checked. Review it and try again.");
+    const changed = this.db.transaction(() => {
+      const result = this.db.query(`UPDATE mcp_connectors SET url=?,credential=NULL,credential_set_at=NULL,oauth_client_id=NULL,oauth_client_secret=NULL,oauth_client_issuer=NULL,catalog=NULL,catalog_at=NULL,catalog_stale=0,
+        server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,granted_tools='[]' WHERE id=? AND url=? AND auth_epoch=?`)
+        .run(url.href, id, before.url, before.auth_epoch);
+      if (result.changes) this.oauth.advanceEpoch(id);
+      return result.changes;
+    })();
+    if (!changed) throw new ConnectorError("invalid_request", "This connector changed while the URL was being checked. Review it and try again.");
     this.invalidate(id);
     return this.view(id);
   }
@@ -289,11 +478,33 @@ export class Connectors {
   /** Set, replace (value) or remove (null/empty) the bearer token. */
   setCredential(id: string, value: unknown): ConnectorView {
     const row = this.must(id);
+    if (row.auth_mode === "oauth") return invalid("This connector signs in with OAuth. Switch it to a bearer token first.");
     const clear = value === null || (typeof value === "string" && value.trim() === "");
     if (!clear && !row.url) return invalid("Set the server URL before adding a token.");
     const sealed = clear ? null : this.seal(id, row.url, value);
-    this.db.query(`UPDATE mcp_connectors SET credential=?,credential_set_at=?,server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,catalog_stale=1 WHERE id=?`)
-      .run(sealed, sealed ? this.now() : null, id);
+    this.db.transaction(() => {
+      this.db.query(`UPDATE mcp_connectors SET credential=?,credential_set_at=?,auth_mode=?,server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,catalog_stale=1 WHERE id=?`)
+        .run(sealed, sealed ? this.now() : null, sealed ? "bearer" : "none", id);
+      this.oauth.advanceEpoch(id);
+    })();
+    this.invalidate(id);
+    return this.view(id);
+  }
+
+  /**
+   * Switches how the connector authenticates. A new mode may mean a different account, so the
+   * bearer token, discovery and tool grants are cleared, and the epoch advances (ending any
+   * OAuth grant or pending sign-in). Agent and session grants stay; they grant nothing alone.
+   */
+  setAuthMode(id: string, value: unknown): ConnectorView {
+    const row = this.must(id);
+    if (typeof value !== "string" || !AUTH_MODES.includes(value as AuthMode)) return invalid("Choose none, bearer or oauth.");
+    if (row.auth_mode === value) return this.view(id);
+    this.db.transaction(() => {
+      this.db.query(`UPDATE mcp_connectors SET auth_mode=?,credential=NULL,credential_set_at=NULL,catalog=NULL,catalog_at=NULL,catalog_stale=0,
+        server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,granted_tools='[]' WHERE id=?`).run(value, id);
+      this.oauth.advanceEpoch(id);
+    })();
     this.invalidate(id);
     return this.view(id);
   }
@@ -352,6 +563,13 @@ export class Connectors {
   async check(id: string): Promise<ConnectorView> {
     const row = this.must(id);
     if (!row.enabled || !this.endpoint(row)) return this.view(id);
+    // Credentials are required but absent: report it without contacting the server anonymously.
+    const missing = row.auth_mode === "oauth" ? (this.oauth.status(id).state === "connected" ? null : "Sign in to connect this server.")
+      : row.auth_mode === "bearer" && !row.credential ? "Add the bearer token." : null;
+    if (missing) {
+      this.db.query("UPDATE mcp_connectors SET check_status='auth_failed',check_detail=?,check_at=? WHERE id=? AND auth_epoch=?").run(missing, this.now(), id, row.auth_epoch);
+      return this.view(id);
+    }
     this.checks.get(id)?.abort();
     const abort = new AbortController();
     this.checks.set(id, abort);
@@ -359,21 +577,21 @@ export class Connectors {
     client.reset("settings");
     // Writes apply only if this is still the latest check for the same URL, token and state.
     const current = () => this.checks.get(id) === abort && !abort.signal.aborted;
-    const guard = "WHERE id=? AND url=? AND credential IS ? AND enabled=1";
+    const guard = "WHERE id=? AND url=? AND auth_epoch=? AND enabled=1";
     let status = "ok";
     let blocked: string | null = null;
     try {
       const session = await client.session("settings", { timeoutMs: 20_000, signal: abort.signal });
       const tools = await client.listTools("settings", { timeoutMs: 20_000, signal: abort.signal });
       if (current()) this.db.query(`UPDATE mcp_connectors SET catalog=?,catalog_at=?,catalog_stale=0,server_info=?,check_ok_at=? ${guard}`)
-        .run(JSON.stringify(tools), this.now(), session.serverInfo ? JSON.stringify(session.serverInfo) : null, this.now(), id, row.url, row.credential);
+        .run(JSON.stringify(tools), this.now(), session.serverInfo ? JSON.stringify(session.serverInfo) : null, this.now(), id, row.url, row.auth_epoch);
     } catch (error) {
       status = error instanceof DestinationError ? "blocked"
         : error instanceof UpstreamError ? ({ auth: "auth_failed", forbidden: "forbidden" } as Record<string, string>)[error.kind] ?? "unavailable" : "unavailable";
       blocked = error instanceof DestinationError ? error.message : null;
     }
     if (current()) {
-      this.db.query(`UPDATE mcp_connectors SET check_status=?,check_detail=?,check_at=? ${guard}`).run(status, blocked, this.now(), id, row.url, row.credential);
+      this.db.query(`UPDATE mcp_connectors SET check_status=?,check_detail=?,check_at=? ${guard}`).run(status, blocked, this.now(), id, row.url, row.auth_epoch);
       this.checks.delete(id);
     }
     return this.view(id);
@@ -406,6 +624,8 @@ export class Connectors {
       .map(entry => ({ ...entry, granted: !!this.db.query("SELECT 1 FROM connector_launch_grants WHERE connector_id=? AND launch_id=?").get(id, entry.launch_id) }));
     return {
       id, name: row.name, namespace: row.slug, url: url?.href ?? (row.url || null), host: url?.host ?? null,
+      auth: { mode: row.auth_mode, oauth: row.auth_mode === "oauth" ? this.oauth.status(id) : null },
+      oauth_client: row.oauth_client_id ? { client_id: row.oauth_client_id, secret_set: !!row.oauth_client_secret, issuer: row.oauth_client_issuer } : null,
       enabled: !!row.enabled, state, credential: { set: !!row.credential, set_at: row.credential_set_at },
       server: json<{ name: string; version: string | null } | null>(row.server_info, null),
       checked_at: row.check_at, last_ok_at: row.check_ok_at, check_detail: row.check_detail,
@@ -501,7 +721,7 @@ export class Connectors {
     const task = (async () => {
       try {
         const tools = await this.client(row).listTools("settings", { timeoutMs: 15_000 });
-        this.db.query("UPDATE mcp_connectors SET catalog=?,catalog_at=?,catalog_stale=0 WHERE id=? AND url=? AND credential IS ? AND enabled=1").run(JSON.stringify(tools), this.now(), row.id, row.url, row.credential);
+        this.db.query("UPDATE mcp_connectors SET catalog=?,catalog_at=?,catalog_stale=0 WHERE id=? AND url=? AND auth_epoch=? AND enabled=1").run(JSON.stringify(tools), this.now(), row.id, row.url, row.auth_epoch);
       } catch { /* keep the previous catalog */ }
     })().finally(() => this.refreshing.delete(row.id));
     this.refreshing.set(row.id, task);
@@ -589,7 +809,7 @@ export class Connectors {
     if (signal?.aborted) entry.abort.abort();
     this.active.add(entry);
     try {
-      const result = this.scrub(row.id, await this.client(row).callTool(identity.launch_id, tool.name, args as Record<string, unknown> ?? {}, { signal: entry.abort.signal }));
+      const result = await this.client(row).callTool(identity.launch_id, tool.name, args as Record<string, unknown> ?? {}, { signal: entry.abort.signal });
       // Access may have been revoked while the upstream worked: re-check before delivering.
       // Any revoke, disable or credential change in between aborts this entry, even if access was restored since.
       try {
@@ -617,15 +837,138 @@ export class Connectors {
     }
   }
 
-  /** Defense in depth: an upstream that reflects its own bearer must not hand it to an agent. */
-  private scrub(id: string, result: Record<string, unknown>): Record<string, unknown> {
-    const row = this.row(id);
-    const secret = row ? this.credential(id, { url: row.url, credential: row.credential }) : null;
-    if (!secret) return result;
-    const text = JSON.stringify(result);
-    if (!text.includes(secret) && !text.includes(JSON.stringify(secret).slice(1, -1))) return result;
-    return JSON.parse(text.split(JSON.stringify(secret).slice(1, -1)).join("[redacted]"));
+  private dueForRefresh(grant: { expiresAt: number | null; issuedAt: number }): boolean {
+    if (grant.expiresAt === null) return false;
+    const window = Math.min(REFRESH_SKEW_MS, Math.max(0, grant.expiresAt - grant.issuedAt) / 2);
+    return grant.expiresAt - this.now() <= window;
   }
+
+  private readUsableGrant(id: string, epoch: number) {
+    const grant = this.oauth.readGrant(id, epoch);
+    if (!grant) {
+      throw new ConnectorError("unavailable", this.oauth.status(id).state === "reconnect_required"
+        ? "This connector's sign-in expired or was revoked. Sign in again in Settings." : "This connector is not signed in.");
+    }
+    return grant;
+  }
+
+  /** Tokens recently handed to requests, so responses can be scrubbed of any of them (see redact). */
+  private readonly recent = new Map<string, Array<{ token: string; version: number }>>();
+  private remember(id: string, token: string, version: number): void {
+    const list = (this.recent.get(id) ?? []).filter(entry => entry.token !== token);
+    list.push({ token, version });
+    this.recent.set(id, list.slice(-RECENT_TOKENS));
+  }
+  private knownSecrets(id: string): string[] {
+    const secrets = (this.recent.get(id) ?? []).map(entry => entry.token);
+    const row = this.row(id);
+    try {
+      if (row?.auth_mode === "oauth") {
+        const grant = this.oauth.readGrant(id, row.auth_epoch);
+        if (grant) secrets.push(grant.accessToken, ...(grant.refreshToken ? [grant.refreshToken] : []));
+      } else if (row?.auth_mode === "bearer" && row.credential?.startsWith(SEALED)) {
+        secrets.push(this.codec().openSecret(row.credential, this.context(id, row.url)));
+      }
+    } catch { /* a secret that cannot be opened cannot be reflected either */ }
+    return secrets;
+  }
+
+  /** A 401 for exactly this token: refresh before the next request. The rejected request is not replayed. */
+  private authRejected(id: string, epoch: number, token: string): void {
+    const entry = (this.recent.get(id) ?? []).find(item => item.token === token);
+    if (entry) this.oauth.expireAccess(id, epoch, entry.version);
+  }
+
+  /**
+   * One refresh per (connector, epoch, version), shared by every caller and independent of any
+   * one caller's cancellation. Rotation is stored by version CAS. A rejected grant, or any
+   * outcome where the server may have acted without us knowing the result, requires a new
+   * sign-in rather than a blind retry. Tokens issued after a disconnect are revoked, not stored.
+   */
+  private readonly grantRefreshes = new Map<string, Promise<void>>();
+  private refreshGrant(id: string, epoch: number, version: number): Promise<void> {
+    const key = `${id}:${epoch}:${version}`;
+    const running = this.grantRefreshes.get(key);
+    if (running) return running;
+    const task = (async () => {
+      const grant = this.oauth.readGrant(id, epoch);
+      if (!grant || grant.version !== version) return; // someone else already moved it on
+      const client = { clientId: grant.clientId, clientSecret: grant.clientSecret, tokenAuthMethod: grant.tokenAuthMethod };
+      const fetcher = this.transport("oauth");
+      if (!grant.refreshToken) { this.oauth.markReconnect(id, epoch, version); return; }
+      if (!this.oauth.beginRefresh(id, epoch, version)) return;
+      const outcome = await requestTokens(fetcher, grant.tokenEndpoint, client, { grant_type: "refresh_token", refresh_token: grant.refreshToken, resource: grant.resource });
+      if (outcome.kind === "not_sent") {
+        // Certainly not sent: release the claim; the grant is unchanged.
+        this.db.query("UPDATE connector_oauth_grants SET refresh_pending=0 WHERE connector_id=? AND auth_epoch=? AND token_version=?").run(id, epoch, version);
+        throw new ConnectorError("unavailable", outcome.message);
+      }
+      if (outcome.kind !== "ok" || !scopeWithin(outcome.tokens.scope, grant.scope)) {
+        this.oauth.markReconnect(id, epoch, version);
+        // The old refresh token may still be live if the server acted; issued tokens beyond the grant's scope are not kept.
+        void revokeTokens(fetcher, grant.revocationEndpoint, client, [
+          { token: outcome.kind === "ok" ? outcome.tokens.refreshToken : null, hint: "refresh_token" },
+          { token: outcome.kind === "ok" ? outcome.tokens.accessToken : null, hint: "access_token" },
+          { token: outcome.kind === "uncertain" ? grant.refreshToken : null, hint: "refresh_token" },
+        ]);
+        return;
+      }
+      const tokens = outcome.tokens;
+      // OIDC Core §12.2: a returned ID token must verify and describe the same authentication as the
+      // original sign-in. Without a verified original there is nothing safe to compare against.
+      if (tokens.idToken) {
+        let same = false;
+        if (grant.oidcContext && grant.jwksUri) {
+          try {
+            const { context } = await verifyIdToken(fetcher, { idToken: tokens.idToken, jwksUri: grant.jwksUri, issuer: grant.issuer, clientId: grant.clientId,
+              nonce: grant.oidcContext.nonce, nonceRequired: false });
+            same = sameAuthentication(grant.oidcContext, context);
+          } catch { same = false; }
+        }
+        if (!same) {
+          this.oauth.markReconnect(id, epoch, version);
+          await revokeTokens(fetcher, grant.revocationEndpoint, client, [{ token: tokens.refreshToken, hint: "refresh_token" }, { token: tokens.accessToken, hint: "access_token" }]);
+          return;
+        }
+      }
+      const rotated = this.oauth.rotate({ connectorId: id, epoch, version, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken,
+        expiresAt: tokens.expiresIn ? this.now() + tokens.expiresIn * 1000 : null, scope: tokens.scope });
+      if (!rotated) {
+        // Disconnected or changed while refreshing: these tokens must not outlive that decision.
+        await revokeTokens(fetcher, grant.revocationEndpoint, client, [{ token: tokens.refreshToken, hint: "refresh_token" }, { token: tokens.accessToken, hint: "access_token" }]);
+        return;
+      }
+      this.remember(id, tokens.accessToken, version + 1);
+    })().finally(() => this.grantRefreshes.delete(key));
+    this.grantRefreshes.set(key, task);
+    return task;
+  }
+
+  /**
+   * Disconnects an OAuth account. Local access ends first (new epoch, grant and pending sign-ins
+   * gone, tool approval withdrawn, clients and calls cancelled); then the old tokens are revoked
+   * at the frozen revocation endpoint, best effort. A failed remote revocation does not undo the
+   * local disconnect; it is reported.
+   */
+  async disconnectOAuth(id: string): Promise<{ connector: ConnectorView; revocation: "revoked" | "unsupported" | "failed" | "none" }> {
+    const row = this.must(id);
+    if (row.auth_mode !== "oauth") return invalid("This connector does not use OAuth sign-in.");
+    let grant: ReturnType<ConnectorOAuthStore["readGrant"]> = null;
+    try { grant = this.oauth.readGrant(id, row.auth_epoch); } catch { grant = null; }
+    this.db.transaction(() => {
+      this.db.query(`UPDATE mcp_connectors SET catalog=NULL,catalog_at=NULL,catalog_stale=0,server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,
+        granted_tools='[]' WHERE id=?`).run(id);
+      this.oauth.advanceEpoch(id);
+    })();
+    this.invalidate(id);
+    const revocation = grant ? await revokeTokens(this.transport("oauth"), grant.revocationEndpoint,
+      { clientId: grant.clientId, clientSecret: grant.clientSecret, tokenAuthMethod: grant.tokenAuthMethod },
+      [{ token: grant.refreshToken, hint: "refresh_token" }, { token: grant.accessToken, hint: "access_token" }]) : "none";
+    return { connector: this.view(id), revocation };
+  }
+
+  /** The registry's clock, shared with the OAuth flow so expiry uses one time source. */
+  clock(): number { return this.now(); }
 
   /** Audit retention and capabilities of launches that are gone. */
   async prune(): Promise<void> {

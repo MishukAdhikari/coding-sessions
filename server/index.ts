@@ -29,6 +29,8 @@ import { handleCommunicatorRequest } from "./communicator-mcp";
 import { communicator, connectors } from "./communicator-runtime";
 import { handleConnectorRequest } from "./connector-mcp";
 import { handleConnectorsRoute } from "./connectors-route";
+import { ConnectorOAuth } from "./connector-oauth";
+import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
 import { cliUpdates } from "./cli-updates";
 import { handleCliUpdatesRoute } from "./cli-updates-route";
@@ -42,6 +44,8 @@ const COOKIE_NAME = "xs_auth";
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 
 loadTokenKey(); // Reject a missing/malformed configured encryption key before serving requests.
+// The redirect URI and client metadata derive from the configured ORIGIN, never a request's Host.
+const connectorOAuth = new ConnectorOAuth({ connectors, origin: auth.ORIGIN });
 const bootstrapPath = await auth.ensureAdminPassword();
 if (bootstrapPath) console.log(`Initial admin credential is in the protected file: ${bootstrapPath}`);
 
@@ -220,6 +224,12 @@ const server = Bun.serve({
       return handleMcpPost(mcpDeps, req);
     }
 
+    // Outbound connector OAuth: the public client-metadata document and the inert callback
+    // landing (no app cookie arrives on the provider's cross-site redirect; completion is a
+    // same-origin POST under /api/connectors that requires the cookie and Origin).
+    const connectorOAuthResponse = handleConnectorOAuthPublic(req, { oauth: connectorOAuth });
+    if (connectorOAuthResponse) return connectorOAuthResponse;
+
     if (!path.startsWith("/api/")) {
       const res = serveStatic(path, req);
       return res ?? new Response("Not found", { status: 404 });
@@ -288,6 +298,7 @@ const server = Bun.serve({
 
     const connectorsResponse = await handleConnectorsRoute(req, {
       cookieName: COOKIE_NAME, checkBrowserSession: auth.checkAuthSession, isAuthenticated: isAuthed, connectors,
+      oauth: connectorOAuth, origin: auth.ORIGIN,
     });
     if (connectorsResponse) return connectorsResponse;
 

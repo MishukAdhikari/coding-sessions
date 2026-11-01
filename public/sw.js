@@ -1,5 +1,5 @@
 /* xCloud Sessions — service worker: network-first app shell, offline fallback */
-const CACHE = "xs-v65";
+const CACHE = "xs-v68";
 const ASSETS = [
   "/",
   "/app.css",
@@ -51,6 +51,8 @@ self.addEventListener("fetch", (e) => {
   // Live ttyd bridges are per-terminal and short-lived — caching one would
   // resurrect a dead terminal's UI offline, with nothing behind it.
   if (url.pathname.startsWith("/term/")) return;
+  // OAuth callbacks carry a one-time code and state in the URL: never cache or replay them.
+  if (url.pathname.startsWith("/oauth/") || url.pathname.startsWith("/.well-known/")) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {
