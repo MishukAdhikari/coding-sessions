@@ -12,7 +12,7 @@
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=43">
+<link rel="stylesheet" href="/app.css?v=44">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -433,7 +433,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <form id="form-browser-code" hidden>
     <input id="input-browser-code" class="field" type="text" placeholder="Paste the emailed code"
            autocomplete="one-time-code" autocapitalize="off" spellcheck="false" required>
-    <button class="btn btn-primary btn-big" type="submit">Submit code</button>
+    <button id="btn-browser-code-submit" class="btn btn-primary btn-big" type="submit">Submit code</button>
   </form>
   <button id="btn-browser-resend" class="btn-link" type="button" hidden>Send a new code</button>
   <button id="btn-browser-cancel" class="btn btn-ghost btn-big" data-close>Close</button>
@@ -664,7 +664,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-<script src="/agent-auth.js?v=8"></script>
+<script src="/agent-auth.js?v=9"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=2"></script>
 <script src="/connection-status.js?v=4"></script>

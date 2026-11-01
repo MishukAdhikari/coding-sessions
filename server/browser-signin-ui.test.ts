@@ -6,7 +6,7 @@ interface FakeElement {
   hidden: boolean; disabled: boolean; value: string; textContent: string;
   handlers: Record<string, (event?: unknown) => unknown>;
   addEventListener(event: string, fn: (event?: unknown) => unknown): void;
-  querySelectorAll(): never[]; focus(): void; classList: { toggle(): void };
+  querySelectorAll(): never[]; focus(): void; classes: Set<string>; classList: { toggle(name: string, on?: boolean): void };
 }
 
 function load(status: { state: string; message?: string }) {
@@ -14,7 +14,8 @@ function load(status: { state: string; message?: string }) {
   const $ = (id: string) => {
     if (!elements.has(id)) elements.set(id, { hidden: false, disabled: false, value: "", textContent: "", handlers: {},
       addEventListener(event, fn) { this.handlers[event] = fn; },
-      querySelectorAll: () => [], focus() {}, classList: { toggle() {} } });
+      querySelectorAll: () => [], focus() {}, classes: new Set<string>(),
+      classList: { toggle(name: string, on?: boolean) { const c = elements.get(id)!.classes; (on ?? !c.has(name)) ? c.add(name) : c.delete(name); } } });
     return elements.get(id)!;
   };
   $("sheet-browser").hidden = false;
@@ -63,11 +64,18 @@ test("once a code is emailed, Submit code is the only primary action", async () 
   await t.settle();
   expect(t.posts).toContain("/api/browser-auth/code");
   expect(t.$("btn-browser-resend").hidden).toBe(true);
-  await t.poll(); // still code_sent while the server checks it
-  expect(t.$("browser-wait").textContent).toBe("Code sent — signing in…");
+  await t.poll(); // still code_sent while the server checks it: the form must stay busy
+  const submit = t.$("btn-browser-code-submit");
+  expect(submit.disabled).toBe(true);
+  expect(submit.classes.has("is-busy")).toBe(true);
+  expect(submit.textContent).toBe("Signing in…");
+  expect(t.$("input-browser-code").disabled).toBe(true);
+  expect(t.$("input-browser-code").value).toBe("297744");
 
   t.status.state = "success";
   await t.poll();
+  expect(submit.disabled).toBe(false);
+  expect(submit.classes.has("is-busy")).toBe(false);
   expect(t.$("btn-browser-start").hidden).toBe(true);
   expect(t.$("form-browser-code").hidden).toBe(true);
   expect(t.$("btn-browser-resend").hidden).toBe(true);

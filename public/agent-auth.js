@@ -519,6 +519,13 @@
       start.textContent = step === "error" ? "Try again — email me a code" : "Sign in — email me a code";
       $("form-browser-code").hidden = !(step === "code_sent" || step === "submitting");
       $("btn-browser-resend").hidden = step !== "code_sent";
+      // While the server types the code into claude.ai and waits (~20s), show it is working.
+      const busy = step === "submitting";
+      const submit = $("btn-browser-code-submit");
+      submit.disabled = busy;
+      submit.classList.toggle("is-busy", busy);
+      submit.textContent = busy ? "Signing in…" : "Submit code";
+      $("input-browser-code").disabled = busy;
       wait.hidden = step === "idle";
       if (message !== undefined) wait.textContent = message;
     }
@@ -581,13 +588,12 @@
       event.preventDefault();
       if (submittingCode) return;
       submittingCode = true;
-      browserStep("submitting", "Code sent — signing in…");
+      browserStep("submitting", "Checking the code with claude.ai — this takes about 20 seconds…");
       try {
         await api("/api/browser-auth/code", {
           method: "POST",
           body: JSON.stringify({ code: $("input-browser-code").value.trim() }),
         });
-        $("input-browser-code").value = "";
       } catch (error) {
         submittingCode = false;
         showToast(error.message);
