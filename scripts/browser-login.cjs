@@ -22,19 +22,21 @@ const setStatus = (state, message = "") => {
 // Step log for diagnosing failed sign-ins. Never write the code itself here.
 const log = (line) => { try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 }); } catch {} };
 let page = null;
-async function recordFailure(reason) {
+async function recordFailure(reason, shot = SHOT_FILE) {
   log(`failure: ${reason}`);
   if (!page) return;
   log(`url: ${page.url()}`);
   const text = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
   log(`page text: ${text.replace(/\s+/g, " ").slice(0, 600)}`);
-  await page.screenshot({ path: SHOT_FILE }).catch(() => {});
+  await page.screenshot({ path: shot }).catch(() => {});
 }
 const CODE_INPUT = 'input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="text"]:visible, input:not([type]):visible';
 const REJECTED = /invalid|incorrect|expired|wrong code/i;
 
 (async () => {
   fs.mkdirSync(path.join(DIR, "profile"), { recursive: true, mode: 0o700 });
+  // Keep the previous run's log beside this one.
+  try { fs.renameSync(LOG_FILE, `${LOG_FILE}.prev`); } catch {}
   fs.writeFileSync(LOG_FILE, "", { mode: 0o600 });
   log("login started");
   try { fs.unlinkSync(CODE_FILE); } catch {}
@@ -98,6 +100,8 @@ const REJECTED = /invalid|incorrect|expired|wrong code/i;
     else if (REJECTED.test(await page.locator("body").innerText({ timeout: 2000 }).catch(() => ""))) outcome = "rejected";
   }
   if (outcome === "pending") {
+    // What claude.ai shows after the code, before reloading replaces it.
+    await recordFailure("no redirect after the code", path.join(DIR, "after-code.png"));
     await page.goto("https://claude.ai/", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
     await page.waitForTimeout(5000);
     if (!page.url().includes("login")) outcome = "success";
