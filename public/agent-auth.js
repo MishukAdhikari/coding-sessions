@@ -501,6 +501,7 @@
 
     let browserPoll = null;
     let submittingCode = false;
+    let signInStarted = false; // a sign-in began during this visit to the sheet
 
     function stopBrowserPoll() {
       if (browserPoll) { clearInterval(browserPoll); browserPoll = null; }
@@ -514,9 +515,14 @@
     function browserStep(step, message) {
       const start = $("btn-browser-start");
       const wait = $("browser-wait");
-      start.hidden = step === "starting" || step === "code_sent" || step === "submitting" || step === "success";
+      // After a success the button stays as "Sign in again": the login can expire later, or the
+      // account can change, and the sheet must always offer a way back in.
+      start.hidden = step === "starting" || step === "code_sent" || step === "submitting";
       start.disabled = step === "starting";
-      start.textContent = step === "error" ? "Try again — email me a code" : "Sign in — email me a code";
+      start.textContent = step === "error" ? "Try again — email me a code"
+        : step === "success" ? "Sign in again" : "Sign in — email me a code";
+      start.classList.toggle("btn-primary", step !== "success");
+      start.classList.toggle("btn-ghost", step === "success");
       $("form-browser-code").hidden = !(step === "code_sent" || step === "submitting");
       $("btn-browser-resend").hidden = step !== "code_sent";
       // While the server types the code into claude.ai and waits (~20s), show it is working.
@@ -545,10 +551,16 @@
       } else {
         queueEl.hidden = true;
       }
+      const account = $("browser-account");
+      account.hidden = !status.email;
+      account.textContent = status.email ? `Codes are emailed to ${status.email}.` : "";
       if (status.state === "starting") browserStep("starting", "Opening claude.ai…");
       else if (status.state === "code_sent") {
         // Keep "signing in…" while a submitted code is being checked; polling must not undo it.
         if (!submittingCode) browserStep("code_sent", status.message || "Code emailed — paste it below.");
+      } else if (status.state === "success" && queue.authExpired && !signInStarted) {
+        // An old success on disk; deletions have since found the login expired.
+        browserStep("idle");
       } else if (status.state === "success") {
         submittingCode = false;
         browserStep("success", "✓ Signed in. Chat deletions will work.");
@@ -562,6 +574,7 @@
 
     $("btn-browser-auth").addEventListener("click", () => {
       submittingCode = false;
+      signInStarted = false;
       browserStep("idle");
       $("input-browser-code").value = "";
       openSheet("sheet-browser");
@@ -576,6 +589,7 @@
       // Disabled at once: a second click would start another sign-in and void the first code.
       start.disabled = true;
       submittingCode = false;
+      signInStarted = true;
       $("input-browser-code").value = "";
       browserStep("starting", "Opening claude.ai…");
       try { await api("/api/browser-auth/start", { method: "POST" }); }

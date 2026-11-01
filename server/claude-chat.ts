@@ -14,14 +14,45 @@ import { join } from "node:path";
 const BROWSER_DIR = join(homedir(), ".config", "claude-browser");
 const STATUS_FILE = join(BROWSER_DIR, "auth-status.json");
 const CODE_FILE = join(BROWSER_DIR, "code.txt");
+const LOGIN_PID_FILE = join(BROWSER_DIR, "login.pid");
+const PROFILE_EMAIL_FILE = join(BROWSER_DIR, "profile-email");
 const ROOT = new URL("..", import.meta.url).pathname;
 const NODE_MODULES = join(ROOT, "node_modules");
 
 const SID_RE = /session_[A-Za-z0-9]+/;
 
+/* ---------- browser process groups ----------
+ * Each browser run starts under setsid, so its process group holds xvfb-run, Xvfb, node and
+ * Chromium. Killing only xvfb-run (Bun's child) leaves Chromium holding the profile. */
+
+function groupAlive(pgid: number): boolean {
+  try { process.kill(-pgid, 0); return true; } catch { return false; }
+}
+
+async function killGroup(pgid: number): Promise<void> {
+  try { process.kill(-pgid, "SIGTERM"); } catch { return; }
+  for (let i = 0; i < 20 && groupAlive(pgid); i++) await Bun.sleep(250);
+  try { process.kill(-pgid, "SIGKILL"); } catch {}
+}
+
+/** The login group recorded on disk, so one that outlived a server restart is still found. */
+function recordedLogin(): number | null {
+  try {
+    const pgid = Number(readFileSync(LOGIN_PID_FILE, "utf8"));
+    if (!Number.isInteger(pgid) || pgid <= 1 || !groupAlive(pgid)) return null;
+    if (existsSync("/proc") && !readFileSync(`/proc/${pgid}/cmdline`, "utf8").includes("browser-login.cjs")) return null;
+    return pgid;
+  } catch { return null; }
+}
+
+/** True while a sign-in owns the browser profile; the deletion queue waits for it. */
+export function loginRunning(): boolean {
+  return recordedLogin() !== null;
+}
+
 async function run(cmd: string[], timeoutMs = 120_000): Promise<{ code: number; out: string }> {
-  const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", env: childEnvironment({ NODE_PATH: NODE_MODULES }) });
-  const timer = setTimeout(() => p.kill(), timeoutMs);
+  const p = Bun.spawn(["setsid", ...cmd], { stdout: "pipe", stderr: "pipe", env: childEnvironment({ NODE_PATH: NODE_MODULES }) });
+  const timer = setTimeout(() => { killGroup(p.pid).catch(() => {}); }, timeoutMs);
   const out = await new Response(p.stdout).text();
   const code = await p.exited;
   clearTimeout(timer);
@@ -44,7 +75,8 @@ export function queueChatDeletion(claudeUrl: string | null): boolean {
 let processing = false;
 
 export async function processQueue(): Promise<void> {
-  if (processing) return;
+  // Two Chromiums on one profile corrupt it; the 5-minute sweep picks the queue up after sign-in.
+  if (processing || loginRunning()) return;
   const rows = db.query(
     "SELECT sid FROM chat_deletions WHERE status = 'pending' AND attempts < 3 LIMIT 20",
   ).all() as { sid: string }[];
@@ -98,36 +130,50 @@ export function retryFailed(): number {
 
 let loginProc: ReturnType<typeof Bun.spawn> | null = null;
 
-/** End the whole login group: xvfb-run, Xvfb, node and Chromium (killing xvfb-run alone leaves them). */
-function stopLogin() {
-  if (loginProc && loginProc.exitCode === null) {
-    try { process.kill(-loginProc.pid, "SIGTERM"); } catch { loginProc.kill(); }
-  }
+/** End the whole login group, including one started before the server last restarted. */
+async function stopLogin(): Promise<void> {
+  const groups = new Set<number>();
+  if (loginProc && loginProc.exitCode === null) groups.add(loginProc.pid);
+  const recorded = recordedLogin();
+  if (recorded) groups.add(recorded);
+  await Promise.all([...groups].map(killGroup));
   loginProc = null;
+  try { unlinkSync(LOGIN_PID_FILE); } catch {}
 }
 
 /** Starting again (or "Send a new code") replaces any login still waiting, so the new email's code is the one used. */
-export function startBrowserAuth(): { ok: boolean; error?: string } {
+export async function startBrowserAuth(): Promise<{ ok: boolean; error?: string }> {
   const email = process.env.CAI_EMAIL?.trim();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Configure CAI_EMAIL before starting browser login." };
-  stopLogin();
+  await stopLogin();
+  // Wait out a deletion run: it has the profile open.
+  for (let i = 0; i < 240 && processing; i++) await Bun.sleep(500);
+  if (processing) return { ok: false, error: "Chat deletion is using the browser — try again in a minute." };
   try { unlinkSync(STATUS_FILE); } catch {}
   try { unlinkSync(CODE_FILE); } catch {}
+  // A profile signed in to another account would delete (or report "already gone") the wrong chats.
+  let profileEmail = "";
+  try { profileEmail = readFileSync(PROFILE_EMAIL_FILE, "utf8").trim(); } catch {}
+  if (profileEmail !== email) {
+    rmSync(join(BROWSER_DIR, "profile"), { recursive: true, force: true });
+    writeFileSync(PROFILE_EMAIL_FILE, email, { mode: 0o600 });
+  }
   rmSync(join(BROWSER_DIR, "profile", "SingletonLock"), { force: true });
   // setsid gives the login its own process group, so stopLogin can end all of it.
   loginProc = Bun.spawn(["setsid", "xvfb-run", "-a", "node", join(ROOT, "scripts", "browser-login.cjs")], {
     stdout: "ignore", stderr: "ignore", env: childEnvironment({ NODE_PATH: NODE_MODULES, CAI_EMAIL: email }),
   });
+  writeFileSync(LOGIN_PID_FILE, String(loginProc.pid), { mode: 0o600 });
   return { ok: true };
 }
 
-export function browserAuthStatus(): { running: boolean; state: string; message: string } {
+export function browserAuthStatus(): { running: boolean; state: string; message: string; email: string } {
   let state = "idle", message = "";
   try {
     const s = JSON.parse(readFileSync(STATUS_FILE, "utf8"));
     state = s.state; message = s.message ?? "";
   } catch {}
-  return { running: !!loginProc && loginProc.exitCode === null, state, message };
+  return { running: loginRunning(), state, message, email: process.env.CAI_EMAIL?.trim() ?? "" };
 }
 
 export function submitBrowserCode(code: string): { ok: boolean; error?: string } {
@@ -136,7 +182,7 @@ export function submitBrowserCode(code: string): { ok: boolean; error?: string }
   return { ok: true };
 }
 
-export function cancelBrowserAuth(): { ok: boolean } {
-  stopLogin();
+export async function cancelBrowserAuth(): Promise<{ ok: boolean }> {
+  await stopLogin();
   return { ok: true };
 }

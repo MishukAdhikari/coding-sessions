@@ -496,7 +496,8 @@ const server = Bun.serve({
     }
 
     if (path === "/api/browser-auth/start" && method === "POST") {
-      return json(claudeChat.startBrowserAuth());
+      const started = await claudeChat.startBrowserAuth();
+      return started.ok ? json(started) : json({ error: started.error }, 422);
     }
 
     if (path === "/api/browser-auth/status" && method === "GET") {
@@ -510,7 +511,7 @@ const server = Bun.serve({
     }
 
     if (path === "/api/browser-auth/cancel" && method === "POST") {
-      return json(claudeChat.cancelBrowserAuth());
+      return json(await claudeChat.cancelBrowserAuth());
     }
 
     if (path === "/api/chat-queue/retry" && method === "POST") {
