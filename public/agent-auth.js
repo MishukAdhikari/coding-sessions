@@ -500,9 +500,27 @@
     /* ---------- claude.ai browser (chat deletion) ---------- */
 
     let browserPoll = null;
+    let submittingCode = false;
 
     function stopBrowserPoll() {
       if (browserPoll) { clearInterval(browserPoll); browserPoll = null; }
+    }
+
+    /**
+     * One place decides what the sheet offers, so the start button and the code form never
+     * compete: while a code is expected, "Submit code" is the only primary action, and asking
+     * for another code is a deliberate secondary link (it starts over and voids the last code).
+     */
+    function browserStep(step, message) {
+      const start = $("btn-browser-start");
+      const wait = $("browser-wait");
+      start.hidden = step === "starting" || step === "code_sent" || step === "submitting" || step === "success";
+      start.disabled = step === "starting";
+      start.textContent = step === "error" ? "Try again — email me a code" : "Sign in — email me a code";
+      $("form-browser-code").hidden = !(step === "code_sent" || step === "submitting");
+      $("btn-browser-resend").hidden = step !== "code_sent";
+      wait.hidden = step === "idle";
+      if (message !== undefined) wait.textContent = message;
     }
 
     async function pollBrowser() {
@@ -520,27 +538,24 @@
       } else {
         queueEl.hidden = true;
       }
-      const wait = $("browser-wait");
-      if (status.state === "starting") { wait.hidden = false; wait.textContent = "Opening claude.ai…"; }
+      if (status.state === "starting") browserStep("starting", "Opening claude.ai…");
       else if (status.state === "code_sent") {
-        wait.hidden = false;
-        wait.textContent = status.message || "Code emailed — paste it below.";
-        $("form-browser-code").hidden = false;
+        // Keep "signing in…" while a submitted code is being checked; polling must not undo it.
+        if (!submittingCode) browserStep("code_sent", status.message || "Code emailed — paste it below.");
       } else if (status.state === "success") {
-        wait.hidden = false;
-        wait.textContent = "✓ Signed in. Chat deletions will work.";
-        $("form-browser-code").hidden = true;
+        submittingCode = false;
+        browserStep("success", "✓ Signed in. Chat deletions will work.");
         if (queue.failed) api("/api/chat-queue/retry", { method: "POST" }).catch(() => {});
         stopBrowserPoll();
       } else if (status.state === "error") {
-        wait.hidden = false;
-        wait.textContent = `Failed: ${status.message || "unknown error"}`;
+        submittingCode = false;
+        browserStep("error", `Failed: ${status.message || "unknown error"}`);
       }
     }
 
     $("btn-browser-auth").addEventListener("click", () => {
-      $("browser-wait").hidden = true;
-      $("form-browser-code").hidden = true;
+      submittingCode = false;
+      browserStep("idle");
       $("input-browser-code").value = "";
       openSheet("sheet-browser");
       stopBrowserPoll();
@@ -548,24 +563,36 @@
       pollBrowser();
     });
 
-    $("btn-browser-start").addEventListener("click", async () => {
-      try {
-        await api("/api/browser-auth/start", { method: "POST" });
-        $("browser-wait").hidden = false;
-        $("browser-wait").textContent = "Opening claude.ai…";
-      } catch (error) { showToast(error.message); }
-    });
+    async function startBrowserSignIn() {
+      const start = $("btn-browser-start");
+      if (start.disabled) return;
+      // Disabled at once: a second click would start another sign-in and void the first code.
+      start.disabled = true;
+      submittingCode = false;
+      $("input-browser-code").value = "";
+      browserStep("starting", "Opening claude.ai…");
+      try { await api("/api/browser-auth/start", { method: "POST" }); }
+      catch (error) { showToast(error.message); browserStep("error", `Failed: ${error.message}`); }
+    }
+    $("btn-browser-start").addEventListener("click", startBrowserSignIn);
+    $("btn-browser-resend").addEventListener("click", startBrowserSignIn);
 
     $("form-browser-code").addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (submittingCode) return;
+      submittingCode = true;
+      browserStep("submitting", "Code sent — signing in…");
       try {
         await api("/api/browser-auth/code", {
           method: "POST",
           body: JSON.stringify({ code: $("input-browser-code").value.trim() }),
         });
-        $("browser-wait").textContent = "Code sent — signing in…";
         $("input-browser-code").value = "";
-      } catch (error) { showToast(error.message); }
+      } catch (error) {
+        submittingCode = false;
+        showToast(error.message);
+        browserStep("code_sent", "Code emailed — paste it below.");
+      }
     });
 
     $("btn-browser-cancel").addEventListener("click", () => {
