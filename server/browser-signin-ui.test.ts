@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
 interface FakeElement {
-  hidden: boolean; disabled: boolean; value: string; textContent: string;
+  hidden: boolean; disabled: boolean; value: string; textContent: string; src: string;
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number };
   handlers: Record<string, (event?: unknown) => unknown>;
   addEventListener(event: string, fn: (event?: unknown) => unknown): void;
   querySelectorAll(): never[]; focus(): void; classes: Set<string>; classList: { toggle(name: string, on?: boolean): void };
@@ -14,12 +15,14 @@ function load(status: { state: string; message?: string; email?: string; queue?:
   const $ = (id: string) => {
     if (!elements.has(id)) elements.set(id, { hidden: false, disabled: false, value: "", textContent: "", handlers: {},
       addEventListener(event, fn) { this.handlers[event] = fn; },
-      querySelectorAll: () => [], focus() {}, classes: new Set<string>(),
+      querySelectorAll: () => [], focus() {}, classes: new Set<string>(), src: "",
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 300 }),
       classList: { toggle(name: string, on?: boolean) { const c = elements.get(id)!.classes; (on ?? !c.has(name)) ? c.add(name) : c.delete(name); } } });
     return elements.get(id)!;
   };
   $("sheet-browser").hidden = false;
   const posts: string[] = [];
+  const bodies: Record<string, unknown>[] = [];
   const window: { createAgentAuth?: (dependencies: unknown) => unknown } = {};
   const timers: Array<() => unknown> = [];
   runInNewContext(readFileSync(new URL("../public/agent-auth.js", import.meta.url), "utf8"), {
@@ -29,7 +32,11 @@ function load(status: { state: string; message?: string; email?: string; queue?:
   });
   window.createAgentAuth!({ $,
     api: async (path: string, options?: { method: string }) => {
-      if (options?.method === "POST") { posts.push(path); return { ok: true }; }
+      if (options?.method === "POST") {
+        posts.push(path);
+        if (path === "/api/browser-auth/input") bodies.push(JSON.parse(String((options as { body?: string }).body)));
+        return { ok: true };
+      }
       return path === "/api/browser-auth/status" ? { queue: {}, ...status } : { accounts: [] };
     },
     openSheet() {}, closeSheet() {}, copyText() {}, showToast() {}, codexAuthSupported: () => true,
@@ -37,7 +44,7 @@ function load(status: { state: string; message?: string; email?: string; queue?:
   });
   const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
   const poll = async () => { await timers.at(-1)!(); await settle(); };
-  return { $, posts, status, settle, poll };
+  return { $, posts, bodies, status, settle, poll };
 }
 
 test("once a code is emailed, Submit code is the only primary action", async () => {
@@ -103,4 +110,30 @@ test("an old success never hides sign-in once the login has expired", async () =
   expect(t.$("btn-browser-start").textContent).toBe("Sign in — email me a code");
   expect(t.$("browser-wait").hidden).toBe(true);
   expect(t.posts).not.toContain("/api/chat-queue/retry");
+});
+
+test("a human check shows the live view and replays taps and drags", async () => {
+  const t = load({ state: "human_check", message: "Solve it below." });
+  t.$("btn-browser-auth").handlers.click!();
+  await t.settle();
+  expect(t.$("browser-live").hidden).toBe(false);
+  expect(t.$("btn-browser-start").hidden).toBe(true);
+  expect(t.$("form-browser-code").hidden).toBe(true);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(t.$("browser-live-img").src).toStartWith("/api/browser-auth/screen?t=");
+
+  const img = t.$("browser-live-img");
+  img.handlers.pointerdown!({ clientX: 100, clientY: 150, pointerId: 1, preventDefault() {} });
+  img.handlers.pointerup!({ clientX: 102, clientY: 151, pointerId: 1 });
+  img.handlers.pointerdown!({ clientX: 40, clientY: 30, pointerId: 1, preventDefault() {} });
+  img.handlers.pointerup!({ clientX: 360, clientY: 270, pointerId: 1 });
+  await t.settle();
+  expect(t.bodies).toEqual([
+    { type: "click", x: 0.25, y: 0.5 },
+    { type: "drag", x: 0.1, y: 0.1, x2: 0.9, y2: 0.9 },
+  ]);
+
+  t.status.state = "success";
+  await t.poll();
+  expect(t.$("browser-live").hidden).toBe(true);
 });

@@ -510,6 +510,17 @@ const server = Bun.serve({
       return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
     }
 
+    if (path === "/api/browser-auth/screen" && method === "GET") {
+      const screen = claudeChat.browserScreen();
+      if (!screen) return json({ error: "No live view." }, 404);
+      return new Response(screen, { headers: { "content-type": "image/jpeg", "cache-control": "no-store" } });
+    }
+
+    if (path === "/api/browser-auth/input" && method === "POST") {
+      const r = claudeChat.sendBrowserInput(await req.json().catch(() => null));
+      return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
+    }
+
     if (path === "/api/browser-auth/cancel" && method === "POST") {
       return json(await claudeChat.cancelBrowserAuth());
     }
