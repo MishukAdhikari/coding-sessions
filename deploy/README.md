@@ -26,7 +26,7 @@ Optional flags:
 - `--install-nginx`: install a new per-instance HTTP proxy site. Existing site files are refused rather than overwritten. Complete TLS with `sudo certbot --nginx -d sessions.example.com` before browser use. Use an existing HTTPS proxy instead when preferred.
 - `--source /path/to/checkout`: use a different reviewed source checkout.
 
-The app binds loopback. A proxy must forward WebSocket Upgrade/Connection headers, preserve Host, and set X-Real-IP from the actual connection, not a caller-provided forwarding header. TLS, a matching origin and RP_ID are required for remote passkeys and secure cookies. The nginx template does not change unrelated sites or a global nginx configuration.
+The app binds loopback. A proxy must forward WebSocket Upgrade/Connection headers, preserve Host, and set X-Real-IP from the actual connection, not a caller-provided forwarding header. TLS, a matching origin and RP_ID are required for remote passkeys and secure cookies. The nginx template does not change unrelated sites or a global nginx configuration. It turns off access and error logging for exactly `/oauth/connectors/callback`, whose query string carries one-time OAuth codes (the trade-off: proxy errors for that one path are not logged); do the same for access, error and trace logs in any other proxy or log pipeline. External MCP sign-in derives its redirect URI from `ORIGIN`, so `ORIGIN` must be the public HTTPS address providers redirect to.
 
 ## Files and credentials
 

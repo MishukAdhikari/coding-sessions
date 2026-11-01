@@ -347,3 +347,7 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .connector-outcome[data-outcome="ok"] { color: var(--status-positive); }
 .connector-outcome:is([data-outcome="denied"], [data-outcome="revoked"], [data-outcome="auth"], [data-outcome="forbidden"]) { color: var(--status-working); }
 #connector-tools code, .connector-audit-row code { font-size: 13px; }
+.connector-advanced { margin-top: 16px; }
+.connector-advanced summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; font-size: 14px; }
+.connector-advanced code, .connector-notice { overflow-wrap: anywhere; }
+.connector-notice { color: var(--status-working); }

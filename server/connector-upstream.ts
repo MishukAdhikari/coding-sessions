@@ -31,15 +31,45 @@ export interface UpstreamTool {
 export interface UpstreamSession { protocolVersion: string; sessionId: string | null; instructions: string; serverInfo: { name: string; version: string | null } | null; expiresAt: number }
 export interface UpstreamOptions {
   url: URL;
-  /** null sends no Authorization header (a server that needs none). */
-  credential: () => string | null;
+  /**
+   * The credential for one request, resolved just before it is sent (it may refresh first).
+   * null sends no Authorization header (a server that needs none).
+   */
+  credential: (signal: AbortSignal) => string | null | Promise<string | null>;
+  /** Other secrets to scrub from responses besides the one actually sent (recent tokens). */
+  secrets?: () => string[];
+  /** The resource rejected exactly this credential (HTTP 401). */
+  onAuthRejected?: (credential: string) => void;
   fetch?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
   onToolsChanged?: () => void;
 }
 interface Call { signal?: AbortSignal; timeoutMs?: number }
-interface Posted { response: Response; signal: AbortSignal; release: () => void }
+interface Posted { response: Response; signal: AbortSignal; release: () => void; credential: string | null }
+
+/** Every credential this app accepts is at least this long, so every one is covered by redact. */
+export const MIN_SECRET_LENGTH = 8;
+/**
+ * Replaces every occurrence of each secret in every string value and object key of a parsed
+ * upstream message, so a server that reflects a token in serverInfo, tool lists or results never
+ * hands it on. Works on parsed values, so tokens containing quotes or backslashes are matched
+ * exactly. This guards against raw reflection, not against a server deliberately encoding what
+ * it received.
+ */
+export function redact<T>(value: T, secrets: Array<string | null | undefined>): T {
+  const list = [...new Set(secrets.filter((s): s is string => typeof s === "string" && s.length >= MIN_SECRET_LENGTH))]
+    .sort((a, b) => b.length - a.length);
+  if (!list.length) return value;
+  const clean = (text: string) => list.reduce((out, secret) => out.includes(secret) ? out.split(secret).join("[redacted]") : out, text);
+  const walk = (node: unknown): unknown => {
+    if (typeof node === "string") return clean(node);
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === "object") return Object.fromEntries(Object.entries(node).map(([key, child]) => [clean(key), walk(child)]));
+    return node;
+  };
+  return walk(value) as T;
+}
 const SESSION_EXPIRED = "session-expired";
 /** Wait for a shared promise, abandoning only this waiter on its own cancellation. */
 function waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -161,7 +191,9 @@ export class UpstreamClient {
     const release = () => { clearTimeout(timeout); call.signal?.removeEventListener("abort", onAbort); this.lifetime.signal.removeEventListener("abort", onAbort); };
     try {
       if (abort.signal.aborted) throw abort.signal.reason;
-      const credential = this.options.credential();
+      const credential = await this.options.credential(abort.signal);
+      // Cancelled or closed while the credential was being prepared: send nothing.
+      if (abort.signal.aborted) throw abort.signal.reason;
       const headers: Record<string, string> = {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
@@ -170,7 +202,7 @@ export class UpstreamClient {
       if (session) headers["mcp-protocol-version"] = session.protocolVersion;
       if (session?.sessionId) headers["mcp-session-id"] = session.sessionId;
       const response = await this.fetch(this.options.url, { method: "POST", redirect: "error", headers, body: JSON.stringify(body), signal: abort.signal });
-      return { response, signal: abort.signal, release };
+      return { response, signal: abort.signal, release, credential };
     } catch (error) {
       release();
       // A local failure (e.g. the credential cannot be opened) keeps its own class.
@@ -180,9 +212,9 @@ export class UpstreamClient {
   }
 
   private async rpc(id: number, method: string, params: Record<string, unknown>, session: UpstreamSession | null, call: Call): Promise<{ result: unknown; sessionId: string | null }> {
-    const { response, signal, release } = await this.post({ jsonrpc: "2.0", id, method, params }, session, call);
+    const { response, signal, release, credential } = await this.post({ jsonrpc: "2.0", id, method, params }, session, call);
     try {
-      if (response.status === 401) fail("auth");
+      if (response.status === 401) { if (credential) this.options.onAuthRejected?.(credential); fail("auth"); }
       if (response.status === 403) fail("forbidden");
       if (response.status === 404 && session?.sessionId) throw new UpstreamError("unavailable", SESSION_EXPIRED);
       if (!response.ok) fail("unavailable");
@@ -201,6 +233,8 @@ export class UpstreamClient {
         return fail(reasonKind(signal, "protocol"));
       }
       if (signal.aborted) fail(reasonKind(signal, "cancelled"));
+      // Scrub before anything is projected, cached or forwarded: initialize, tool lists and results alike.
+      message = redact(message, [credential, ...(this.options.secrets?.() ?? [])]);
       if (message.jsonrpc !== "2.0" || message.id !== id) fail("protocol");
       if (object(message.error)) {
         // Upstream text can echo request data; only the numeric code crosses this boundary.

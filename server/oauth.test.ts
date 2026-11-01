@@ -89,6 +89,8 @@ test("full flow: register → consent → code → tokens → refresh rotates", 
   const back = new URL(allow!.headers.get("location")!);
   expect(back.origin + back.pathname).toBe("https://claude.ai/api/mcp/auth_callback");
   expect(back.searchParams.get("state")).toBe("st8");
+  // RFC 9207: every authorization response names this issuer.
+  expect(back.searchParams.get("iss")).toBe(ORIGIN);
   const code = back.searchParams.get("code")!;
 
   // Wrong verifier fails — and burns the code.
@@ -150,6 +152,7 @@ test("deny sends access_denied back", async () => {
   const loc = new URL(r!.headers.get("location")!);
   expect(loc.port).toBe("4444");
   expect(loc.searchParams.get("error")).toBe("access_denied");
+  expect(loc.searchParams.get("iss")).toBe(ORIGIN);
 });
 
 test("authorize without PKCE is refused at the client", async () => {
@@ -160,6 +163,7 @@ test("authorize without PKCE is refused at the client", async () => {
   const r = await handleOAuthRoute(new Request(`${ORIGIN}/oauth/authorize?${q}`, { headers: cookie }), deps(db));
   expect(r!.status).toBe(302);
   expect(new URL(r!.headers.get("location")!).searchParams.get("error")).toBe("invalid_request");
+  expect(new URL(r!.headers.get("location")!).searchParams.get("iss")).toBe(ORIGIN);
 });
 
 test("discovery documents point at this origin", async () => {
@@ -167,6 +171,10 @@ test("discovery documents point at this origin", async () => {
   const pr = await handleOAuthRoute(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`), deps(db));
   expect((await pr!.json() as any).resource).toBe(`${ORIGIN}/mcp`);
   const as = await handleOAuthRoute(new Request(`${ORIGIN}/.well-known/oauth-authorization-server`), deps(db));
-  expect((await as!.json() as any).token_endpoint).toBe(`${ORIGIN}/oauth/token`);
+  const asMetadata = await as!.json() as any;
+  expect(asMetadata.token_endpoint).toBe(`${ORIGIN}/oauth/token`);
+  // Advertises the iss parameter it already sends, so other instances' connectors accept it.
+  expect(asMetadata.issuer).toBe(ORIGIN);
+  expect(asMetadata.authorization_response_iss_parameter_supported).toBe(true);
   expect(await handleOAuthRoute(new Request(`${ORIGIN}/api/me`), deps(db))).toBeNull();
 });

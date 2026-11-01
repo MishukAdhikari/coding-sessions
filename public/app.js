@@ -189,6 +189,15 @@
     $("app").hidden = false;
     const capabilitiesLoaded = loadCapabilities();
     const params = new URLSearchParams(location.search);
+    // Returning from an external MCP sign-in: open that connector (by id only) or the list.
+    if (params.get("settings") === "connector" || params.get("settings") === "connectors") {
+      const id = params.get("id");
+      history.replaceState(null, "", location.pathname);
+      // Seed the same sheet stack a click path builds (Settings › connectors › detail), so Back works.
+      openSheet("sheet-menu");
+      if (params.get("settings") === "connector" && /^[0-9a-f-]{36}$/.test(id ?? "")) connectorsUI.openConnector(id);
+      else connectorsUI.open();
+    }
     if (params.get("settings") === "agent-auth") {
       const provider = params.get("agent");
       if (["claude", "codex", "command-code"].includes(provider)) {

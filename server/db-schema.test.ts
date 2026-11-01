@@ -58,3 +58,39 @@ test("legacy launch and archive rows migrate to Claude", () => {
 
   database.close();
 });
+
+test("connector auth migration keeps bearer and anonymous rows working, adds epochs and OAuth tables", () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  // Simulate a database from the generic-connector release: no auth columns yet.
+  database.exec(`
+    DROP TABLE mcp_connectors;
+    CREATE TABLE mcp_connectors (id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, url TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1, credential TEXT, credential_set_at INTEGER, granted_tools TEXT NOT NULL DEFAULT '[]',
+      default_providers TEXT NOT NULL DEFAULT '[]', catalog TEXT, catalog_at INTEGER, catalog_stale INTEGER NOT NULL DEFAULT 0,
+      server_info TEXT, check_status TEXT, check_detail TEXT, check_at INTEGER, check_ok_at INTEGER, created_at INTEGER NOT NULL);
+    INSERT INTO mcp_connectors (id,name,slug,url,credential,granted_tools,default_providers,created_at)
+      VALUES ('b','Bearer','bearer','https://a.example/mcp','xcs:secret:v1:x','["t"]','["codex"]',1),
+             ('n','Open','open','https://b.example/mcp',NULL,'["u"]','[]',1);
+    INSERT INTO connector_launch_grants VALUES ('b','launch-1',1);
+  `);
+  applyDatabaseSchema(database);
+  applyDatabaseSchema(database);
+  expect(database.query("SELECT id,auth_mode,auth_epoch,token_version,credential,granted_tools FROM mcp_connectors ORDER BY id").all()).toEqual([
+    { id: "b", auth_mode: "bearer", auth_epoch: 0, token_version: 0, credential: "xcs:secret:v1:x", granted_tools: '["t"]' },
+    { id: "n", auth_mode: "none", auth_epoch: 0, token_version: 0, credential: null, granted_tools: '["u"]' },
+  ]);
+  expect(database.query("SELECT COUNT(*) AS n FROM connector_launch_grants").get()).toEqual({ n: 1 });
+  for (const table of ["connector_oauth_grants", "connector_oauth_pending"]) {
+    expect(database.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)).toEqual({ name: table });
+  }
+  // OAuth state belongs to its connector and goes with it.
+  database.query("UPDATE mcp_connectors SET auth_mode='oauth' WHERE id='n'").run();
+  database.query(`INSERT INTO connector_oauth_pending (state_hash,connector_id,auth_epoch,session_hash,issuer,resource,client_id,redirect_uri,verifier,
+      registration,token_endpoint,token_auth_method,created_at,expires_at)
+    VALUES ('h','n',0,'s','https://as.example','https://b.example/mcp','c','https://app.example/oauth/connectors/callback','v','dcr','https://as.example/token','none',1,2)`).run();
+  database.query("DELETE FROM mcp_connectors WHERE id='n'").run();
+  expect(database.query("SELECT COUNT(*) AS n FROM connector_oauth_pending").get()).toEqual({ n: 0 });
+  expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  database.close();
+});

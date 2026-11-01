@@ -562,7 +562,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
     <label class="label connector-field-label" for="input-connector-new-token">Bearer token <span class="connector-optional">optional</span></label>
     <input id="input-connector-new-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Leave empty if the server needs none" aria-describedby="connector-token-hint">
     <p id="connector-token-hint" class="hint">Stored encrypted on this server and never shown again.</p>
-    <p class="hint">Supports HTTPS MCP servers using Streamable HTTP. Use a bearer token if required; OAuth sign-in is not supported yet.</p>
+    <p class="hint">Supports HTTPS MCP servers using Streamable HTTP. Add a token only if the server needs one. For OAuth, leave it empty and sign in from the connector’s settings after adding it.</p>
     <button class="btn btn-primary btn-big" type="submit">Add and test</button>
   </form>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
@@ -578,12 +578,59 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <p id="connector-state-detail" class="hint"></p>
   <dl class="cli-update-details">
     <dt>Server reports</dt><dd id="connector-server"></dd>
-    <dt>Token</dt><dd id="connector-credential"></dd>
+    <dt>Authentication</dt><dd id="connector-credential"></dd>
     <dt>Tool prefix</dt><dd id="connector-namespace"></dd>
     <dt>Last check</dt><dd id="connector-checked"></dd>
     <dt>Tools</dt><dd id="connector-tool-count"></dd>
   </dl>
   <button id="btn-connector-check" class="btn btn-ghost btn-big">Test connection</button>
+
+  <h3 class="label">Authentication</h3>
+  <label class="label connector-field-label" for="select-connector-auth">How Coding Sessions signs in to this server</label>
+  <select id="select-connector-auth" class="field">
+    <option value="none">No authentication</option>
+    <option value="bearer">Bearer token</option>
+    <option value="oauth">Sign in with OAuth</option>
+  </select>
+  <p class="hint">Changing this removes the saved token or sign-in and every tool approval for this server.</p>
+  <button id="btn-connector-auth-apply" class="btn btn-ghost btn-big" type="button" hidden>Apply</button>
+
+  <form id="form-connector-token" class="proj-form" autocomplete="off">
+    <label class="label" for="input-connector-token" id="connector-token-label">Bearer token</label>
+    <input id="input-connector-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Paste a token">
+    <button class="btn btn-ghost btn-big" type="submit" id="btn-connector-token">Save token</button>
+    <button class="btn btn-ghost btn-big" type="button" id="btn-connector-token-remove">Remove token</button>
+  </form>
+
+  <div id="connector-oauth" hidden>
+    <dl class="cli-update-details">
+      <dt>Account</dt><dd id="connector-oauth-account"></dd>
+      <dt>Signed in</dt><dd id="connector-oauth-since"></dd>
+      <dt>Provider</dt><dd id="connector-oauth-issuer"></dd>
+      <dt>Client</dt><dd id="connector-oauth-registration"></dd>
+    </dl>
+    <p id="connector-oauth-notice" class="hint connector-notice" role="status" hidden></p>
+    <button id="btn-connector-signin" class="btn btn-primary btn-big" type="button">Sign in</button>
+    <p id="connector-signin-hint" class="hint">You approve access on the provider’s page, then come back here.</p>
+    <button id="btn-connector-disconnect" class="btn btn-ghost btn-big row-danger" type="button">Disconnect account…</button>
+    <details class="connector-advanced">
+      <summary>Registered client (advanced)</summary>
+      <p class="hint">Sign-in works with providers that identify themselves in sign-in responses (RFC 9207) and support S256 PKCE. For others, use a bearer token.</p>
+      <p class="hint">A registered client is only needed when the provider cannot register this app itself. Register this redirect URI with it: <code id="connector-callback-url"></code></p>
+      <p class="hint">Providers that accept client metadata documents fetch <code id="connector-cimd-url"></code>; it must be publicly reachable without a login or challenge.</p>
+      <form id="form-connector-client" class="proj-form" autocomplete="off">
+        <label class="label connector-field-label" for="input-connector-client-id">Client ID</label>
+        <input id="input-connector-client-id" class="field" type="text" autocapitalize="off" spellcheck="false">
+        <label class="label connector-field-label" for="input-connector-client-secret">Client secret <span class="connector-optional">optional</span></label>
+        <input id="input-connector-client-secret" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Leave empty to keep the saved one">
+        <label class="label connector-field-label" for="input-connector-client-issuer">Issuer <span class="connector-optional">optional</span></label>
+        <input id="input-connector-client-issuer" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="Pinned at first sign-in if empty">
+        <p id="connector-client-state" class="hint"></p>
+        <button class="btn btn-ghost btn-big" type="submit">Save client</button>
+        <button id="btn-connector-client-remove" class="btn btn-ghost btn-big" type="button">Remove client</button>
+      </form>
+    </details>
+  </div>
 
   <h3 class="label">Tools agents may use</h3>
   <p class="hint">Nothing is granted until you tick it, including tools the server adds later. Granted tools may read or change things on that server. The labels below are the server’s own claims and are not verified.</p>
@@ -598,13 +645,6 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 
   <h3 class="label">Recent calls</h3>
   <div id="connector-audit"></div>
-
-  <form id="form-connector-token" class="proj-form" autocomplete="off">
-    <label class="label" for="input-connector-token" id="connector-token-label">Bearer token</label>
-    <input id="input-connector-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Paste a token">
-    <button class="btn btn-ghost btn-big" type="submit" id="btn-connector-token">Save token</button>
-    <button class="btn btn-ghost btn-big" type="button" id="btn-connector-token-remove">Remove token</button>
-  </form>
 
   <form id="form-connector-edit" class="proj-form" autocomplete="off">
     <label class="label" for="input-connector-rename">Name</label>
@@ -627,7 +667,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=2"></script>
 <script src="/connection-status.js?v=4"></script>
-<script src="/connectors.js?v=3"></script>
-<script src="/app.js?v=55"></script>
+<script src="/connectors.js?v=6"></script>
+<script src="/app.js?v=57"></script>
 </body>
 </html>
