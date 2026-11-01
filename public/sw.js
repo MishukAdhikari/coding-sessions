@@ -1,5 +1,5 @@
 /* xCloud Sessions — service worker: network-first app shell, offline fallback */
-const CACHE = "xs-v70";
+const CACHE = "xs-v71";
 const ASSETS = [
   "/",
   "/app.css",

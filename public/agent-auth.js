@@ -601,10 +601,9 @@
       }
     });
 
-    $("btn-browser-cancel").addEventListener("click", () => {
-      stopBrowserPoll();
-      api("/api/browser-auth/cancel", { method: "POST" }).catch(() => {});
-    });
+    // Closing only stops watching: a sign-in waiting for the emailed code keeps waiting, and
+    // "Send a new code" replaces it on the server.
+    $("btn-browser-cancel").addEventListener("click", stopBrowserPoll);
 
     return { updateAvailability, dismissCodexAuth, dismissAccounts, openAccounts, refreshAccounts: loadAccounts };
   };
