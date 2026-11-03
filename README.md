@@ -42,6 +42,7 @@ flowchart LR
     end
 
     gh[("GitHub")]
+    ext["Your MCP servers<br/><sub>issue tracker · docs · your own</sub>"]
 
     phone -->|web app| proxy
     cli -->|HTTPS API + token| proxy
@@ -51,10 +52,11 @@ flowchart LR
     app -->|"start · read · type · end"| running
     running <-.->|"built-in MCP<br/>message each other"| app
     running --- ws
+    app -->|"connect once<br/>shared by every agent"| ext
     running -->|push branch| gh
 ```
 
-Three ways in, one set of sessions — and the sessions can talk to each other:
+Three ways in, one set of sessions — the sessions can talk to each other, and share the tools you connect:
 
 | | From | Good for |
 | --- | --- | --- |
@@ -62,6 +64,12 @@ Three ways in, one set of sessions — and the sessions can talk to each other:
 | **[`cs` CLI](docs/cli.md)** | Your terminal | Handing your current branch to the server, mirroring a session in your terminal |
 | **[MCP](docs/mcp.md)** | Claude Code, Codex, the Claude app | Letting one agent launch, message and read others |
 | **[Built-in MCP](docs/mcp.md#built-in-session-communicator)** | Every session, automatically | Agents finding each other and trading messages — "ask the Codex session to review this" — with no setup or tokens |
+
+**Connect an MCP server once, use it from every agent.** Add a remote MCP server under
+**Settings › External MCP connectors** — sign in with OAuth or paste a token one time —
+and Claude Code, Codex and Command Code sessions all share that one connection. You
+choose which tools each agent may use; nothing is granted until you tick it.
+[External MCP connectors](docs/connectors.md).
 
 ### Hand off a branch from your laptop
 
