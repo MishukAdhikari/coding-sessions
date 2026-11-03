@@ -3,7 +3,7 @@ import { loadTokenKey } from "./secrets";
 import { resolvePublicFile, requestClientIp, allowsApiMutation } from "./http-security";
 import { db, setMeta } from "./db";
 import * as auth from "./auth";
-import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, managedSessionId } from "./sessions";
+import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, managedSessionId } from "./sessions";
 import * as claudeAuth from "./claude-auth";
 import { codexAuth } from "./codex-auth";
 import * as claudeChat from "./claude-chat";
@@ -571,6 +571,7 @@ const server = Bun.serve({
       if (prefix && !PREFIX_RE.test(prefix)) {
         return json({ error: "Prefix must be 1-12 chars: letters, numbers, dashes." }, 422);
       }
+      rememberSessionPrefix(prefix); // records the outgoing prefix too
       setMeta("session_prefix", prefix);
       return json({ ok: true, prefix });
     }

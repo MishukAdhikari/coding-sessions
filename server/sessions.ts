@@ -6,7 +6,8 @@ import { installCollaborationSkill } from "./collaboration-skill";
 import { communicatorEnvironment, providerCommunicatorArgs } from "./communicator-config";
 import { CODEX_READINESS_TIMEOUT_ERROR, createStartupProbe, type CodexStartupObservation } from "./codex-startup";
 import { childEnvironment } from "./child-env";
-import { DB_PATH, db, getMeta } from "./db";
+import { DB_PATH, db, getMeta, setMeta } from "./db";
+import { displayInitialFor, rememberPrefix } from "./display-initial";
 import { queueChatDeletion } from "./claude-chat";
 import { readlinkSync, readdirSync, statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -1144,13 +1145,21 @@ export function managedSessionId(name: string): string {
   return `m:${SCREEN_PREFIX}${prefixedName(name).toLowerCase()}`;
 }
 
-/** Avatar letter: first letter of the name AFTER the current prefix is stripped. */
+/** Every prefix ever set, newest first — the current one included. */
+function knownPrefixes(): string[] {
+  let saved: unknown = [];
+  try { saved = JSON.parse(getMeta("session_prefixes_used") ?? "[]"); } catch {}
+  const list = Array.isArray(saved) ? saved.filter((p): p is string => typeof p === "string" && PREFIX_RE.test(p)) : [];
+  return rememberPrefix(list, sessionPrefix());
+}
+
+/** Record a newly set prefix so sessions started under it keep their own letter later. */
+export function rememberSessionPrefix(prefix: string): void {
+  setMeta("session_prefixes_used", JSON.stringify(rememberPrefix(knownPrefixes(), prefix)));
+}
+
 function displayInitial(name: string): string {
-  const p = sessionPrefix();
-  let s = name;
-  if (p && s.toLowerCase().startsWith(p.toLowerCase())) s = s.slice(p.length);
-  s = s.replace(/^[-_\s]+/, "");
-  return ((s || name).trim()[0] || name[0] || "?").toUpperCase();
+  return displayInitialFor(name, knownPrefixes());
 }
 
 /* ---------- workspaces (fresh launches) ---------- */
