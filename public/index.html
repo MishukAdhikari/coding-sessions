@@ -285,6 +285,7 @@ Agent authentication…</span><span id="connection-agents" class="connection-sta
   <path d="M8 16H3v5" />
 </svg>
 CLI updates…</span><span id="connection-updates" class="connection-status" role="status">Checking…</span><span id="connection-updates-detail" class="connection-detail"></span></button>
+    <button id="btn-app-updates" class="row-btn connection-row"><span>App updates…</span><span id="connection-app-updates" class="connection-status" role="status">Checking…</span><span id="connection-app-updates-detail" class="connection-detail"></span></button>
     <button id="btn-web-terminal" class="row-btn connection-row"><span class="connection-action"><svg aria-hidden="true" class="menu-icon"
   xmlns="http://www.w3.org/2000/svg"
   width="18"
@@ -321,6 +322,20 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <p id="cli-update-last" class="hint"></p>
   <p class="hint">New sessions use the updated versions. Existing sessions are not restarted.</p>
   <button id="btn-cli-update-now" class="btn btn-primary btn-big" disabled>Update now</button>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-app-updates" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-app-updates-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-app-updates-heading">App updates</h2>
+  <p class="sheet-body">Keep this server on the latest Coding Sessions release from GitHub.</p>
+  <dl id="app-update-details" class="cli-update-details"></dl>
+  <label class="ws-row">
+    <input type="checkbox" id="chk-app-updates" disabled>
+    <span>Update automatically every 24 hours</span>
+  </label>
+  <p class="hint">Checks daily between 04:00 and 05:00 UTC. A new release is installed only if it starts cleanly; otherwise the current version is kept. Running agent sessions keep running through the restart.</p>
+  <p id="app-update-status" class="sheet-body" role="status" aria-live="polite">Checking…</p>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 

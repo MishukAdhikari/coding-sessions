@@ -58,7 +58,9 @@ The helper uses the providers' official npm/native installation methods and inte
 
 ## Update and rollback
 
-Run the installer against a newly reviewed checkout with the same instance, origin and port. Dependencies use the committed Bun lockfile with lifecycle scripts disabled. If Codex hook sources changed, review and repeat `--codex-hooks`; this replaces the fixed global hook copies, so coordinate instances that share that machine.
+Automatic app updates are described in the [main README](../README.md#automatic-app-updates): `deploy/update-app` runs daily as root from `coding-sessions-app-update@NAME.timer`, does nothing unless the owner turned it on in Settings, installs only the newest `vX.Y.Z` tag (or `main` with `CS_APP_UPDATE_CHANNEL=main`), refuses releases that change system units, rolls back when the new release fails its health check, refreshes installed Codex hooks only while `/etc/codex/requirements.toml` is unchanged, and keeps the three newest releases. Its status is `/var/lib/coding-sessions/app-updates/NAME.json`; the source cache is `/var/cache/coding-sessions/NAME`.
+
+For a manual update, run the installer against a newly reviewed checkout with the same instance, origin and port. Dependencies use the committed Bun lockfile with lifecycle scripts disabled. If Codex hook sources changed, review and repeat `--codex-hooks`; this replaces the fixed global hook copies, so coordinate instances that share that machine.
 
 The app unit uses `KillMode=process` to preserve agents during a web-service restart. This deliberately leaves descendant processes alive when stopping the web service; it is not a full instance shutdown, and reboot does not preserve live agent processes. Stop sessions separately before maintenance that requires an empty instance. No memory-execution hardening that would disable Bun's JIT is enabled.
 

@@ -34,12 +34,15 @@ import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
 import { cliUpdates } from "./cli-updates";
 import { handleCliUpdatesRoute } from "./cli-updates-route";
+import { appUpdatePaths, createAppUpdates } from "./app-updates";
+import { handleAppUpdatesRoute } from "./app-updates-route";
 import { agentAccounts } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 import { recordAccountLogin } from "./account-history";
 
 const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
+const appUpdates = createAppUpdates(appUpdatePaths(config.dataDir));
 const COOKIE_NAME = "xs_auth";
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 
@@ -295,6 +298,14 @@ const server = Bun.serve({
       controller: cliUpdates,
     });
     if (cliUpdatesResponse) return cliUpdatesResponse;
+
+    const appUpdatesResponse = await handleAppUpdatesRoute(req, {
+      cookieName: COOKIE_NAME,
+      origin: auth.ORIGIN,
+      checkBrowserSession: auth.checkAuthSession,
+      controller: appUpdates,
+    });
+    if (appUpdatesResponse) return appUpdatesResponse;
 
     const connectorsResponse = await handleConnectorsRoute(req, {
       cookieName: COOKIE_NAME, checkBrowserSession: auth.checkAuthSession, isAuthenticated: isAuthed, connectors,

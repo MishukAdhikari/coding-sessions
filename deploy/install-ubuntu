@@ -87,9 +87,11 @@ else
   ! getent passwd "$service_user" >/dev/null || fail 'service user already exists without installer ownership marker'
   ! getent group "$service_user" >/dev/null || fail 'service group already exists without installer ownership marker'
   [[ ! -e $instance_home && ! -e $app_root && ! -e $config_root/$instance.env && ! -e $config_root/credentials/$instance ]] || fail 'instance paths already exist without installer ownership marker'
-  [[ ! -e /etc/systemd/system/coding-sessions@$instance.service && ! -e /etc/systemd/system/coding-sessions-update@$instance.service && ! -e /etc/systemd/system/coding-sessions-update@$instance.timer ]] || fail 'instance unit override already exists'
+  for unit in "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer" "coding-sessions-app-update@$instance.service" "coding-sessions-app-update@$instance.timer"; do
+    [[ ! -e /etc/systemd/system/$unit ]] || fail 'instance unit override already exists'
+  done
 fi
-for unit in coding-sessions@.service coding-sessions-update@.service coding-sessions-update@.timer; do
+for unit in coding-sessions@.service coding-sessions-update@.service coding-sessions-update@.timer coding-sessions-app-update@.service coding-sessions-app-update@.timer; do
   target=/etc/systemd/system/$unit
   if [[ -e $target ]]; then
     [[ ! -L $target ]] && head -n 1 "$target" | grep -q '^# Managed by coding-sessions install-ubuntu\.' || fail "refusing unmanaged unit: $target"
@@ -105,7 +107,7 @@ fi
 if ((managed)); then
   [[ -f $config_root/$instance.env && ! -L $config_root/$instance.env && $(stat -c %u "$config_root/$instance.env") = 0 ]] || fail 'managed environment file is missing or unsafe'
   grep -qx "ORIGIN=$origin" "$config_root/$instance.env" && grep -qx "PORT=$port" "$config_root/$instance.env" || fail 'existing origin or port differs; edit instance configuration deliberately, then rerun'
-  for unit in "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer"; do
+  for unit in "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer" "coding-sessions-app-update@$instance.service" "coding-sessions-app-update@$instance.timer"; do
     [[ ! -e /etc/systemd/system/$unit && ! -d /etc/systemd/system/$unit.d ]] || fail "instance unit override exists: $unit; review separately"
   done
   entry=$(getent passwd "$service_user") || fail 'managed service account is missing'
@@ -141,6 +143,12 @@ tar -C "$stage/source" -xf "$stage/source.tar"
 mkdir -p "$stage/source/bin"
 install -m 0755 "$bun_path" "$stage/source/bin/bun"
 (cd "$stage/source" && ./bin/bun install --frozen-lockfile --ignore-scripts)
+# Record what this release was built from, so the daily updater knows when it is current.
+if commit=$(git -C "$source_dir" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null); then
+  printf '%s\n' "$commit" > "$stage/source/.source-commit"
+  version=$(git -C "$source_dir" describe --tags --exact-match 2>/dev/null || printf 'commit-%s' "${commit:0:12}")
+  printf '%s\n' "$version" > "$stage/source/.source-version"
+fi
 release=$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$stage/source.tar" | cut -c1-12)
 install -d -o root -g root -m 0755 /opt/coding-sessions "$app_root" "$app_root/releases"
 [[ ! -e $app_root/releases/$release ]] || release=$release-$$
@@ -148,7 +156,7 @@ cp -a "$stage/source" "$app_root/releases/$release"
 chown -R root:root "$app_root/releases/$release"
 chmod -R go-w "$app_root/releases/$release"
 chmod 0755 "$app_root/releases/$release"
-chmod 0755 "$app_root/releases/$release/deploy/update-coding-clis" "$app_root/releases/$release/deploy/install-provider-clis"
+chmod 0755 "$app_root/releases/$release/deploy/update-coding-clis" "$app_root/releases/$release/deploy/install-provider-clis" "$app_root/releases/$release/deploy/update-app"
 # Package directories must be readable by the service account despite installer umask.
 find "$app_root/releases/$release" -type d -exec chmod a+rx {} +
 find "$app_root/releases/$release" -type f -exec chmod a+r {} +
@@ -192,14 +200,17 @@ CS_MUX=screen
 CS_CLI_UPDATE_TIMER=coding-sessions-update@$instance.timer
 CS_CLI_UPDATE_SERVICE=coding-sessions-update@$instance.service
 CS_CLI_UPDATE_CONTROL=0
+CS_APP_UPDATE_STATUS=/var/lib/coding-sessions/app-updates/$instance.json
+CS_APP_UPDATE_CHANNEL=releases
 ENV
   chmod 0600 "$config_root/$instance.env"
 else
   [[ ! -L $config_root/$instance.env && $(stat -c %u "$config_root/$instance.env") = 0 ]] || fail 'environment file must be root-owned and not a symlink'
   chmod 0600 "$config_root/$instance.env"
   grep -qx "ORIGIN=$origin" "$config_root/$instance.env" && grep -qx "PORT=$port" "$config_root/$instance.env" || fail 'existing origin or port differs; edit instance configuration deliberately, then rerun'
+  grep -q '^CS_APP_UPDATE_STATUS=' "$config_root/$instance.env" || printf 'CS_APP_UPDATE_STATUS=/var/lib/coding-sessions/app-updates/%s.json\nCS_APP_UPDATE_CHANNEL=releases\n' "$instance" >> "$config_root/$instance.env"
 fi
-for unit in coding-sessions@.service coding-sessions-update@.service coding-sessions-update@.timer; do
+for unit in coding-sessions@.service coding-sessions-update@.service coding-sessions-update@.timer coding-sessions-app-update@.service coding-sessions-app-update@.timer; do
   install -o root -g root -m 0644 "$source_dir/deploy/templates/$unit" /etc/systemd/system/
 done
 if ((hooks)); then
@@ -221,7 +232,7 @@ if ((nginx)); then
   nginx -t
   if ((start)); then systemctl reload nginx; fi
 fi
-systemd-analyze verify "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer"
+systemd-analyze verify "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer" "coding-sessions-app-update@$instance.service" "coding-sessions-app-update@$instance.timer"
 if ((start)); then
   systemctl daemon-reload
   systemctl enable "coding-sessions@$instance.service"
@@ -233,8 +244,11 @@ if ((start)); then
   done
   ((healthy)) || fail "service did not become healthy; inspect coding-sessions@$instance.service privately (no journal contents printed)"
   if ((daily)); then systemctl enable --now "coding-sessions-update@$instance.timer"; fi
+  # Checks daily but changes nothing until the owner turns on automatic updates in Settings.
+  systemctl enable --now "coding-sessions-app-update@$instance.timer"
 fi
 printf 'Installed %s. Credentials remain root-only in %s/credentials/%s/.\n' "$instance" "$config_root" "$instance"
 printf 'Complete HTTPS before browser use: sudo certbot --nginx -d %s\n' "$host"
-printf 'Administrator-controlled updates: sudo systemctl enable --now coding-sessions-update@%s.timer\n' "$instance"
+printf 'Administrator-controlled CLI updates: sudo systemctl enable --now coding-sessions-update@%s.timer\n' "$instance"
+printf 'App updates: turn on "Automatic updates" in Settings, or run now: sudo %s/current/deploy/update-app %s --now\n' "$app_root" "$instance"
 printf 'No provider login was performed. See deploy/README.md for provider and operator setup.\n'

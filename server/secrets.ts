@@ -15,12 +15,23 @@ export function isSealedSecret(value: string): boolean {
 const MAX_SECRET_FILE_BYTES = 64 * 1024;
 const failure = () => new Error("Protected secret is unavailable.");
 
-export function readProtectedSecret(path: string): string {
+export interface ProtectedSecretOptions {
+  /** The file came from systemd's private $CREDENTIALS_DIRECTORY. */
+  systemdCredential?: boolean;
+  rootUid?: number;
+}
+
+export function readProtectedSecret(path: string, options: ProtectedSecretOptions = {}): string {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stat = fstatSync(fd);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > MAX_SECRET_FILE_BYTES) throw failure();
+    const ownerOnly = (stat.mode & 0o077) === 0;
+    // systemd 254+ hands LoadCredential files over as root-owned 0440, readable by
+    // the unit through an ACL in a directory private to it. Accept exactly that.
+    const systemdShape = options.systemdCredential === true
+      && stat.uid === (options.rootUid ?? 0) && (stat.mode & 0o037) === 0;
+    if (!stat.isFile() || !(ownerOnly || systemdShape) || stat.size > MAX_SECRET_FILE_BYTES) throw failure();
     const bytes = Buffer.alloc(MAX_SECRET_FILE_BYTES + 1);
     let length = 0;
     while (length < bytes.length) {
@@ -86,7 +97,7 @@ export function loadTokenKey(env: Record<string, string | undefined> = process.e
   if (!path) return null;
   // A configured credential directory means the credential is required. Missing
   // key files must not silently downgrade writes to plaintext.
-  const text = readProtectedSecret(path).trim();
+  const text = readProtectedSecret(path, { systemdCredential: !explicitPath }).trim();
   const key = Buffer.from(text, "base64");
   if (key.byteLength !== 32 || key.toString("base64") !== text) throw failure();
   return key;

@@ -17,6 +17,14 @@
       return state(data.enabled ? "positive" : "neutral", data.enabled ? "Daily" : "Paused",
         `${data.enabled ? next ? `Next: ${next}.` : "Automatic updates every 24 hours." : "Automatic updates are paused."} ${last}`);
     },
+    "app-updates": data => {
+      if (typeof data.available !== "boolean") throw new Error("Missing status");
+      if (!data.available) return state("neutral", "Not set up", "Needs an install made with deploy/install-ubuntu.");
+      if (data.last?.result === "failed" || data.last?.result === "needs-admin") return state("warning", "Needs attention", data.last.message || "The last update did not install.");
+      const running = data.version ? `Running ${data.version}.` : "";
+      return state(data.enabled ? "positive" : "neutral", data.enabled ? "Daily" : "Off",
+        `${data.enabled ? "Installs new releases every 24 hours." : "Automatic app updates are off."} ${running}`.trim());
+    },
     history: data => {
       const count = array(data.archived).length;
       return state("neutral", `${count} ended`, "Clears this list only. Conversations and workspace folders stay.");
@@ -101,7 +109,7 @@
     document.getElementById(`connection-${key}-detail`).textContent = value.detail;
   }
   const endpoints = {
-    updates: "/api/cli-updates", history: "/api/sessions", sessions: "/api/sessions",
+    updates: "/api/cli-updates", "app-updates": "/api/app-updates", history: "/api/sessions", sessions: "/api/sessions",
     agents: "/api/agent-accounts", commands: "/api/commands", projects: "/api/projects",
     connect: "/api/mcp-connections", cli: "/api/cli-tokens", connectors: "/api/connectors", github: "/api/github-auth/status",
     browser: "/api/browser-auth/status", passkey: "/api/passkeys",
