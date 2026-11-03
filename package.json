@@ -1,8 +1,12 @@
 {
   "name": "coding-sessions",
+  "version": "0.3.0",
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "cs": "./cli/cs.ts"
+  },
   "scripts": {
     "start": "bun run server/index.ts",
     "dev": "bun --hot server/index.ts",

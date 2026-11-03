@@ -61,6 +61,8 @@ Fresh Codex workspaces may pause at folder trust. The app shows **Folder trust r
 
 Managed Codex sessions require Codex 0.166.0 or newer and additionally need the root-owned hook policy installed with `--codex-hooks`. Existing Codex policies are not silently replaced. Review the installer guide before enabling this host-wide policy.
 
+To work from your own terminal, install the [`cs` command-line client](docs/cli.md): `cs --server "<prompt>"` hands your current branch to a server session, and `cs mcp add` connects Claude Code or Codex in one step.
+
 For MCP, open **Connect Claude or Codex** and follow the connection instructions. Approve only connections you initiated. See [MCP setup](docs/mcp.md) for OAuth and reverse-proxy details. To let agents use tools from remote MCP servers you choose, see [external MCP connectors](docs/connectors.md).
 
 ## Configuration and secrets

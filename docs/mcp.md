@@ -9,6 +9,8 @@ Transport is Streamable HTTP, stateless, JSON responses only (no server-sent
 stream; `GET /mcp` is 405). Auth is OAuth 2.1 with dynamic client registration and
 PKCE; an `cs_` CLI token also works as a fixed bearer header.
 
+The quickest setup from a terminal is the [`cs` CLI](cli.md): `cs mcp add claude` or `cs mcp add codex`.
+
 ## Tools
 
 | Tool | What it does |
