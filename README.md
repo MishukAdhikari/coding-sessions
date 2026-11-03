@@ -8,10 +8,10 @@
 
 *Faster than the fastest. Smoother than the smoothiest.*
 
-### Your coding agents, always on.
+### Be lazy. Your coding agents won't be.
 
-Run Claude Code, Codex and Command Code on your own server. Drive them from your phone,
-your terminal, or another agent.
+Run Claude Code, Codex and Command Code side by side on your own VPS. It feels local. It just
+never sleeps. Drive them from your phone, your terminal, or another agent.
 
 - **Close the laptop, keep shipping.** Sessions run on your server, not your machine. Pick them up from your phone, a browser or your terminal.
 - **Hand off a branch in one command.** `cs --server "fix the flaky checkout test"` sends your branch, uncommitted work included, to a session on the server.
