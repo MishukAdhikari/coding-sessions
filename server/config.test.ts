@@ -24,3 +24,11 @@ test("agent environment excludes app secrets, arbitrary cloud tokens and runtime
   expect(childEnvironment({}, { ...source, CS_PASSTHROUGH_ENV: "HTTPS_PROXY", HTTPS_PROXY: "http://proxy:8080" }).HTTPS_PROXY).toBe("http://proxy:8080");
   expect(childEnvironment({}, { ...source, CS_CHILD_ENV: "inherit" }).CREDENTIALS_DIRECTORY).toBeUndefined();
 });
+
+test("the listen address stays on loopback unless set to another IP address", () => {
+  expect(readConfig({}).listenHost).toBe("127.0.0.1");
+  expect(readConfig({ CS_LISTEN_HOST: "0.0.0.0" }).listenHost).toBe("0.0.0.0");
+  expect(readConfig({ CS_LISTEN_HOST: "::" }).listenHost).toBe("::");
+  expect(() => readConfig({ CS_LISTEN_HOST: "example.com" })).toThrow("CS_LISTEN_HOST");
+  expect(() => readConfig({ CS_LISTEN_HOST: "0.0.0.0; rm" })).toThrow();
+});

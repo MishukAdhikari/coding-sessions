@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolvePublicFile, requestClientIp, allowsApiMutation } from "./http-security";
+import { resolvePublicFile, requestClientIp, allowsApiMutation, parseTrustedProxies } from "./http-security";
 
 test("static files cannot traverse, expose dotfiles, or escape through symlinks", () => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "xs-static-"));
@@ -42,4 +42,16 @@ test("API mutations reject cross-origin and originless cookie requests while pre
     expect(allowed(method, { origin: "null" })).toBe(false);
   }
   expect(allowed("GET", { cookie: "xs_auth=fixture" })).toBe(true);
+});
+
+test("forwarded addresses are trusted from configured proxy ranges, such as a container network", () => {
+  const req = new Request("http://localhost", { headers: { "x-forwarded-for": "203.0.113.7, 10.0.0.1" } });
+  const docker = parseTrustedProxies("172.31.250.0/24, fd00::/8");
+  expect(requestClientIp(req, "172.31.250.3", true, docker)).toBe("203.0.113.7");
+  expect(requestClientIp(req, "::ffff:172.31.250.3", true, docker)).toBe("203.0.113.7");
+  expect(requestClientIp(req, "172.31.251.3", true, docker)).toBe("172.31.251.3");
+  expect(requestClientIp(req, "172.31.250.3", false, docker)).toBe("172.31.250.3");
+  expect(requestClientIp(req, "172.31.250.3", true)).toBe("172.31.250.3");
+  expect(parseTrustedProxies("")).toEqual([]);
+  expect(() => parseTrustedProxies("172.31.250.0/99")).toThrow("CS_TRUSTED_PROXIES");
 });

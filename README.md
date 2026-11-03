@@ -39,6 +39,18 @@ sudo certbot --nginx -d sessions.example.com
 
 For `personal`, the service is `coding-sessions@personal`, the account is `cs-personal`, and its home is `/var/lib/coding-sessions/personal`. Configuration lives in `/etc/coding-sessions/personal.env`; application releases live under `/opt/coding-sessions/personal`.
 
+## Docker
+
+Prefer containers? The official image runs anywhere Docker does, with automatic HTTPS:
+
+```bash
+echo "CS_HOSTNAME=sessions.example.com" > .env
+docker compose --profile https up -d
+docker compose exec app cat /home/cs/data/bootstrap-password
+```
+
+See [Running with Docker](docs/docker.md) for installing agents, updates and settings.
+
 ## First sign-in
 
 Retrieve the installer-generated administrator password in your private SSH terminal:
@@ -108,7 +120,7 @@ Automatic app updates work on any server installed with `deploy/install-ubuntu`:
 - **Network:** outbound HTTPS to `github.com`.
 - **Providers:** any VPS or cloud VM that runs those Ubuntu images — for example Hetzner Cloud, DigitalOcean, Vultr, Linode/Akamai, OVHcloud, AWS EC2 or Lightsail, Google Compute Engine, Azure VMs and Oracle Cloud (including Ampere arm64). Bare-metal and home servers on the same Ubuntu releases work too.
 
-Not supported: other distributions, containers without systemd (Docker, LXC without systemd), shared hosting, and hand-built installs that were not made with the installer — those show **Not set up** in Settings. Rerun the installer on an existing installer-managed instance to add the updater.
+Not supported by the in-app switch: other distributions, containers (Docker updates by pulling a new image — see [Docker](docs/docker.md)), LXC without systemd, shared hosting, and hand-built installs that were not made with the installer — those show **Not set up** in Settings. Rerun the installer on an existing installer-managed instance to add the updater.
 
 ### Manual app updates
 

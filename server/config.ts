@@ -1,5 +1,7 @@
 import { readCsSetting } from "./environment";
 import { isAbsolute, resolve } from "node:path";
+import { isIP } from "node:net";
+import { parseTrustedProxies } from "./http-security";
 
 type Environment = Record<string, string | undefined>;
 
@@ -17,6 +19,9 @@ export function readConfig(env: Environment) {
     || !(origin.hostname === rpId || origin.hostname.endsWith(`.${rpId}`))) {
     throw new Error("RP_ID must match the origin hostname or a parent domain.");
   }
+  // Loopback unless a container needs every interface; the reverse proxy stays in front either way.
+  const listenHost = readCsSetting(env, "CS_LISTEN_HOST") ?? "127.0.0.1";
+  if (!isIP(listenHost)) throw new Error("CS_LISTEN_HOST must be an IP address, such as 127.0.0.1 or 0.0.0.0.");
   const cookieSecure = env.COOKIE_SECURE !== "0";
   if (!cookieSecure && !local) throw new Error("Secure cookies cannot be disabled for a non-loopback origin.");
   const permissions = readCsSetting(env, "CS_AGENT_PERMISSIONS") ?? "standard";
@@ -27,8 +32,9 @@ export function readConfig(env: Environment) {
   if (repository && !/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("CS_DEFAULT_REPO must be owner/repository.");
   const repoOwners = (readCsSetting(env, "CS_GITHUB_OWNERS") ?? "").split(",").map(value => value.trim()).filter(Boolean);
   if (repoOwners.some(owner => !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(owner))) throw new Error("CS_GITHUB_OWNERS must contain comma-separated GitHub owners.");
-  return { port, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
-    unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: readCsSetting(env, "CS_TRUST_PROXY") === "1" };
+  return { port, listenHost, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
+    unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: readCsSetting(env, "CS_TRUST_PROXY") === "1",
+    trustedProxies: parseTrustedProxies(readCsSetting(env, "CS_TRUSTED_PROXIES")) };
 }
 
 export const config = readConfig(process.env);
