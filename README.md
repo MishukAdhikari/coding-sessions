@@ -8,11 +8,26 @@
 
 *Faster than the fastest. Smoother than the smoothiest.*
 
-**Run Claude Code, Codex and Command Code on your own server — and drive them from your phone, your terminal, or another agent.**
+### Your coding agents, always on.
 
-Start a session from anywhere, close the laptop, and it keeps working. Reconnect to its
-terminal, read what it is doing, answer its questions, and resume finished conversations.
-Built with Bun, SQLite and plain browser JavaScript; [MIT licensed](LICENSE).
+Run Claude Code, Codex and Command Code on your own server. Drive them from your phone,
+your terminal, or another agent.
+
+- **Close the laptop, keep shipping.** Sessions run on your server, not your machine. Pick them up from your phone, a browser or your terminal.
+- **Hand off a branch in one command.** `cs --server "fix the flaky checkout test"` sends your branch, uncommitted work included, to a session on the server.
+- **Answer from anywhere.** See which session is waiting on you, read its screen and reply from your phone.
+- **Let agents team up.** Ask a Claude session to get a second opinion from a Codex session. Sessions find and message each other over a built-in MCP, with no setup.
+- **Connect a tool once.** Sign in to an MCP server one time and every agent shares it.
+- **Steer it from other agents.** Claude Code, Codex or the Claude app can launch and drive sessions over MCP.
+- **Looks after itself.** Docker or Ubuntu install, passkey sign-in, and daily updates that roll back if a release won't start.
+
+Self-hosted and [MIT licensed](LICENSE): your server, your agent accounts, your data.
+
+```bash
+git clone https://github.com/MishukAdhikari/coding-sessions.git && cd coding-sessions
+echo "CS_HOSTNAME=sessions.example.com" > .env
+docker compose --profile https up -d      # then open https://sessions.example.com
+```
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/sessions-dark.png">
