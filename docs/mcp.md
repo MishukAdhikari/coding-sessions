@@ -22,7 +22,7 @@ The quickest setup from a terminal is the [`cs` CLI](cli.md): `cs mcp add claude
 | `wait_for_session` | Waits (≤ 90 s per call) until the agent stops working, asks, or the Session ends; returns the screen. |
 | `list_projects` | Project allowlist (by id) and the agents this server runs. |
 | `list_repos` | Repos a Fresh Launch can clone. |
-| `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, waits for the agent to be ready and sends it. |
+| `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, sends it once the agent is ready. If the agent is still starting when the call returns, `prompt_queued` is true and the server sends the prompt as soon as the agent is up. |
 | `resume_session` | Reopen an archived conversation. |
 | `end_session` | End a Session (archives it); `delete_workspace` also removes its folder. |
 
@@ -116,7 +116,7 @@ covering those paths with one policy, action **Bypass**, include **Everyone**.
 A more specific path wins over the host-wide application.
 
 Cloudflare cuts a response off at 100 s, which is why `wait_for_session` caps at 90 s
-and `launch_session` waits at most 60 s for the agent before sending its prompt.
+and `launch_session` waits at most 60 s for the agent. A fresh workspace can take longer, so a prompt not yet sent is queued and delivered when the agent is ready (for up to 15 minutes, unless the session ends or fails first).
 
 ### Agent accounts
 

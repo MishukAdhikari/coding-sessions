@@ -192,7 +192,7 @@ export const TOOLS = [
   {
     name: "launch_session",
     title: "Launch a session",
-    description: "Start an agent in a new session: in a project (project_id from list_projects) or in a fresh workspace cloned from a repo (\"owner/repo\", \"owner/repo#branch\", or a GitHub URL). With prompt, waits for the agent to be ready and sends it as the first message. Returns the session id.",
+    description: "Start an agent in a new session: in a project (project_id from list_projects) or in a fresh workspace cloned from a repo (\"owner/repo\", \"owner/repo#branch\", or a GitHub URL). With prompt, sends it as the first message once the agent is ready: within this call when it starts quickly, otherwise prompt_queued is true and the server sends it the moment the agent is up (do not send it again). Returns the session id.",
     inputSchema: {
       type: "object",
       properties: {
@@ -279,6 +279,28 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
   }
 }
 
+/** How long a launch prompt is kept for an agent still starting (matches the app's starting grace). */
+const QUEUED_PROMPT_MS = 15 * 60_000;
+const queuedPrompts = new Set<Promise<void>>();
+
+/** Resolves once every queued launch prompt has been delivered or given up. For tests. */
+export async function settleQueuedPrompts(): Promise<void> {
+  while (queuedPrompts.size) await Promise.all([...queuedPrompts]);
+}
+
+/**
+ * A fresh workspace can take longer to prepare than one MCP call may wait, so the
+ * prompt is kept and typed the moment the agent is ready — never into a trust
+ * prompt, a failed launch or an ended session.
+ */
+function queuePrompt(deps: McpDeps, id: string, prompt: string): void {
+  const delivery = (async () => {
+    try { if (await waitUntilReady(deps, id, QUEUED_PROMPT_MS)) await deps.sendText(id, prompt, true); } catch {}
+  })();
+  queuedPrompts.add(delivery);
+  void delivery.finally(() => queuedPrompts.delete(delivery));
+}
+
 /** After a Launch: wait for the session to exist and its screen to settle, then type. */
 async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Promise<boolean> {
   const deadline = deps.now() + timeoutMs;
@@ -286,6 +308,7 @@ async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Pr
   let same = 0;
   while (deps.now() < deadline) {
     const s = await findSession(deps, id);
+    if (s?.status === "ended" || s?.phase === "failed") return false;
     const preHookCodex = s?.provider === "codex" && s.phase !== "ready";
     if (s?.status === "running" && s.phase !== "failed" && !s.startupWaitingForTrust
       && (!preHookCodex || (s.phase === "awaiting_session_start" && s.startupInputReady))) {
@@ -371,7 +394,13 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       const prompt = str(args.prompt);
       if (!prompt.trim()) return ok({ session_id: r.id, launched: true, next: "send_message" });
       if (!(await waitUntilReady(deps, r.id))) {
-        return ok({ session_id: r.id, launched: true, prompt_sent: false, note: "The agent wasn't ready in time; read_session, then send_message." });
+        const s = await findSession(deps, r.id);
+        if (s?.status === "ended" || s?.phase === "failed") {
+          return ok({ session_id: r.id, launched: true, prompt_sent: false, note: "The session ended or failed before the agent was ready; read_session for details." });
+        }
+        queuePrompt(deps, r.id, prompt);
+        return ok({ session_id: r.id, launched: true, prompt_sent: false, prompt_queued: true,
+          note: "The agent is still starting. The prompt will be sent as soon as it is ready; don't send it again. Use wait_for_session to follow along." });
       }
       const sent = await deps.sendText(r.id, prompt, true);
       return sent.ok

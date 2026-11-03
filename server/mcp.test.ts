@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { handleMcpPost, sessionState, type McpDeps } from "./mcp";
+import { handleMcpPost, sessionState, settleQueuedPrompts, type McpDeps } from "./mcp";
 import { keyBytes, pasteBytes, screenFromId, tailLines } from "./session-io";
 import type { SessionInfo } from "./sessions";
 
@@ -90,6 +90,43 @@ test("launch_session with a prompt waits for a steady screen, then sends it", as
   const r = await call(deps, "launch_session", { name: "demo", project_id: 1, prompt: "fix the tests" });
   expect(r.structuredContent).toMatchObject({ session_id: "m:cs-demo", prompt_sent: true });
   expect(sent).toEqual([["m:cs-demo", "fix the tests", true]]);
+});
+
+test("a launch prompt survives a workspace that takes longer than one call to prepare", async () => {
+  let clock = 0;
+  const { deps, sent } = harness({
+    // Prepared after 70 s, like a fresh workspace on a busy server.
+    listSessions: async () => [session({ status: clock < 70_000 ? "starting" : "running" })],
+    sleep: async (ms) => { clock += ms; },
+    now: () => clock,
+  });
+  const r = await call(deps, "launch_session", { name: "demo", project_id: 1, prompt: "fix the tests" });
+  expect(r.structuredContent).toMatchObject({ session_id: "m:cs-demo", prompt_sent: false, prompt_queued: true });
+  await settleQueuedPrompts();
+  expect(sent).toEqual([["m:cs-demo", "fix the tests", true]]);
+});
+
+test("a queued launch prompt is dropped, never typed, when the session fails or ends first", async () => {
+  for (const later of [{ phase: "failed" } as Partial<SessionInfo>, { status: "ended" } as Partial<SessionInfo>]) {
+    let clock = 0;
+    const { deps, sent } = harness({
+      listSessions: async () => [session(clock < 70_000 ? { status: "starting" } : later)],
+      sleep: async (ms) => { clock += ms; },
+      now: () => clock,
+    });
+    expect((await call(deps, "launch_session", { name: "demo", project_id: 1, prompt: "fix" })).structuredContent.prompt_queued).toBe(true);
+    await settleQueuedPrompts();
+    expect(sent).toEqual([]);
+  }
+});
+
+test("a launch that fails before the agent is ready reports it instead of queueing", async () => {
+  const { deps, sent } = harness({ listSessions: async () => [session({ phase: "failed" })] });
+  const r = await call(deps, "launch_session", { name: "demo", project_id: 1, prompt: "fix" });
+  expect(r.structuredContent).toMatchObject({ prompt_sent: false });
+  expect(r.structuredContent.prompt_queued).toBeUndefined();
+  await settleQueuedPrompts();
+  expect(sent).toEqual([]);
 });
 
 test("launch_session refuses an unknown agent and a missing target", async () => {
