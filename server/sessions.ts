@@ -29,6 +29,7 @@ import {
 } from "./command-code";
 import type { Database } from "bun:sqlite";
 import * as mux from "./mux";
+import { agentStatePaths, isInsideWorkspace } from "./workspace-cleanup";
 import { sessionActivity, type SessionActivity } from "./session-activity";
 
 const SCREEN_PREFIX = "cs-";
@@ -1668,6 +1669,33 @@ async function gracefulKill(pid: number, waitMs = 8000): Promise<void> {
   }
 }
 
+/** SIGTERM every process of ours still inside `workspace`, then SIGKILL whatever is left. */
+async function stopProcessesIn(workspace: string): Promise<void> {
+  const pids = (await listProcs()).map((p) => p.pid)
+    .filter((pid) => pid !== process.pid && isInsideWorkspace(workspace, procCwd(pid)));
+  for (const pid of pids) { try { process.kill(pid, "SIGTERM"); } catch {} }
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && pids.some((pid) => !exited(pid))) await Bun.sleep(200);
+  for (const pid of pids) if (!exited(pid)) { try { process.kill(pid, "SIGKILL"); } catch {} }
+}
+
+/**
+ * Delete a fresh-launch workspace and everything tied to it: processes still
+ * running inside it (MCP helpers, browsers), the folder and its setup log, and
+ * each agent's per-folder history and logs. Refused while another live session
+ * works in the folder, so removing it can never strand a running agent.
+ */
+async function removeWorkspace(path: string | null, endingScreen: string | null = null): Promise<{ ok: boolean; error?: string }> {
+  if (!path || !isWorkspacePath(path) || path.includes("..")) return { ok: true };
+  const live = new Set((await listScreens()).values());
+  const user = (db.query("SELECT name, screen FROM launches WHERE project_path = ?").all(path) as Array<{ name: string; screen: string }>)
+    .find((row) => row.screen !== endingScreen && live.has(row.screen));
+  if (user) return { ok: false, error: `“${user.name}” is still running in this folder — end it first.` };
+  await stopProcessesIn(path);
+  await run(["rm", "-rf", path, `${path}.setup.log`, ...agentStatePaths(path, homedir())]);
+  return { ok: true };
+}
+
 export async function killSession(id: string, force = false, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string }> {
   if (id.startsWith("m:")) {
     const screenName = id.slice(2);
@@ -1693,8 +1721,9 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, chatUrl);
     else if (launch) db.query("DELETE FROM launches WHERE screen = ?").run(screenName);
     if (deleteChat && provider === "claude") queueChatDeletion(chatUrl);
-    if (deleteWorkspace && launch && isWorkspacePath(launch.project_path) && !launch.project_path.includes("..")) {
-      await run(["rm", "-rf", launch.project_path, `${launch.project_path}.setup.log`]);
+    if (deleteWorkspace && launch) {
+      const removed = await removeWorkspace(launch.project_path, screenName);
+      if (!removed.ok) return { ok: false, error: `The session ended, but its folder was kept: ${removed.error}` };
     }
     return { ok: true };
   }
@@ -1847,8 +1876,12 @@ export async function deleteArchived(id: number, deleteWorkspace = false, delete
   if (deleteChat && rowProvider(row.provider) !== "claude") {
     return { ok: false, error: "Chat deletion is only available for Claude sessions." };
   }
-  if (deleteWorkspace && isWorkspacePath(row.project_path) && !row.project_path!.includes("..")) {
-    await run(["rm", "-rf", row.project_path!, `${row.project_path}.setup.log`]);
+  // A workspace already gone from disk leaves nothing to resume, so the agent
+  // state it left behind goes with the history row.
+  const folderGone = isWorkspacePath(row.project_path) && !existsSync(row.project_path!);
+  if (deleteWorkspace || folderGone) {
+    const removed = await removeWorkspace(row.project_path);
+    if (!removed.ok && deleteWorkspace) return removed;
   }
   if (deleteChat) queueChatDeletion(row.claude_url);
   db.query("DELETE FROM archive WHERE id = ?").run(id);
