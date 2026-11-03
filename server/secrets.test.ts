@@ -87,6 +87,21 @@ test("protected reader accepts private files and rejects exposed, linked and non
   expect(() => readProtectedSecret(file)).toThrow();
 });
 
+test("systemd credentials are accepted in systemd's own 0440 root-owned shape, and only from there", () => {
+  const dir = temp();
+  const file = join(dir, "token-encryption-key");
+  writeFileSync(file, "dummy");
+  chmodSync(file, 0o440);
+  const me = process.getuid!();
+  expect(() => readProtectedSecret(file)).toThrow("Protected secret is unavailable.");
+  expect(readProtectedSecret(file, { systemdCredential: true, rootUid: me })).toBe("dummy");
+  expect(() => readProtectedSecret(file, { systemdCredential: true, rootUid: me + 1 })).toThrow();
+  for (const mode of [0o444, 0o460, 0o442]) {
+    chmodSync(file, mode);
+    expect(() => readProtectedSecret(file, { systemdCredential: true, rootUid: me })).toThrow();
+  }
+});
+
 test("key loading uses protected files, canonical base64, explicit precedence and no raw env key", () => {
   const dir = temp();
   const file = join(dir, "token-encryption-key");
