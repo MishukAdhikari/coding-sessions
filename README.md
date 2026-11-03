@@ -1,10 +1,114 @@
 # Coding Sessions
 
-**v0.1.3 preview (prerelease).** See [validation coverage and remaining checks](deploy/VALIDATION.md). Full systemd lifecycle, provider OAuth, and provider sandbox compatibility are not yet verified across the supported Ubuntu matrix.
+[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/MishukAdhikari/coding-sessions?include_prereleases&label=release)](https://github.com/MishukAdhikari/coding-sessions/releases)
+[![Docker image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](docs/docker.md)
+[![Ubuntu 24.04 · 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%C2%B7%2026.04-E95420?logo=ubuntu&logoColor=white)](#ubuntu-quickstart)
+[![Built with Bun](https://img.shields.io/badge/built%20with-Bun-000?logo=bun)](https://bun.sh)
 
-A self-hosted control panel for Claude Code, Codex, Command Code, and other CLI agents. Start sessions from your phone, reconnect to their terminals, inspect activity, and resume supported conversations. An authenticated MCP endpoint lets compatible clients manage the same sessions. Built-in session communication lets managed agents exchange messages and replies through their own MCP inboxes.
+**Run Claude Code, Codex and Command Code on your own server — and drive them from your phone, your terminal, or another agent.**
 
-Built with Bun, SQLite, and plain browser JavaScript. Licensed under [MIT](LICENSE).
+Start a session from anywhere, close the laptop, and it keeps working. Reconnect to its
+terminal, read what it is doing, answer its questions, and resume finished conversations.
+Built with Bun, SQLite and plain browser JavaScript; [MIT licensed](LICENSE).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/sessions-dark.png">
+  <img alt="The Sessions list: ended Claude, Codex and Command Code sessions with their folders and run times" src="docs/images/sessions-light.png" width="820">
+</picture>
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph you["Wherever you are"]
+        direction TB
+        phone["Phone or browser<br/><sub>sign in with a passkey</sub>"]
+        cli["Terminal<br/><sub>cs CLI</sub>"]
+        agent["Another agent<br/><sub>Claude Code · Codex · Claude app</sub>"]
+    end
+
+    subgraph server["Your server · Ubuntu or Docker"]
+        direction TB
+        proxy["HTTPS<br/><sub>nginx · Caddy</sub>"]
+        app["Coding Sessions<br/><sub>Bun · SQLite</sub>"]
+        subgraph running["Sessions keep running"]
+            direction LR
+            claude["Claude Code"]
+            codex["Codex"]
+            cmd["Command Code"]
+        end
+        ws[("Workspaces<br/><sub>git checkouts</sub>")]
+    end
+
+    gh[("GitHub")]
+
+    phone -->|web app| proxy
+    cli -->|HTTPS API + token| proxy
+    agent -->|MCP| proxy
+    cli -. "rsync over SSH<br/>(your working tree)" .-> ws
+    proxy --> app
+    app -->|"start · read · type · end"| running
+    running --- ws
+    running -->|push branch| gh
+```
+
+Three ways in, one set of sessions:
+
+| | From | Good for |
+| --- | --- | --- |
+| **Web app** | Phone or browser | Starting, watching and answering sessions; a live terminal on each one |
+| **[`cs` CLI](docs/cli.md)** | Your terminal | Handing your current branch to the server, mirroring a session in your terminal |
+| **[MCP](docs/mcp.md)** | Claude Code, Codex, the Claude app | Letting one agent launch, message and read others |
+
+### Hand off a branch from your laptop
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant cs as cs CLI
+    participant App as Coding Sessions
+    participant Agent as Agent on the server
+    participant GH as GitHub
+
+    You->>cs: cs --server "fix the flaky checkout test"
+    cs->>App: prepare a workspace for this branch
+    cs->>App: upload uncommitted work (rsync)
+    cs->>App: launch, seeded with your prompt
+    App->>Agent: start in the workspace
+    Note over You,Agent: Close the laptop — the session keeps running.<br/>Follow along in the app or on your phone.
+    Agent->>GH: push the branch
+    You->>cs: cs pull
+```
+
+### Stays up to date on its own
+
+```mermaid
+flowchart LR
+    t(["Daily check<br/>04:00 UTC"]) --> on{"Auto-update<br/>on?"}
+    on -- no --> stop(["Nothing changes"])
+    on -- yes --> new{"Newer<br/>vX.Y.Z tag?"}
+    new -- no --> stop
+    new -- yes --> build["Build it next to<br/>the running release"]
+    build --> switch["Switch and restart<br/><sub>sessions keep running</sub>"]
+    switch --> ok{"Healthy in 20s?"}
+    ok -- yes --> done(["Updated"])
+    ok -- no --> back(["Roll back to the<br/>previous release"])
+```
+
+Turn it on in **Settings → App updates**. Docker installs update by pulling the new image.
+[More on updates](#automatic-app-updates).
+
+## Get started
+
+| Your server | Do this |
+| --- | --- |
+| Ubuntu 24.04 / 26.04 VPS | [Ubuntu quickstart](#ubuntu-quickstart) — dedicated account, systemd, optional nginx |
+| Anything with Docker | [Docker](#docker) — one `docker compose up`, automatic HTTPS with Caddy |
+| Your laptop, to hack on it | [Local development](docs/local-dev.md) |
+
+> **Preview.** See [validation coverage and remaining checks](deploy/VALIDATION.md) before relying on it for important work.
 
 ## Trust model
 
