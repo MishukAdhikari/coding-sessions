@@ -62,7 +62,7 @@ function authCookie(token: string, maxAge: number): string {
 }
 
 function clientIp(req: Request, server: Bun.Server): string {
-  return requestClientIp(req, server.requestIP(req)?.address ?? null, config.trustProxy);
+  return requestClientIp(req, server.requestIP(req)?.address ?? null, config.trustProxy, config.trustedProxies);
 }
 
 function bearerToken(req: Request): string | null {
@@ -162,7 +162,7 @@ const mcpDeps: McpDeps = {
 /* ---------- server ---------- */
 
 const server = Bun.serve({
-  hostname: "127.0.0.1",
+  hostname: config.listenHost,
   port: PORT,
   maxRequestBodySize: 1024 * 1024,
   async fetch(req, srv) {
@@ -724,7 +724,7 @@ const server = Bun.serve({
   },
 });
 
-console.log(`coding-sessions listening on http://127.0.0.1:${server.port} (rpID: ${auth.RP_ID})`);
+console.log(`coding-sessions listening on http://${config.listenHost.includes(":") ? `[${config.listenHost}]` : config.listenHost}:${server.port} (rpID: ${auth.RP_ID})`);
 
 // Live agents survive service restarts; retain their credentials until their launch ends.
 setInterval(() => {

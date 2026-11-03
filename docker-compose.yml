@@ -1,0 +1,44 @@
+# Coding Sessions with Docker Compose. See docs/docker.md.
+#
+#   echo "CS_HOSTNAME=sessions.example.com" > .env
+#   docker compose --profile https up -d      # app + automatic HTTPS (Caddy)
+#   docker compose up -d                      # app only, on 127.0.0.1:9121 for your own proxy
+
+services:
+  app:
+    image: ghcr.io/mishukadhikari/coding-sessions:${CS_VERSION:-latest}
+    build: .
+    restart: unless-stopped
+    environment:
+      ORIGIN: https://${CS_HOSTNAME:?Set CS_HOSTNAME in .env, e.g. sessions.example.com}
+      CS_TRUST_PROXY: "1"
+      # Only the proxies on this compose network (and the host, for a proxy outside Docker).
+      CS_TRUSTED_PROXIES: 172.31.250.0/24
+    ports:
+      - "127.0.0.1:9121:9121"
+    volumes:
+      - home:/home/cs
+    networks: [sessions]
+
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${CS_HOSTNAME} --to app:9121
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy:/data
+    networks: [sessions]
+    depends_on: [app]
+
+networks:
+  sessions:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+
+volumes:
+  home:
+  caddy:
