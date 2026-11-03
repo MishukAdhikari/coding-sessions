@@ -6,6 +6,8 @@
 [![Ubuntu 24.04 · 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%C2%B7%2026.04-E95420?logo=ubuntu&logoColor=white)](#ubuntu-quickstart)
 [![Built with Bun](https://img.shields.io/badge/built%20with-Bun-000?logo=bun)](https://bun.sh)
 
+*Faster than the fastest. Smoother than the smoothiest.*
+
 **Run Claude Code, Codex and Command Code on your own server — and drive them from your phone, your terminal, or another agent.**
 
 Start a session from anywhere, close the laptop, and it keeps working. Reconnect to its
