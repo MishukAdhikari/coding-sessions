@@ -79,8 +79,13 @@ else
   version=main-$(git -C "$src" rev-parse --short=12 "$ref")
 fi
 commit=$(git -C "$src" rev-parse "$ref^{commit}")
-if [[ $(cat "$app_root/current/.source-commit" 2>/dev/null) = "$commit" ]]; then
+running_commit=$(cat "$app_root/current/.source-commit" 2>/dev/null || true)
+if [[ $running_commit = "$commit" ]]; then
   write_status up-to-date "Already on $version." "$version"; exit 0
+fi
+# Never go backwards: a build from main that already contains the target release stays.
+if [[ $running_commit =~ ^[0-9a-f]{40}$ ]] && git -C "$src" merge-base --is-ancestor "$commit" "$running_commit" 2>/dev/null; then
+  write_status up-to-date "Already running $(current_version), which includes $version." "$(current_version)"; exit 0
 fi
 
 stage=$(mktemp -d /tmp/cs-update.XXXXXXXX)
