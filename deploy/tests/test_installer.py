@@ -45,6 +45,30 @@ class InstallerContractTests(unittest.TestCase):
         ], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_app_updater_picks_newest_stable_release_tag(self):
+        result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"],
+            input="v0.1.9\nv0.10.0\nv0.2.0\nv1.0.0-rc1\nnot-a-tag\nv0.9.12\n", capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "v0.10.0")
+        none = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"], input="main\n", capture_output=True, text=True)
+        self.assertEqual((none.returncode, none.stdout.strip()), (0, ""))
+
+    def test_app_updater_rejects_bad_instances_and_needs_root(self):
+        for instance in ["", "../etc", "Demo", "demo-"]:
+            with self.subTest(instance=instance):
+                self.assertNotEqual(subprocess.run(["bash", str(ROOT / "deploy/update-app"), instance], capture_output=True, text=True).returncode, 0)
+        if os.geteuid() != 0:
+            result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "demo"], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("root", result.stderr)
+
+    def test_app_update_units_are_installed_and_checked_with_the_others(self):
+        installer = (ROOT / "deploy/install-ubuntu").read_text()
+        for unit in ["coding-sessions-app-update@.service", "coding-sessions-app-update@.timer"]:
+            self.assertTrue((ROOT / "deploy/templates" / unit).is_file())
+            self.assertGreaterEqual(installer.count(unit), 2)
+        self.assertIn('systemctl enable --now "coding-sessions-app-update@$instance.timer"', installer)
+
     def test_updater_only_updates_installed_providers_and_persists_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

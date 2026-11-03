@@ -1342,6 +1342,67 @@
   $("chk-cli-updates").addEventListener("change", (ev) => controlCliUpdates(ev.target.checked ? "enable" : "disable"));
   $("btn-cli-update-now").addEventListener("click", () => controlCliUpdates("run"));
 
+  let appUpdateBusy = false;
+  let appUpdateState = null;
+  const APP_UPDATE_RESULTS = {
+    success: "Last check installed an update.",
+    "up-to-date": "Up to date.",
+    "needs-admin": "A new release needs the server administrator to rerun the installer.",
+    failed: "The last update did not install; the current version was kept.",
+  };
+
+  function renderAppUpdates() {
+    const state = appUpdateState;
+    $("chk-app-updates").disabled = appUpdateBusy || !state?.available;
+    if (!appUpdateBusy) $("chk-app-updates").checked = !!state?.enabled;
+    if (!state) return;
+    $("app-update-details").replaceChildren();
+    for (const [name, value] of [["Running", state.version || "Unknown"], ["Follows", state.channel === "main" ? "main branch" : "tagged releases"]]) {
+      const label = document.createElement("dt");
+      label.textContent = name;
+      const detail = document.createElement("dd");
+      detail.textContent = value;
+      $("app-update-details").append(label, detail);
+    }
+    $("app-update-status").textContent = !state.available
+      ? "Not available on this server. Automatic updates need an install made with deploy/install-ubuntu."
+      : state.last ? `${state.last.message || APP_UPDATE_RESULTS[state.last.result] || ""} Checked ${updateTime(state.last.finished)}.`
+      : state.enabled ? "On. The first check runs within a day." : "Off.";
+  }
+
+  async function loadAppUpdates() {
+    try {
+      appUpdateState = await api("/api/app-updates");
+    } catch (e) {
+      appUpdateState = null;
+      $("app-update-status").textContent = e.message;
+    }
+    renderAppUpdates();
+    return appUpdateState;
+  }
+
+  $("btn-app-updates").addEventListener("click", () => {
+    openSheet("sheet-app-updates");
+    appUpdateState = null;
+    $("app-update-status").textContent = "Checking…";
+    renderAppUpdates();
+    loadAppUpdates();
+  });
+  $("chk-app-updates").addEventListener("change", async (ev) => {
+    if (appUpdateBusy || !appUpdateState?.available) return;
+    appUpdateBusy = true;
+    renderAppUpdates();
+    try {
+      await api("/api/app-updates", { method: "POST", body: JSON.stringify({ enabled: ev.target.checked }) });
+      showToast(ev.target.checked ? "Automatic app updates on" : "Automatic app updates off");
+    } catch (e) {
+      showToast(e.message);
+    } finally {
+      appUpdateBusy = false;
+      await loadAppUpdates();
+    }
+  });
+
   $("btn-menu").addEventListener("click", () => {
     openSheet("sheet-menu");
     loadPrefix().then(() => { $("input-prefix").value = sessionPrefix; });

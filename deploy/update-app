@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Daily app update for one installer-managed instance. Run as root by
+# coding-sessions-app-update@.timer. Does nothing unless the instance owner
+# turned on "Automatic updates" in Settings, which only writes a flag file in
+# the instance's own data directory; the service account gains no privilege.
+set -euo pipefail
+umask 022
+
+fail() { printf 'update-app: %s\n' "$*" >&2; exit 1; }
+
+# Newest stable release tag (vX.Y.Z) from a list of tags on stdin.
+newest_release() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true; }
+
+if [[ ${1:-} = --newest-release ]]; then newest_release; exit 0; fi
+
+instance=${1:-} force=0
+[[ ${2:-} = --now ]] && force=1
+[[ $instance =~ ^[a-z][a-z0-9-]{0,19}$ && $instance != *- ]] || fail 'usage: update-app INSTANCE [--now]'
+[[ $(id -u) = 0 ]] || fail 'run as root (the timer does)'
+
+config_root=/etc/coding-sessions
+env_file=$config_root/$instance.env
+marker=$config_root/instances/$instance
+app_root=/opt/coding-sessions/$instance
+instance_home=/var/lib/coding-sessions/$instance
+status_dir=/var/lib/coding-sessions/app-updates
+status_file=$status_dir/$instance.json
+cache=/var/cache/coding-sessions/$instance
+units=(coding-sessions@.service coding-sessions-update@.service coding-sessions-update@.timer coding-sessions-app-update@.service coding-sessions-app-update@.timer)
+
+[[ -f $marker && ! -L $marker && $(stat -c %u "$marker") = 0 ]] || fail 'not an installer-managed instance'
+[[ -f $env_file && ! -L $env_file && $(stat -c %u "$env_file") = 0 ]] || fail 'instance configuration is missing or unsafe'
+
+# Only the owner's opt-in is read from the instance home, and only as a fixed word.
+flag=$instance_home/data/app-auto-update
+if ((!force)) && ! { [[ -f $flag && ! -L $flag ]] && [[ $(head -c 2 "$flag") = on ]]; }; then exit 0; fi
+
+setting() { sed -n "s/^$1=//p" "$env_file" | tail -n 1; }
+repo=$(setting CS_APP_UPDATE_REPO); repo=${repo:-https://github.com/MishukAdhikari/coding-sessions.git}
+channel=$(setting CS_APP_UPDATE_CHANNEL); channel=${channel:-releases}
+port=$(setting PORT)
+# An https URL, or an absolute path to a root-owned mirror for offline hosts.
+if [[ $repo = /* ]]; then
+  [[ $repo =~ ^/[A-Za-z0-9._/-]+$ && $repo != *..* && -d $repo && $(stat -c %u "$repo") = 0 ]] || fail 'CS_APP_UPDATE_REPO path must be a root-owned directory'
+else
+  [[ $repo =~ ^https://[A-Za-z0-9./_-]+$ ]] || fail 'CS_APP_UPDATE_REPO must be an https URL or a root-owned path'
+fi
+[[ $channel = releases || $channel = main ]] || fail 'CS_APP_UPDATE_CHANNEL must be releases or main'
+[[ $port =~ ^[0-9]{4,5}$ ]] || fail 'PORT is missing from the instance configuration'
+
+install -d -o root -g root -m 0755 "$status_dir"
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+current_version() { cat "$app_root/current/.source-version" 2>/dev/null || echo unknown; }
+# Messages are fixed text from this script; versions are tags or hex, so no escaping is needed.
+write_status() {
+  local tmp; tmp=$(mktemp "$status_dir/.$instance.XXXXXXXX")
+  printf '{"started":"%s","finished":"%s","result":"%s","message":"%s","version":"%s","channel":"%s"}\n' \
+    "$started" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "${3:-$(current_version)}" "$channel" > "$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$status_file"
+}
+trap 'write_status failed "The update stopped with an error; the running version was kept."' ERR
+
+install -d -o root -g root -m 0700 /var/cache/coding-sessions "$cache"
+src=$cache/source
+if [[ ! -d $src/.git ]]; then rm -rf -- "$src"; git clone --quiet --no-checkout "$repo" "$src"; fi
+git -C "$src" remote set-url origin "$repo"
+git -C "$src" fetch --quiet --prune --prune-tags --tags --force origin '+refs/heads/main:refs/remotes/origin/main'
+if [[ $channel = releases ]]; then
+  version=$(git -C "$src" tag --list | newest_release)
+  [[ -n $version ]] || { write_status failed 'No release tags were found.'; exit 1; }
+  ref=refs/tags/$version
+  current=$(current_version)
+  if [[ $current =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && $(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -n 1) = "$current" && $current != "$version" ]]; then
+    write_status up-to-date "Already on $current, newer than the latest release." "$current"; exit 0
+  fi
+else
+  ref=refs/remotes/origin/main
+  version=main-$(git -C "$src" rev-parse --short=12 "$ref")
+fi
+commit=$(git -C "$src" rev-parse "$ref^{commit}")
+if [[ $(cat "$app_root/current/.source-commit" 2>/dev/null) = "$commit" ]]; then
+  write_status up-to-date "Already on $version." "$version"; exit 0
+fi
+
+stage=$(mktemp -d /tmp/cs-update.XXXXXXXX)
+trap 'rm -rf -- "$stage"' EXIT
+mkdir "$stage/tree" "$stage/source"
+git -C "$src" archive --format=tar "$commit" | tar -C "$stage/tree" -x
+[[ -f $stage/tree/bun.lock && -f $stage/tree/server/index.ts && -x $stage/tree/deploy/update-app ]] || { write_status failed "Release $version is not an installable checkout."; exit 1; }
+# System units are the administrator's to change: a release that alters them waits for the installer.
+for unit in "${units[@]}"; do
+  if ! cmp -s "$stage/tree/deploy/templates/$unit" "/etc/systemd/system/$unit"; then
+    write_status needs-admin "Release $version changes system units. Rerun deploy/install-ubuntu to upgrade." "$(current_version)"; exit 0
+  fi
+done
+
+source_items=(server public scripts deploy package.json bun.lock)
+for document in LICENSE README.md SECURITY.md THIRD_PARTY_NOTICES.md docs/security.md docs/mcp.md docs/local-dev.md; do [[ ! -f $stage/tree/$document ]] || source_items+=("$document"); done
+tar -C "$stage/tree" --exclude=node_modules --exclude=data --exclude='.env*' --exclude='*.log' --exclude='*.db' --exclude='*.db-*' --exclude=__pycache__ --exclude='*.pyc' -cf - "${source_items[@]}" | tar -C "$stage/source" -xf -
+[[ -z $(find "$stage/source" -type l -print -quit) ]] || { write_status failed "Release $version contains symlinks; not installed."; exit 1; }
+mkdir -p "$stage/source/bin"
+install -m 0755 "$app_root/current/bin/bun" "$stage/source/bin/bun"
+(cd "$stage/source" && ./bin/bun install --frozen-lockfile --ignore-scripts >/dev/null)
+printf '%s\n' "$commit" > "$stage/source/.source-commit"
+printf '%s\n' "$version" > "$stage/source/.source-version"
+
+release=$(date -u +%Y%m%dT%H%M%SZ)-${commit:0:12}
+[[ ! -e $app_root/releases/$release ]] || release=$release-$$
+cp -a "$stage/source" "$app_root/releases/$release"
+chown -R root:root "$app_root/releases/$release"
+chmod -R go-w "$app_root/releases/$release"
+chmod 0755 "$app_root/releases/$release" "$app_root/releases/$release/deploy/update-coding-clis" "$app_root/releases/$release/deploy/install-provider-clis" "$app_root/releases/$release/deploy/update-app"
+find "$app_root/releases/$release" -type d -exec chmod a+rx {} +
+find "$app_root/releases/$release" -type f -exec chmod a+r {} +
+
+previous=$(readlink -f "$app_root/current")
+switch_to() { ln -sfn "$1" "$app_root/current.new"; mv -Tf "$app_root/current.new" "$app_root/current"; }
+healthy() {
+  for _ in {1..20}; do
+    if systemctl is-active --quiet "coding-sessions@$instance.service" && curl --fail --silent --max-time 2 --output /dev/null "http://127.0.0.1:$port/"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+# Running agent sessions survive the restart: the unit uses KillMode=process.
+switch_to "$app_root/releases/$release"
+systemctl restart "coding-sessions@$instance.service"
+if ! healthy; then
+  switch_to "$previous"
+  systemctl restart "coding-sessions@$instance.service"
+  rm -rf -- "${app_root:?}/releases/$release"
+  write_status failed "Release $version did not start, so the previous version was restored." "$(current_version)"
+  exit 1
+fi
+
+# Managed Codex hooks follow the app when the administrator installed them and the policy is unchanged.
+hooks=/usr/local/lib/coding-sessions/codex-hooks
+if [[ -d $hooks && ! -L $hooks ]] && cmp -s "$stage/tree/deploy/codex-requirements.toml" /etc/codex/requirements.toml; then
+  install -o root -g root -m 0644 "$stage/tree/server/codex-hook.ts" "$stage/tree/server/codex-state.ts" "$hooks/"
+fi
+
+# Keep the three newest releases, and always the running and previous ones.
+while IFS= read -r old; do
+  [[ $old = "$app_root/releases/$release" || $old = "$previous" ]] || rm -rf -- "$old"
+done < <(find "$app_root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | tail -n +4 | cut -d' ' -f2-)
+
+write_status success "Updated to $version." "$version"

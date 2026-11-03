@@ -51,6 +51,10 @@ test("server summaries show schedule health and distinguish live sessions from h
   expect(describe.updates({ available: true, enabled: true, result: "failed" }).tone).toBe("warning");
   expect(describe.updates({ available: true, running: true }).label).toBe("Updating");
   expect(describe.updates({ available: false }).label).toBe("Not set up");
+  expect(describe["app-updates"]({ available: false }).label).toBe("Not set up");
+  expect(describe["app-updates"]({ available: true, enabled: true, version: "v0.3.0", last: null })).toMatchObject({ tone: "positive", label: "Daily" });
+  expect(describe["app-updates"]({ available: true, enabled: false, last: null }).label).toBe("Off");
+  expect(describe["app-updates"]({ available: true, enabled: true, last: { result: "failed", message: "Rolled back." } })).toMatchObject({ tone: "warning", detail: "Rolled back." });
   expect(describe.history({ archived: [{}, {}] }).label).toBe("2 ended");
   expect(describe.sessions({ sessions: [{ status: "running" }, { status: "starting" }, { status: "ended" }] }).label).toBe("2 live");
 });

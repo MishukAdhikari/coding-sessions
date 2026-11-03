@@ -81,7 +81,36 @@ Legacy instances without an encryption key retain plaintext app-token compatibil
 
 ## Updates and removal
 
-Application updates are explicit: review a new checkout and rerun the installer for the same instance and settings, omitting `--install-nginx` if its site already exists. Keep backups and the previous release until health checks pass. The installer preserves managed configuration and credentials and refuses to take over unmanaged paths; a changed shared unit requires separate review.
+### Automatic app updates
+
+Turn on **Settings → App updates → Update automatically every 24 hours**. Once a day, between 04:00 and 05:00 UTC, the server checks GitHub for the newest release tag (`vX.Y.Z`). If it is newer than what is running, the server:
+
+1. builds it as a new release next to the current one, using the committed lockfile with install scripts disabled;
+2. switches to it and restarts the web service — running agent sessions keep running;
+3. checks that it answers within 20 seconds, and if not, switches back to the previous release.
+
+The last result and the running version show in the same panel. It is off by default. The toggle only writes a flag in the instance's own data folder; the update itself is done by a root timer (`coding-sessions-app-update@NAME.timer`) that the installer adds, so the web service never gets admin rights. A release that changes the system units is not installed automatically — the panel says so, and you rerun the installer for it.
+
+To follow the `main` branch instead of tagged releases, set `CS_APP_UPDATE_CHANNEL=main` in `/etc/coding-sessions/NAME.env`. To update from your own fork or a mirror, set `CS_APP_UPDATE_REPO` there to its https URL or to a root-owned local path. To update right away as an administrator:
+
+```bash
+sudo /opt/coding-sessions/personal/current/deploy/update-app personal --now
+```
+
+### Which servers support it
+
+Automatic app updates work on any server installed with `deploy/install-ubuntu`:
+
+- **Operating system:** Ubuntu Server 24.04 or 26.04 with systemd.
+- **CPU:** amd64 (x86-64) or arm64.
+- **Network:** outbound HTTPS to `github.com`.
+- **Providers:** any VPS or cloud VM that runs those Ubuntu images — for example Hetzner Cloud, DigitalOcean, Vultr, Linode/Akamai, OVHcloud, AWS EC2 or Lightsail, Google Compute Engine, Azure VMs and Oracle Cloud (including Ampere arm64). Bare-metal and home servers on the same Ubuntu releases work too.
+
+Not supported: other distributions, containers without systemd (Docker, LXC without systemd), shared hosting, and hand-built installs that were not made with the installer — those show **Not set up** in Settings. Rerun the installer on an existing installer-managed instance to add the updater.
+
+### Manual app updates
+
+Review a new checkout and rerun the installer for the same instance and settings, omitting `--install-nginx` if its site already exists. Keep backups and the previous release until health checks pass. The installer preserves managed configuration and credentials and refuses to take over unmanaged paths; a changed shared unit requires separate review.
 
 Provider CLI updates are separate. Opt in with `--daily-updates`, or manage the daily timer as an administrator:
 
@@ -91,9 +120,9 @@ sudo systemctl start coding-sessions-update@personal.service
 sudo systemctl disable --now coding-sessions-update@personal.timer
 ```
 
-The default schedule is daily at 00:00 UTC. The UI can show update status, but new isolated installs leave privileged timer control to administrators. This timer does not update the application or operating system.
+The default schedule is daily at 00:00 UTC. The UI can show update status, but new isolated installs leave privileged timer control to administrators. This timer does not update the application (see above) or the operating system.
 
-To retire an instance, first end its sessions and back up its state and credentials. Disable its update timer and application service, then remove its reverse-proxy route. There is no automatic destructive uninstall: review and remove only that instance's release, state, credential, configuration, and ownership-marker paths, and its `cs-NAME` account. Shared template units may serve other instances. Stopping the web service alone does not guarantee detached agents have exited.
+To retire an instance, first end its sessions and back up its state and credentials. Disable its update timers (`coding-sessions-update@NAME.timer` and `coding-sessions-app-update@NAME.timer`) and application service, then remove its reverse-proxy route. There is no automatic destructive uninstall: review and remove only that instance's release, state, credential, configuration, and ownership-marker paths, and its `cs-NAME` account. Shared template units may serve other instances. Stopping the web service alone does not guarantee detached agents have exited.
 
 **Existing deployments:** do not point this installer at a personal service account or an unmanaged production directory. Inventory paths, credentials, approval settings, detached sessions, and backup recovery first. Explicit `unrestricted` permission mode and `inherit` environment mode exist for deliberate legacy compatibility; they are not the new-install defaults.
 
