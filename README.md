@@ -49,17 +49,19 @@ flowchart LR
     cli -. "rsync over SSH<br/>(your working tree)" .-> ws
     proxy --> app
     app -->|"start · read · type · end"| running
+    running <-.->|"built-in MCP<br/>message each other"| app
     running --- ws
     running -->|push branch| gh
 ```
 
-Three ways in, one set of sessions:
+Three ways in, one set of sessions — and the sessions can talk to each other:
 
 | | From | Good for |
 | --- | --- | --- |
 | **Web app** | Phone or browser | Starting, watching and answering sessions; a live terminal on each one |
 | **[`cs` CLI](docs/cli.md)** | Your terminal | Handing your current branch to the server, mirroring a session in your terminal |
 | **[MCP](docs/mcp.md)** | Claude Code, Codex, the Claude app | Letting one agent launch, message and read others |
+| **[Built-in MCP](docs/mcp.md#built-in-session-communicator)** | Every session, automatically | Agents finding each other and trading messages — "ask the Codex session to review this" — with no setup or tokens |
 
 ### Hand off a branch from your laptop
 
