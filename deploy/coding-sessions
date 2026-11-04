@@ -159,6 +159,7 @@ install_cli() {
 # ---------- setup steps ----------
 install_packages() {
   export DEBIAN_FRONTEND=noninteractive
+  say "  ${D}Updating packages; on a new server this takes a minute or two…${N}"
   apt-get update -qq
   # Tools coding agents expect on a dev box, plus what the app needs. ttyd and Caddy are handled below.
   apt-get install -y -qq --no-install-recommends \
@@ -168,6 +169,7 @@ install_packages() {
 }
 
 install_caddy() {
+  say "  ${D}Adding Caddy's repository…${N}"
   # Caddy's own signed repository: distributions ship 2.6.2 (2022) or none (Ubuntu 22.04).
   if [[ ! -f /etc/apt/sources.list.d/caddy-stable.list ]]; then
     apt-get install -y -qq --no-install-recommends gnupg >/dev/null
@@ -269,6 +271,7 @@ install_agents() {
 install_browser() {
   local bun; bun="$(app_dir)/bin/bun"
   # System libraries as root; the browser itself into the service account's cache.
+  say "  ${D}Chromium needs about 100 system libraries; this step can take a few minutes…${N}"
   (cd "$(app_dir)" && "$bun" x playwright install-deps chromium >/dev/null)
   AS_CWD=$(app_dir) as_service "$bun" x playwright install chromium >/dev/null
   ok "Playwright Chromium"
@@ -276,6 +279,7 @@ install_browser() {
 
 wait_https() {
   local _
+  say "  ${D}Waiting for the HTTPS certificate (up to 90 seconds)…${N}"
   for _ in $(seq 1 45); do
     curl -fsS -o /dev/null --max-time 5 "https://$DOMAIN/" 2>/dev/null && { ok "https://$DOMAIN is up"; return 0; }
     sleep 2
