@@ -12,7 +12,13 @@ One command sets up everything Coding Sessions needs on a fresh server, includin
 - **A domain** whose DNS A record points at the server, e.g. `sessions.example.com`. HTTPS and passkeys need one.
 - **Ports 80 and 443** reachable from the internet. They're used for the HTTPS certificate and the site.
 
-Other systems, including RHEL, Fedora, Alpine and macOS, can run Coding Sessions with [Docker](docker.md).
+| Platform | How |
+|---|---|
+| Ubuntu 22.04, 24.04, 26.04; Debian 12, 13; Raspberry Pi OS 64-bit | This installer |
+| RHEL, Rocky, Alma, Fedora, Amazon Linux 2023, Arch, Alpine | [Docker](docker.md). Their packages come from extra repositories, or SELinux, OpenRC, musl, or no Playwright support gets in the way, so there's no native installer yet |
+| Windows (WSL2), macOS, 32-bit Raspberry Pi OS | Not as a server: WSL2 doesn't keep services running, macOS has no systemd, and Bun has no 32-bit ARM build. Use a Linux VPS |
+
+Run the installer as root: with `sudo`, or as `root` on Debian systems installed without sudo.
 
 ## Install
 
@@ -54,9 +60,9 @@ Add `--dry-run` to see the plan without changing anything.
 
 | | |
 |---|---|
-| System packages | git, GitHub CLI, screen, rsync, build tools, ripgrep, jq, Python |
+| System packages | git, screen, rsync, build tools, ripgrep, jq, Python; the GitHub CLI from GitHub's own signed repository (some distribution packages no longer work) |
 | Web terminal | ttyd 1.7+: the distribution's package where it's new enough, otherwise the pinned upstream build checked against its SHA-256 |
-| HTTPS | Caddy, with an automatic Let's Encrypt certificate. The app itself listens only on 127.0.0.1 |
+| HTTPS | Caddy from its own signed repository, with an automatic Let's Encrypt certificate. The app itself listens only on 127.0.0.1 |
 | Runtime | Bun, a pinned version checked against its SHA-256 |
 | Node.js 22 | Only if you pick an agent that needs it, from NodeSource's signed repository |
 | The app | A dedicated `cs-<instance>` account with no sudo, and a systemd service |

@@ -70,7 +70,7 @@ detect_platform() {
   OS_NAME=$(. /etc/os-release && echo "${PRETTY_NAME:-$ID}")
   case "$OS_ID:$OS_VERSION" in
     ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12|debian:13) ;;
-    *) die "$OS_NAME isn't supported by this installer yet (Ubuntu 22.04/24.04/26.04 and Debian 12/13 are). Use Docker instead: docs/docker.md" ;;
+    *) die "$OS_NAME isn't supported by this installer (Ubuntu 22.04/24.04/26.04, Debian 12/13 and Raspberry Pi OS 64-bit are). On RHEL, Fedora, Amazon Linux, Arch or Alpine, use Docker: docs/docker.md" ;;
   esac
   case $(uname -m) in
     x86_64) ARCH=x64 ;;
@@ -168,17 +168,14 @@ install_packages() {
 }
 
 install_caddy() {
-  if ! command -v caddy >/dev/null; then
-    if apt-cache policy caddy 2>/dev/null | grep -q 'Candidate: [0-9]'; then
-      apt-get install -y -qq caddy >/dev/null
-    else
-      # Not in this release's archive (Ubuntu 22.04): Caddy's official signed repository.
-      apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https gnupg >/dev/null
-      curl -fsSL --proto '=https' 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-      curl -fsSL --proto '=https' 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
-      apt-get update -qq && apt-get install -y -qq caddy >/dev/null
-    fi
+  # Caddy's own signed repository: distributions ship 2.6.2 (2022) or none (Ubuntu 22.04).
+  if [[ ! -f /etc/apt/sources.list.d/caddy-stable.list ]]; then
+    apt-get install -y -qq --no-install-recommends gnupg >/dev/null
+    curl -fsSL --proto '=https' 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -fsSL --proto '=https' 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -qq
   fi
+  apt-get install -y -qq caddy >/dev/null
   ok "Caddy $(caddy version 2>/dev/null | awk '{print $1}')"
 }
 

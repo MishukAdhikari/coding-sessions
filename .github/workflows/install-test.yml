@@ -34,10 +34,12 @@ jobs:
           sudo coding-sessions agents | tee agents.txt
           grep -E '^ +claude +[0-9]' agents.txt
           grep -E '^ +gemini +[0-9]' agents.txt
-          sudo -u cs-personal -H sh -c 'ls ~/.cache/ms-playwright | grep -q chromium'
+          sudo -u cs-personal -H sh -c 'ls ~/.cache/ms-playwright' | grep chromium
+          gh --version | head -n 1
+          caddy version
           ttyd --version
           caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-          test "$(cat /var/lib/coding-sessions/personal/data/app-auto-update)" = on
+          test "$(sudo cat /var/lib/coding-sessions/personal/data/app-auto-update)" = on
       - name: A one-time sign-in link signs in once
         run: |
           link=$(sudo coding-sessions setup-link 2>/dev/null | grep -o 'https://[^ ]*#setup=[^ ]*')
