@@ -91,7 +91,7 @@ jobs:
           docker build -q -t cs-ci -f Dockerfile.ci .
           docker run -d --name box --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock -v "$PWD":/src:ro cs-ci
           for _ in $(seq 1 30); do docker exec box systemctl is-system-running 2>/dev/null | grep -qE 'running|degraded' && break; sleep 2; done
-          docker exec box sh -c 'cp -a /src /root/coding-sessions && cat /etc/os-release | head -n 2'
+          docker exec box sh -c 'cp -r /src /root/coding-sessions && chown -R root:root /root/coding-sessions && cat /etc/os-release | head -n 2'
       - name: Install
         run: docker exec box /root/coding-sessions/deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes
       - name: The app, the agents, the browser and the sign-in link work
