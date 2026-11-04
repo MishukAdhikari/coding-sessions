@@ -166,7 +166,9 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 #cli-update-status { margin-top: 20px; }
 .proj-form { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }
 .proj-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-default); }
-.proj-row > div { min-width: 0; }
+.proj-row > div, .proj-row > span { min-width: 0; flex: 1 1 auto; }
+.proj-row > button { flex: none; }
+.proj-row .proj-note { color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin-top: 3px; overflow-wrap: anywhere; }
 .proj-del { padding: 10px; min-height: 44px; color: var(--status-danger); font-size: 13px; }
 .copybox { position: relative; margin-bottom: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-page); cursor: pointer; }
 .copybox:hover, .copybox.copied { border-color: var(--action-primary); }
