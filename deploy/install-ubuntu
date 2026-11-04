@@ -272,19 +272,32 @@ if ((start)); then
   # home instead, as the Docker image does. Only digests are compared, never printed.
   probe=$config_root/credentials/$instance/token-encryption-key
   want=$(sha256sum < "$probe" | cut -d' ' -f1)
-  got=$(systemd-run --wait --pipe --quiet --collect -p User="$service_user" -p LoadCredential=probe:"$probe" \
-    sh -c 'sha256sum < "$CREDENTIALS_DIRECTORY/probe"' 2>/dev/null | cut -d' ' -f1 || true)
+  got=''
+  for _ in 1 2 3; do
+    got=$(systemd-run --wait --pipe --quiet --collect -p User="$service_user" -p LoadCredential=probe:"$probe" \
+      sh -c 'sha256sum < "$CREDENTIALS_DIRECTORY/probe"' 2>/dev/null | cut -d' ' -f1 || true)
+    [[ $got = "$want" ]] && break
+    sleep 1
+  done
+  fallback=$instance_home/credentials
+  env_file=$config_root/$instance.env
   if [[ $got != "$want" ]]; then
-    fallback=$instance_home/credentials
-    [[ ! -L $fallback ]] || fail 'refusing credential fallback symlink'
+    printf 'Note: systemd on this host cannot pass credentials to services; giving the service owner-only copies in %s.\n' "$fallback"
+    # The home belongs to the service account, so the account writes there itself:
+    # root only opens the source files and never follows a path the account controls.
     runuser -u "$service_user" -- install -d -m 0700 "$fallback"
     for credential in admin-password token-encryption-key; do
-      [[ ! -L $fallback/$credential ]] || fail 'refusing credential fallback symlink'
-      install -o "$service_user" -g "$service_user" -m 0600 "$config_root/credentials/$instance/$credential" "$fallback/$credential"
+      runuser -u "$service_user" -- sh -c 'umask 077; d=$1; f=$2; [ -d "$d" ] && [ ! -L "$d" ] || exit 1; cat > "$d/.$f.new" && mv -f "$d/.$f.new" "$d/$f"' sh "$fallback" "$credential" \
+        < "$config_root/credentials/$instance/$credential" || fail 'could not write the credential fallback'
     done
-    grep -q '^CS_TOKEN_KEY_FILE=' "$config_root/$instance.env" \
-      || printf 'CS_TOKEN_KEY_FILE=%s/token-encryption-key\nCS_ADMIN_PASSWORD_FILE=%s/admin-password\n' "$fallback" "$fallback" >> "$config_root/$instance.env"
+    grep -q '^CS_TOKEN_KEY_FILE=' "$env_file" \
+      || printf 'CS_TOKEN_KEY_FILE=%s/token-encryption-key\nCS_ADMIN_PASSWORD_FILE=%s/admin-password\n' "$fallback" "$fallback" >> "$env_file"
     credential_note="systemd here can't pass credentials to services, so the service reads owner-only copies in $fallback."
+  elif grep -qx "CS_TOKEN_KEY_FILE=$fallback/token-encryption-key" "$env_file"; then
+    # systemd works now: go back to root-only credentials and remove the copies.
+    sed -i "\|^CS_TOKEN_KEY_FILE=$fallback/token-encryption-key\$|d; \|^CS_ADMIN_PASSWORD_FILE=$fallback/admin-password\$|d" "$env_file"
+    runuser -u "$service_user" -- rm -f -- "$fallback/token-encryption-key" "$fallback/admin-password"
+    printf 'systemd can pass credentials here now; removed the owner-only copies.\n'
   fi
   systemctl enable "coding-sessions@$instance.service"
   systemctl restart "coding-sessions@$instance.service"

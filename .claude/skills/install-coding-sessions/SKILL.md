@@ -56,7 +56,7 @@ Then wait. Their answers unlock the next round. The tree:
 8. **Anything unusual you found:**
    - ports 80/443 already in use;
    - a Cloudflare proxy in front of the domain (use `--skip-dns-check`);
-   - an existing install. In that case setup repairs or updates it.
+   - an existing install. In that case setup repairs or updates it. Re-running setup can change agents, browser and updates, but not the domain or port; a new domain means a new instance (`--instance`).
 
 Stop when nothing is left silently assumed. Summarise every choice in one list and ask them to confirm.
 
@@ -69,18 +69,23 @@ curl -fsSLO https://github.com/MishukAdhikari/coding-sessions/releases/latest/do
 curl -fsSLO https://github.com/MishukAdhikari/coding-sessions/releases/latest/download/install.sh.sha256
 sha256sum -c install.sh.sha256
 sudo bash install.sh --domain <domain> --email <email> --agents <a,b|none> \
-  [--browser|--no-browser] [--updates|--no-updates] [--swap|--no-swap] --yes
+  [--browser|--no-browser] [--updates|--no-updates] [--swap|--no-swap] --no-link --yes
 ```
 
 Then:
 
 - **Running it:** if you have SSH access and the user said yes to running it, run it there and watch the output. Otherwise give them the commands.
+- **`--no-link`:** when you run setup yourself, always pass it, so the sign-in link never appears in your output. The user gets the link themselves in step 5.
 - **Already installed:** use `sudo coding-sessions setup …` with the same flags.
 - **Previewing:** `--dry-run` prints the plan without changing anything. Use it first if they are unsure.
 
 ## 5. After it finishes
 
-1. The output ends with a **one-time sign-in link**. Tell them to open it, then add a passkey when asked. It works once and expires in 30 minutes. If it's lost, `sudo coding-sessions setup-link` prints a new one.
+1. **Sign-in:**
+   - **If you ran setup:** you passed `--no-link`, so ask the user to run `sudo coding-sessions setup-link` in **their own** terminal.
+   - **If they ran it:** the output ends with the link.
+
+   They open it, press **Sign in with this link**, then add a passkey. It works once and expires in 30 minutes.
 2. Agents sign in from the app:
    - **Claude Code, Codex, Command Code:** Settings → Agent authentication.
    - **Presets:** Settings → Commands, or the server terminal. See `docs/agents.md`.
@@ -88,7 +93,7 @@ Then:
 
 ## Never
 
-- **Credentials:** never print, store or paste the sign-in link, passwords, tokens or API keys anywhere except to the user.
+- **Credentials:** never ask for, print, store or paste the sign-in link, passwords, tokens or API keys. Never run `setup-link` yourself.
 - **Asking first:** never run setup, `uninstall` or anything that changes a server without the user's explicit yes in this conversation.
 - **Lockout risks:** never change SSH settings, disable root login, or reset the firewall. The CLI doesn't, and neither should you.
 - **Root:** never install agents as root. The CLI installs them as the service account.

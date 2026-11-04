@@ -98,16 +98,13 @@
 
   /* ---------- boot ---------- */
 
+  // A one-time link from `coding-sessions setup-link`. It's taken out of the address bar
+  // at once, so it isn't kept in history or copied with the URL, and it's only spent
+  // when someone presses the button: a link scanner that merely opens it can't use it.
+  let setupToken = location.hash.startsWith("#setup=") ? location.hash.slice("#setup=".length) : null;
+  if (setupToken) history.replaceState(null, "", location.pathname + location.search);
+
   async function boot() {
-    // A one-time link from `coding-sessions setup-link`. Drop it from the address bar
-    // first, so it is not left in history or copied along with the URL.
-    const setup = location.hash.startsWith("#setup=") ? location.hash.slice("#setup=".length) : null;
-    if (setup) history.replaceState(null, "", location.pathname + location.search);
-    let setupError = null;
-    if (setup) {
-      try { await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ token: setup }) }); }
-      catch (e) { setupError = e.message; }
-    }
     try {
       me = await api("/api/me");
     } catch {
@@ -115,15 +112,30 @@
       return;
     }
     me.authed ? enterApp() : showLogin();
-    if (setupError) loginError(setupError);
-    else if (setup && me.authed && !me.hasPasskey) openSheet("sheet-welcome");
+    if (setupToken && me.authed) setupToken = null; // already signed in; leave the link unused
   }
+
+  $("btn-setup-link").addEventListener("click", async () => {
+    try {
+      await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ token: setupToken }) });
+      setupToken = null;
+      me = await api("/api/me");
+      enterApp();
+      if (!me.hasPasskey) openSheet("sheet-welcome");
+    } catch (e) {
+      setupToken = null;
+      $("btn-setup-link").hidden = true;
+      showLogin();
+      loginError(e.message);
+    }
+  });
 
   /* ---------- login ---------- */
 
   function showLogin() {
     $("login").hidden = false;
     $("app").hidden = true;
+    $("btn-setup-link").hidden = !setupToken;
     const canPasskey = me.hasPasskey && window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn();
     $("btn-passkey").hidden = !canPasskey;
     $("form-password").hidden = canPasskey;

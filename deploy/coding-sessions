@@ -56,8 +56,8 @@ conf_save() {
   local tmp; tmp=$(mktemp /etc/coding-sessions/.setup.XXXXXX)
   {
     printf '# Choices from `coding-sessions setup`; re-runs start from these.\n'
-    printf 'INSTANCE=%s\nDOMAIN=%s\nEMAIL=%s\nPORT=%s\nAGENTS=%s\nBROWSER=%s\nUPDATES=%s\nSOURCE=%s\n' \
-      "$INSTANCE" "$DOMAIN" "$EMAIL" "$PORT" "$AGENTS" "$BROWSER" "$UPDATES" "$SOURCE"
+    printf 'INSTANCE=%s\nDOMAIN=%s\nEMAIL=%s\nPORT=%s\nAGENTS=%s\nBROWSER=%s\nUPDATES=%s\nSOURCE=%s\nVERSION=%s\nCOMMIT=%s\n' \
+      "$INSTANCE" "$DOMAIN" "$EMAIL" "$PORT" "$AGENTS" "$BROWSER" "$UPDATES" "$SOURCE" "${SOURCE_REF:-}" "${SOURCE_COMMIT:-}"
   } > "$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$CONF"
 }
@@ -104,6 +104,16 @@ dns_check() {
 }
 
 # ---------- source and engine ----------
+# A source root runs installers from must be root-owned and not writable by others, all the way up.
+root_owned_path() {
+  local path; path=$(readlink -f -- "$1") || return 1
+  while :; do
+    [[ $(stat -c %u -- "$path") = 0 ]] && (( (8#$(stat -c %a -- "$path") & 022) == 0 )) || return 1
+    [[ $path = / ]] && return 0
+    path=$(dirname -- "$path")
+  done
+}
+
 fetch_source() {
   local ref=$1
   install -d -m 0755 /usr/local/lib/coding-sessions
@@ -118,7 +128,12 @@ fetch_source() {
     [[ -n $ref ]] || die "no release found in $REPO_URL"
   fi
   git -c safe.directory="$SRC" -C "$SRC" -c advice.detachedHead=false checkout --quiet --force "$ref"
+  if [[ -n ${EXPECT_COMMIT:-} ]]; then
+    [[ $(git -c safe.directory="$SRC" -C "$SRC" rev-parse HEAD) = "$EXPECT_COMMIT" ]] \
+      || die "release $ref isn't the commit this installer was published with ($EXPECT_COMMIT). Stopping."
+  fi
   SOURCE_REF=$ref
+  SOURCE_COMMIT=$(git -c safe.directory="$SRC" -C "$SRC" rev-parse HEAD)
 }
 
 is_checkout() { [[ -n $1 && -f $1/deploy/install-ubuntu && -f $1/server/index.ts && $1 != /opt/coding-sessions* ]]; }
@@ -129,8 +144,11 @@ resolve_source() {
   local here saved; here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd -P)
   saved=$(conf_get SOURCE)
   if is_checkout "$here" && [[ $here != "$SRC" ]]; then SOURCE=$here
-  elif [[ -z ${VERSION:-} && $saved != "$SRC" ]] && is_checkout "$saved"; then SOURCE=$saved
-  else fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC; return
+  elif [[ -z ${VERSION:-} && $saved != "$SRC" ]] && is_checkout "$saved" && root_owned_path "$saved"; then SOURCE=$saved
+  else
+    # Re-running a release install checks the same commit it was installed from.
+    [[ -z ${EXPECT_COMMIT:-} && -z ${VERSION:-} && $(conf_get VERSION) = "$CLI_VERSION" ]] && EXPECT_COMMIT=$(conf_get COMMIT)
+    fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC; return
   fi
   SOURCE_REF=$(git -c safe.directory="$SOURCE" -C "$SOURCE" describe --tags --always 2>/dev/null || echo local)
 }
@@ -144,7 +162,8 @@ as_service() {
   local env_file=/etc/coding-sessions/$INSTANCE.env vars=()
   [[ -f $env_file ]] || die "instance $INSTANCE isn't installed; run: sudo coding-sessions setup"
   mapfile -t vars < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$env_file")
-  (cd "${AS_CWD:-/}" && runuser -u "$(svc)" -- env -i "${vars[@]}" "$@")
+  # Its own session and no input: a program the account controls can't reach this terminal.
+  (cd "${AS_CWD:-/}" && setsid -w runuser -u "$(svc)" -- env -i "${vars[@]}" "$@" </dev/null)
 }
 
 # Install this CLI from the source, stamped with the version it came from.
@@ -204,9 +223,17 @@ run_engine() {
   CS_INSTALL_CALLER=cli "$SOURCE/deploy/install-ubuntu" "${args[@]}"
 }
 
+# The packaged Caddyfile, once comments and blank lines are dropped.
+caddy_is_package_default() {
+  [[ -f $1 ]] || return 1
+  [[ $(grep -vE '^\s*(#|$)' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '\n' '|') = ':80 {|root * /usr/share/caddy|file_server|}|' ]]
+}
+
 configure_caddy() {
-  local site=/etc/caddy/coding-sessions/$INSTANCE.caddy main=/etc/caddy/Caddyfile
-  install -d -m 0755 /etc/caddy/coding-sessions
+  local dir=/etc/caddy/coding-sessions site main=/etc/caddy/Caddyfile backup='' import='import /etc/caddy/coding-sessions/*.caddy'
+  site=$dir/$INSTANCE.caddy
+  install -d -m 0755 "$dir"
+  [[ -f $main ]] && backup=$(mktemp /etc/caddy/.Caddyfile.XXXXXX) && cp -p "$main" "$backup"
   cat > "$site.tmp" <<CADDY
 # Managed by coding-sessions setup; re-running setup rewrites this file.
 $DOMAIN {
@@ -215,36 +242,55 @@ $DOMAIN {
 }
 CADDY
   mv -f "$site.tmp" "$site"
-  if ! grep -qx 'import /etc/caddy/coding-sessions/\*.caddy' "$main" 2>/dev/null; then
-    if [[ -f $main ]] && grep -q 'file_server' "$main" && (( $(grep -cvE '^\s*(#|$)' "$main") <= 6 )); then
-      # The package's placeholder site on :80 would compete for the port; keep a copy.
-      cp -p "$main" "$main.before-coding-sessions"
-      printf 'import /etc/caddy/coding-sessions/*.caddy\n' > "$main"
+  if ! grep -qxF "$import" "$main" 2>/dev/null; then
+    if [[ ! -f $main ]] || caddy_is_package_default "$main"; then
+      # The package's placeholder on :80 would compete for the port; it's kept as a copy.
+      [[ -f $main ]] && cp -p "$main" "$main.before-coding-sessions"
+      printf '%s\n' "$import" > "$main"
     else
-      printf '\nimport /etc/caddy/coding-sessions/*.caddy\n' >> "$main"
+      printf '\n# Added by coding-sessions setup\n%s\n' "$import" >> "$main"
     fi
   fi
-  caddy validate --config "$main" --adapter caddyfile >/dev/null 2>&1 || die "Caddy rejected its configuration; run: caddy validate --config $main"
+  if ! caddy validate --config "$main" --adapter caddyfile >/dev/null 2>&1; then
+    # Put everything back so a later Caddy restart can't take other sites down.
+    if [[ -n $backup ]]; then cp -p "$backup" "$main"; else rm -f "$main"; fi
+    rm -f "$site" "$backup"
+    die "Caddy rejected the new site (is $DOMAIN already defined in $main?). Your Caddy configuration was restored."
+  fi
+  rm -f "$backup"
   systemctl enable --now caddy >/dev/null 2>&1
   systemctl reload caddy
   ok "HTTPS for $DOMAIN through Caddy (certificate is requested automatically)"
 }
 
+# Raise a kernel limit to at least $2; never lower what's already set higher.
+sysctl_at_least() {
+  local current; current=$(sysctl -n "$1" 2>/dev/null || echo 0)
+  (( current > $2 )) && echo "$current" || echo "$2"
+}
+
 tune_system() {
-  cat > /etc/sysctl.d/60-coding-sessions.conf <<'SYSCTL'
+  local watches instances
+  watches=$(sysctl_at_least fs.inotify.max_user_watches 524288)
+  instances=$(sysctl_at_least fs.inotify.max_user_instances 1024)
+  cat > /etc/sysctl.d/60-coding-sessions.conf <<SYSCTL
 # Coding agents, dev servers and test watchers open many file watches.
-fs.inotify.max_user_watches = 524288
-fs.inotify.max_user_instances = 1024
+fs.inotify.max_user_watches = $watches
+fs.inotify.max_user_instances = $instances
 SYSCTL
-  sysctl -q --system >/dev/null 2>&1 || true
+  sysctl -q -p /etc/sysctl.d/60-coding-sessions.conf >/dev/null 2>&1 || warn "couldn't apply file-watch limits now; they apply after a reboot"
   install -d -m 0755 /etc/systemd/system/coding-sessions@.service.d
   printf '[Service]\nLimitNOFILE=65536\n' > /etc/systemd/system/coding-sessions@.service.d/50-limits.conf
   systemctl daemon-reload
   ok "file-watch and open-file limits raised"
   if [[ $SWAP = yes ]] && (( $(swap_mb) == 0 )) && [[ ! -e /swapfile ]]; then
-    fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile >/dev/null && swapon /swapfile
-    grep -q '^/swapfile ' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
-    ok "2 GB swap added at /swapfile"
+    if fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile >/dev/null && swapon /swapfile; then
+      grep -q '^/swapfile ' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
+      ok "2 GB swap added at /swapfile"
+    else
+      swapoff /swapfile 2>/dev/null || true; rm -f /swapfile
+      warn "couldn't add swap here (some VPS types don't allow it); continuing without"
+    fi
   fi
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 443/udp >/dev/null
@@ -255,10 +301,11 @@ SYSCTL
 set_app_updates() {
   local flag; flag="$(home_dir)/data/app-auto-update"
   if [[ $UPDATES = yes ]]; then
-    runuser -u "$(svc)" -- sh -c "printf 'on\n' > '$flag'"
+    runuser -u "$(svc)" -- sh -c 'printf "on\n" > "$1"' sh "$flag"
     ok "daily app and agent updates on"
   else
-    rm -f -- "$flag"
+    runuser -u "$(svc)" -- rm -f -- "$flag"
+    systemctl disable --now "coding-sessions-update@$INSTANCE.timer" >/dev/null 2>&1 || true
   fi
 }
 
@@ -307,7 +354,7 @@ cmd_setup() {
   need_root setup
   DOMAIN=$(conf_get DOMAIN) EMAIL=$(conf_get EMAIL) INSTANCE=$(conf_get INSTANCE) PORT=$(conf_get PORT)
   AGENTS=$(conf_get AGENTS) BROWSER=$(conf_get BROWSER) UPDATES=$(conf_get UPDATES)
-  local skip_dns=0 dry=0 SWAP=''
+  local skip_dns=0 dry=0 no_link=0 SWAP=''
   while (($#)); do
     case $1 in
       --domain) DOMAIN=${2:?}; shift 2 ;; --email) EMAIL=${2:?}; shift 2 ;;
@@ -317,6 +364,7 @@ cmd_setup() {
       --updates) UPDATES=yes; shift ;; --no-updates) UPDATES=no; shift ;;
       --swap) SWAP=yes; shift ;; --no-swap) SWAP=no; shift ;;
       --skip-dns-check) skip_dns=1; shift ;; --dry-run) dry=1; shift ;;
+      --no-link) no_link=1; shift ;; --expect-commit) EXPECT_COMMIT=${2:?}; shift 2 ;;
       --yes|-y) ASSUME_YES=1; shift ;;
       *) die "unknown option for setup: $1 (see: coding-sessions help)" ;;
     esac
@@ -329,6 +377,7 @@ cmd_setup() {
   local mem disk; mem=$(mem_mb) disk=$(disk_gb)
   ok "${mem} MB RAM, $(swap_mb) MB swap, ${disk} GB free"
   (( disk >= 8 )) || warn "under 8 GB free: agents, browsers and repositories fill disks fast"
+  local existing=/etc/coding-sessions/$INSTANCE.env
   if [[ -f /etc/coding-sessions/instances/$INSTANCE ]]; then ok "existing install found: setup will repair and update it"; fi
 
   step "Your choices"
@@ -337,6 +386,11 @@ cmd_setup() {
   [[ $DOMAIN =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] || die "give a domain like sessions.example.com (--domain)"
   [[ -n $EMAIL ]] || EMAIL=$(ask "Email for HTTPS certificate notices" "")
   [[ $EMAIL =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "give an email address for the HTTPS certificate (--email)"
+  if [[ -f $existing ]]; then
+    # Passkeys are bound to the domain, so moving an instance is a deliberate step, not a re-run.
+    grep -qx "ORIGIN=https://$DOMAIN" "$existing" || die "instance '$INSTANCE' already serves $(sed -n 's|^ORIGIN=https://||p' "$existing"). Changing the domain isn't done by re-running setup; install a new instance with --instance NAME, or see docs/install.md"
+    grep -qx "PORT=$PORT" "$existing" || die "instance '$INSTANCE' uses port $(sed -n 's/^PORT=//p' "$existing"); keep --port the same"
+  fi
   if [[ -z $AGENTS ]]; then
     say "  Coding agents to install. Each is a third-party tool with its own account and terms."
     say "    1 claude   2 codex   3 command-code   4 gemini   5 kimi   6 qwen   7 opencode"
@@ -402,7 +456,11 @@ cmd_setup() {
 
   step "Finishing"
   wait_https || true
-  print_setup_link
+  if ((no_link)); then
+    say ""; say "  ${B}To sign in, run this yourself on the server:${N} sudo coding-sessions setup-link"
+  else
+    print_setup_link
+  fi
   say ""
   say "  Next: Settings → Agent authentication to sign in to your agents."
   say "  Check anything later with: sudo coding-sessions doctor"
@@ -490,17 +548,26 @@ cmd_restart() { need_root restart; load_instance; systemctl restart "coding-sess
 cmd_uninstall() {
   need_root uninstall
   load_instance
-  local purge=0; [[ ${1:-} = --purge ]] && purge=1
-  say "This stops Coding Sessions ($INSTANCE), removes the app and its HTTPS site."
-  ((purge)) && say "${R}--purge also deletes all data: sessions, settings, agent logins and workspaces in $(home_dir).${N}"
-  ((purge)) || say "Your data in $(home_dir) and /etc/coding-sessions is kept."
-  [[ $(ask "Type the instance name ($INSTANCE) to confirm" "") = "$INSTANCE" ]] || die "nothing was changed"
+  local purge=0 confirm_name=''
+  while (($#)); do
+    case $1 in --purge) purge=1; shift ;; --confirm) confirm_name=${2:?}; shift 2 ;; *) die "usage: coding-sessions uninstall [--purge] [--confirm NAME]" ;; esac
+  done
+  say "This stops Coding Sessions ($INSTANCE) and every agent session it runs, and removes the app and its HTTPS site."
+  if ((purge)); then say "${R}--purge also deletes all data: sessions, settings, agent logins and workspaces in $(home_dir).${N}"
+  else say "Your data in $(home_dir) and /etc/coding-sessions is kept."; fi
+  [[ -n $confirm_name ]] || confirm_name=$(ask "Type the instance name ($INSTANCE) to confirm" "")
+  [[ $confirm_name = "$INSTANCE" ]] || die "nothing was changed"
+  # KillMode=process keeps agent sessions alive across restarts; here they must stop too.
+  systemctl kill --kill-whom=all "coding-sessions@$INSTANCE.service" 2>/dev/null || true
   systemctl disable --now "coding-sessions@$INSTANCE.service" "coding-sessions-update@$INSTANCE.timer" "coding-sessions-app-update@$INSTANCE.timer" 2>/dev/null || true
+  pkill -KILL -u "$(svc)" 2>/dev/null || true
   rm -f -- "/etc/caddy/coding-sessions/$INSTANCE.caddy"; systemctl reload caddy 2>/dev/null || true
   rm -rf -- "/opt/coding-sessions/$INSTANCE"
   if ((purge)); then
+    sleep 1; pkill -KILL -u "$(svc)" 2>/dev/null || true
+    userdel "$(svc)" || die "couldn't remove the account $(svc) (still in use?). Data in $(home_dir) was kept; re-run uninstall --purge"
+    groupdel "$(svc)" 2>/dev/null || true
     rm -rf -- "$(home_dir)" "/etc/coding-sessions/credentials/$INSTANCE" "/etc/coding-sessions/$INSTANCE.env" "/etc/coding-sessions/instances/$INSTANCE" "$CONF"
-    userdel "$(svc)" 2>/dev/null || true; groupdel "$(svc)" 2>/dev/null || true
   fi
   ok "removed"
 }
@@ -517,6 +584,7 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
        --swap | --no-swap                add 2 GB swap on small servers
        --instance NAME --port PORT       defaults: personal, 9121
        --skip-dns-check  --dry-run  --yes
+       --no-link                         don't print the sign-in link (e.g. when an AI agent runs setup)
   sudo coding-sessions setup-link        one-time sign-in link (lost access, new device)
   sudo coding-sessions doctor            check everything, with fixes
   sudo coding-sessions status            what's running, where, which version
@@ -527,7 +595,7 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
   sudo coding-sessions update [--agents] update the CLI and the app (and agents)
   sudo coding-sessions logs [-f]         service log
   sudo coding-sessions restart           restart the app; agent sessions keep running
-  sudo coding-sessions uninstall [--purge]
+  sudo coding-sessions uninstall [--purge] [--confirm NAME]
 HELP
 }
 

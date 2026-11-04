@@ -47,7 +47,8 @@ main() {
   chmod 0755 /usr/local/bin/.coding-sessions.tmp
   mv -f /usr/local/bin/.coding-sessions.tmp /usr/local/bin/coding-sessions
   echo "Installed the coding-sessions command ($ref). Starting setup…"
-  exec /usr/local/bin/coding-sessions setup "$@"
+  if [[ -n $commit ]]; then exec /usr/local/bin/coding-sessions setup --version "$ref" --expect-commit "$commit" "$@"; fi
+  exec /usr/local/bin/coding-sessions setup --version "$ref" "$@"
 }
 
 main "$@"

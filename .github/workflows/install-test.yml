@@ -24,7 +24,10 @@ jobs:
       - name: Dry run plans without changing anything
         run: sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --no-browser --no-updates --no-swap --skip-dns-check --dry-run
       - name: Install
-        run: sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes
+        run: |
+          sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes | tee install.log
+          # A full VM passes credentials through systemd, not the fallback.
+          grep -q 'Credentials remain root-only' install.log
       - name: The app, the CLI, the agents and the browser are in place
         run: |
           set -x
@@ -48,13 +51,24 @@ jobs:
           test "$code" = 200
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d "{\"token\":\"$token\"}" http://127.0.0.1:9121/api/auth/setup)
           test "$code" = 401
-      - name: Re-running setup repairs without failing
-        run: sudo coding-sessions setup --skip-dns-check --yes
+      - name: Re-running setup repairs, and refuses a domain change before installing anything
+        run: |
+          sudo deploy/coding-sessions setup --skip-dns-check --no-updates --no-link --yes | tee rerun.log
+          grep -q 'sudo coding-sessions setup-link' rerun.log
+          ! systemctl is-enabled --quiet coding-sessions-update@personal.timer
+          ! sudo deploy/coding-sessions setup --domain other.coding-sessions.invalid --skip-dns-check --yes
       - name: Doctor reports the missing HTTPS for the fake domain
         run: |
           set +e
           sudo coding-sessions doctor | tee doctor.txt
           grep -q 'service running' doctor.txt
+      - name: Uninstall --purge stops everything and removes the account
+        run: |
+          sudo coding-sessions uninstall --purge --confirm personal
+          ! systemctl is-active --quiet coding-sessions@personal.service
+          ! id cs-personal
+          test ! -e /var/lib/coding-sessions/personal
+          ! pgrep -u cs-personal
       - name: Logs on failure
         if: failure()
         run: |

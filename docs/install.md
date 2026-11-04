@@ -45,7 +45,7 @@ Then it:
 2. shows its full plan and asks before changing anything;
 3. installs, prints a **one-time sign-in link**, and stops.
 
-Open the link and add a passkey; that's the whole sign-in. The link works once and expires after 30 minutes.
+Open the link, press **Sign in with this link**, and add a passkey; that's the whole sign-in. The link works once and expires after 30 minutes. It's only used when you press the button, so a link scanner that opens it can't use it up.
 
 To skip the questions, pass everything as options:
 
@@ -71,14 +71,14 @@ Add `--dry-run` to see the plan without changing anything.
 | Tuning | Higher file-watch and open-file limits; 2 GB swap if you agree; ports 80/443 opened in ufw if ufw is already on |
 | Updates | Daily app and agent updates, if you choose them. A new app version is kept only if it starts cleanly |
 
-Setup never changes SSH settings or existing firewall rules, and never touches other sites. To check that the domain points at the server, it asks `api.ipify.org` for the server's public IP.
+Setup never changes SSH settings or existing firewall rules. An existing Caddy configuration with other sites is kept; setup only adds one import line, checks the result, and puts everything back if Caddy rejects it. Kernel limits are only ever raised. To check that the domain points at the server, it asks `api.ipify.org` for the server's public IP.
 
 ## Running the server
 
 The `coding-sessions` command manages everything afterwards:
 
 ```text
-sudo coding-sessions setup               re-run setup: repair, or change choices
+sudo coding-sessions setup               re-run setup: repair, or change agents, browser, updates
 sudo coding-sessions doctor              check everything; each problem comes with its fix
 sudo coding-sessions status              URL, versions, services, updates
 sudo coding-sessions agents              installed agents and versions
@@ -89,7 +89,7 @@ sudo coding-sessions setup-link          a new one-time sign-in link
 sudo coding-sessions update [--agents]   update the CLI and the app (and agents)
 sudo coding-sessions logs [-f]
 sudo coding-sessions restart             agent sessions keep running
-sudo coding-sessions uninstall [--purge] keeps your data unless --purge
+sudo coding-sessions uninstall [--purge] stops everything; keeps your data unless --purge
 ```
 
 Agents can also be installed from the app: **Settings → Agent authentication**.
@@ -100,6 +100,8 @@ Agents can also be installed from the app: **Settings → Agent authentication**
 - **"port 80/443 is used by …":** another web server is running. Stop it, or put Coding Sessions behind it yourself; [deploy/README.md](../deploy/README.md) covers the manual install.
 - **The HTTPS site doesn't come up:** run `sudo coding-sessions doctor`. Then `journalctl -u caddy -n 50` shows why the certificate wasn't issued.
 - **Lost sign-in:** run `sudo coding-sessions setup-link`.
+- **"systemd on this host cannot pass credentials":** some container-based VPSes (LXC) can't hand services their secrets the usual way. The service then reads owner-only copies in its own home, as the Docker image does. Setup checks this every run and switches back when systemd can.
+- **Changing the domain:** passkeys are tied to the domain, so a re-run refuses it. Install a second instance with `--instance NAME --port PORT` for the new domain.
 
 ## Manual install
 
