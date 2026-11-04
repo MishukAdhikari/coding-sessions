@@ -61,3 +61,12 @@ test("the route needs a browser session, same origin, and a boolean", async () =
   expect((await handleAppUpdatesRoute(request({ method: "POST", body: JSON.stringify({ enabled: true }) }), deps))!.status).toBe(200);
   expect(calls).toEqual([true]);
 });
+
+test("the panel reports the channel chosen in Settings, not just the startup value", async () => {
+  const dir = temp();
+  let channel = "releases";
+  const updates = createAppUpdates({ ...appUpdatePaths(dir, { CS_APP_UPDATE_STATUS: join(dir, "status.json") }), version: join(dir, "missing") }, () => channel);
+  expect((await updates.status()).channel).toBe("releases");
+  channel = "main";
+  expect((await updates.status()).channel).toBe("main");
+});

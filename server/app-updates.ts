@@ -35,7 +35,8 @@ export function parseUpdateStatus(raw: unknown) {
   return { result, finished: new Date(finished).toISOString(), message: text("message") ?? "", version: text("version") };
 }
 
-export function createAppUpdates(paths: AppUpdatePaths) {
+/** `channel` reports the effective channel when Settings can change it; otherwise the startup value. */
+export function createAppUpdates(paths: AppUpdatePaths, channel: () => string = () => paths.channel) {
   const read = (path: string) => readFile(path, "utf8").catch(() => null);
   return {
     async status() {
@@ -49,7 +50,7 @@ export function createAppUpdates(paths: AppUpdatePaths) {
       return {
         available: paths.status !== null,
         enabled: flag?.trim() === "on",
-        channel: paths.channel,
+        channel: channel(),
         version: version?.trim() || null,
         last,
       };

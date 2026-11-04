@@ -10,6 +10,7 @@ import { db } from "./db";
 import { appendFileSync, existsSync, readFileSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { serverSettings } from "./server-settings-instance";
 
 const BROWSER_DIR = join(homedir(), ".config", "claude-browser");
 const STATUS_FILE = join(BROWSER_DIR, "auth-status.json");
@@ -145,8 +146,8 @@ async function stopLogin(): Promise<void> {
 
 /** Starting again (or "Send a new code") replaces any login still waiting, so the new email's code is the one used. */
 export async function startBrowserAuth(): Promise<{ ok: boolean; error?: string }> {
-  const email = process.env.CAI_EMAIL?.trim();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Configure CAI_EMAIL before starting browser login." };
+  const email = serverSettings.get("claudeAiEmail");
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Set the claude.ai sign-in email in Settings → Server settings first." };
   await stopLogin();
   // Wait out a deletion run: it has the profile open.
   for (let i = 0; i < 240 && processing; i++) await Bun.sleep(500);
@@ -174,7 +175,7 @@ export function browserAuthStatus(): { running: boolean; state: string; message:
     const s = JSON.parse(readFileSync(STATUS_FILE, "utf8"));
     state = s.state; message = s.message ?? "";
   } catch {}
-  return { running: loginRunning(), state, message, email: process.env.CAI_EMAIL?.trim() ?? "" };
+  return { running: loginRunning(), state, message, email: serverSettings.get("claudeAiEmail") ?? "" };
 }
 
 export function submitBrowserCode(code: string): { ok: boolean; error?: string } {

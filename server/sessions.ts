@@ -30,6 +30,7 @@ import {
 } from "./command-code";
 import type { Database } from "bun:sqlite";
 import * as mux from "./mux";
+import { onServerSettingChange, serverSettings } from "./server-settings-instance";
 import { agentStatePaths, isInsideWorkspace } from "./workspace-cleanup";
 import { sessionActivity, type SessionActivity } from "./session-activity";
 
@@ -676,7 +677,7 @@ export async function startManagedCommandCode(options: ManagedCommandCodeStart):
     cwd: options.projectPath,
     name: options.name,
     resumeId: options.resumeId ?? null,
-    unrestricted: config.unrestrictedAgents,
+    unrestricted: serverSettings.unrestricted(),
   });
   if (!argv) return { ok: false, error: "Could not construct a safe Command Code launch command." };
 
@@ -1250,7 +1251,7 @@ export async function launchWorkspaceSession(name: string, repoInput: string, re
   return startCommunicatingSession({
     screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: remoteControl ? 1 : 0,
     command: mcp =>
-    `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${config.unrestrictedAgents ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
+    `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${serverSettings.unrestricted() ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
     `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${remoteControl ? `--remote-control '${name}' ` : ""}${claudePermissionArgs()}`,
   });
 }
@@ -1356,7 +1357,7 @@ export async function startManagedCodex(
     launchId,
     dbPath: runtime.dbPath,
     resumeId: options.resumeId,
-    unrestricted: config.unrestrictedAgents,
+    unrestricted: serverSettings.unrestricted(),
     mcpArgs,
   });
   const command = invocation ? buildCodexScreenCommand(invocation) : null;
@@ -1497,7 +1498,7 @@ export async function prepareSynced(rawName: string, repoInput: string, branchIn
 // `claude-auto-danger`'s mode: the auto-mode classifier on top of bypass, so the
 // session starts in auto and shift+tab still reaches bypass. Opt-in per launch.
 const AUTO_MODE_ARGS = "--permission-mode auto --enable-auto-mode ";
-const claudePermissionArgs = () => config.unrestrictedAgents ? "--dangerously-skip-permissions " : "";
+const claudePermissionArgs = () => serverSettings.unrestricted() ? "--dangerously-skip-permissions " : "";
 
 export async function launchSynced(
   rawName: string,
@@ -1531,8 +1532,8 @@ export async function launchSynced(
   const started = await startCommunicatingSession({
     screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: 1, resumeId: rid,
     command: mcp =>
-    `cd ${shellQuote(ws)} && ${config.unrestrictedAgents ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
-    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg}${opts.autoMode && config.unrestrictedAgents ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs()}${promptArg}`,
+    `cd ${shellQuote(ws)} && ${serverSettings.unrestricted() ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
+    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg}${opts.autoMode && serverSettings.unrestricted() ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs()}${promptArg}`,
   });
   if (!started.ok) return started;
   const archived = db.query(
@@ -1567,13 +1568,15 @@ export async function workspaceState(id: string): Promise<WorkspaceState> {
 }
 
 let repoCache: { at: number; repos: string[] } | null = null;
+// A new owner list must show up at once, not after the cache expires.
+onServerSettingChange((name) => { if (name === "githubOwners") repoCache = null; });
 
 export async function listRepos(): Promise<string[]> {
   if (repoCache && Date.now() - repoCache.at < 300_000) return repoCache.repos;
   const gh = Bun.which("gh") ?? "/usr/bin/gh";
   const results = await Promise.all([
     run([gh, "repo", "list", "--limit", "100", "--json", "nameWithOwner"]),
-    ...config.repoOwners.map(owner => run([gh, "repo", "list", owner, "--limit", "100", "--json", "nameWithOwner"])),
+    ...serverSettings.owners().map(owner => run([gh, "repo", "list", owner, "--limit", "100", "--json", "nameWithOwner"])),
   ]);
   const repos = new Set<string>();
   for (const r of results) {
@@ -1630,7 +1633,7 @@ export async function launchSession(name: string, projectId: number, remoteContr
   // "Is this a project you trust?" inside the detached screen forever. The
   // workspace launch path does this via trust.ts; plain project launches need
   // it too (a folder registered through the Projects sheet isn't trusted yet).
-  if (config.unrestrictedAgents) ensureTrusted(project.path);
+  if (serverSettings.unrestricted()) ensureTrusted(project.path);
 
   const claudeBin = Bun.which("claude") ?? join(homedir(), ".local", "bin", "claude");
   // name and project are validated above; single-quoting is safe for both

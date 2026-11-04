@@ -22,3 +22,7 @@ export function getMeta(key: string): string | null {
 export function setMeta(key: string, value: string): void {
   db.query("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
 }
+
+export function deleteMeta(key: string): void {
+  db.query("DELETE FROM meta WHERE key = ?").run(key);
+}
