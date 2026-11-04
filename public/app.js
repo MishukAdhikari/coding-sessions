@@ -99,6 +99,15 @@
   /* ---------- boot ---------- */
 
   async function boot() {
+    // A one-time link from `coding-sessions setup-link`. Drop it from the address bar
+    // first, so it is not left in history or copied along with the URL.
+    const setup = location.hash.startsWith("#setup=") ? location.hash.slice("#setup=".length) : null;
+    if (setup) history.replaceState(null, "", location.pathname + location.search);
+    let setupError = null;
+    if (setup) {
+      try { await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ token: setup }) }); }
+      catch (e) { setupError = e.message; }
+    }
     try {
       me = await api("/api/me");
     } catch {
@@ -106,6 +115,8 @@
       return;
     }
     me.authed ? enterApp() : showLogin();
+    if (setupError) loginError(setupError);
+    else if (setup && me.authed && !me.hasPasskey) openSheet("sheet-welcome");
   }
 
   /* ---------- login ---------- */
@@ -1578,6 +1589,7 @@
     }
   });
   $("btn-add-passkey").addEventListener("click", () => { closeSheet(); addPasskey(); });
+  $("btn-welcome-passkey").addEventListener("click", () => { closeSheet(); addPasskey(); });
   $("btn-logout").addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => {});
     location.reload();

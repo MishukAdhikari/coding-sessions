@@ -1,7 +1,7 @@
 import { config } from "./config";
 import { loadTokenKey } from "./secrets";
 import { resolvePublicFile, requestClientIp, allowsApiMutation } from "./http-security";
-import { db, setMeta } from "./db";
+import { db, deleteMeta, getMeta, setMeta } from "./db";
 import * as auth from "./auth";
 import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, managedSessionId } from "./sessions";
 import * as claudeAuth from "./claude-auth";
@@ -33,6 +33,7 @@ import { ConnectorOAuth } from "./connector-oauth";
 import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
 import { cliUpdates } from "./cli-updates";
+import { consumeSetupToken } from "./setup-token";
 import { handleCliUpdatesRoute } from "./cli-updates-route";
 import { appUpdatePaths, createAppUpdates } from "./app-updates";
 import { handleAppUpdatesRoute } from "./app-updates-route";
@@ -259,6 +260,17 @@ const server = Bun.serve({
       const body = await req.json().catch(() => ({}));
       if (typeof body.password !== "string" || !(await auth.verifyPassword(body.password))) {
         return json({ error: "Wrong password." }, 401);
+      }
+      const token = auth.createAuthSession(req.headers.get("user-agent"));
+      return json({ ok: true }, 200, { "set-cookie": authCookie(token, 30 * 24 * 3600) });
+    }
+
+    // One-time link from `coding-sessions setup-link`: signs this browser in once.
+    if (path === "/api/auth/setup" && method === "POST") {
+      if (auth.rateLimited(`setup:${clientIp(req, srv)}`)) return json({ error: "Too many attempts. Try again in 15 minutes." }, 429);
+      const body = await req.json().catch(() => ({})) as { token?: unknown };
+      if (!consumeSetupToken({ get: getMeta, set: setMeta, delete: deleteMeta }, body.token)) {
+        return json({ error: "This sign-in link is invalid, already used or expired. Run `sudo coding-sessions setup-link` on the server for a new one." }, 401);
       }
       const token = auth.createAuthSession(req.headers.get("user-agent"));
       return json({ ok: true }, 200, { "set-cookie": authCookie(token, 30 * 24 * 3600) });
