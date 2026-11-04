@@ -84,11 +84,12 @@ mem_mb()  { awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo; }
 swap_mb() { awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo; }
 disk_gb() { df -BG --output=avail / | tail -n 1 | tr -dc '0-9'; }
 
-port_owner() { ss -Hltnp "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*' | head -n 1 | sed 's/users:(("//'; }
+# Under pipefail an empty grep fails the pipeline, so lookups that may find nothing end in || true.
+port_owner() { { ss -Hltnp "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*' | head -n 1 | sed 's/users:(("//'; } || true; }
 
 dns_check() {
   local domain=$1 resolved local_ips public=''
-  resolved=$(getent ahosts "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+  resolved=$({ getent ahosts "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' '; } || true)
   [[ -n $resolved ]] || { bad "$domain doesn't resolve yet. Add an A record pointing at this server's public IP."; return 1; }
   local_ips=" $(hostname -I 2>/dev/null) "
   for ip in $resolved; do [[ $local_ips = *" $ip "* ]] && { ok "$domain points at this server ($ip)"; return 0; }; done
@@ -113,7 +114,7 @@ fetch_source() {
     git clone --quiet --no-checkout "$REPO_URL" "$SRC"
   fi
   if [[ $ref = latest ]]; then
-    ref=$(git -c safe.directory="$SRC" -C "$SRC" tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+    ref=$(git -c safe.directory="$SRC" -C "$SRC" tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
     [[ -n $ref ]] || die "no release found in $REPO_URL"
   fi
   git -c safe.directory="$SRC" -C "$SRC" -c advice.detachedHead=false checkout --quiet --force "$ref"

@@ -35,7 +35,8 @@ main() {
   fi
   local ref=$version
   if [[ $ref = dev ]]; then
-    ref=$(git -c safe.directory="$src" -C "$src" tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+    ref=$(git -c safe.directory="$src" -C "$src" tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+    [[ -n $ref ]] || { echo "No release found in $repo." >&2; exit 1; }
   fi
   git -c safe.directory="$src" -C "$src" -c advice.detachedHead=false checkout --quiet --force "$ref"
   if [[ -n $commit ]]; then
