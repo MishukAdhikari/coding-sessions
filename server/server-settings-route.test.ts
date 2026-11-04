@@ -45,7 +45,7 @@ test("unrelated paths fall through; only browser sessions get in", async () => {
 
 test("reading shows each value, where it comes from, and how to confirm sensitive changes", async () => {
   const { call } = setup();
-  const body = await (await call("/api/server-settings"))!.json();
+  const body: any = await (await call("/api/server-settings"))!.json();
   expect(body.settings.defaultRepo).toEqual({ value: "acme/app", source: "server", serverValue: "acme/app" });
   expect(body).toMatchObject({ channelAvailable: false, stepUp: "passkey" });
 });
@@ -75,9 +75,9 @@ test("the permission mode changes only with a fresh, single-use passkey confirma
     call("/api/server-settings", { method: "POST", cookie, body: { name: "agentPermissions", value: "unrestricted", grant } });
   expect((await change())!.status).toBe(403);
   expect((await call("/api/server-settings/step-up", { method: "POST", body: { challengeId: "wrong" } }))!.status).toBe(401);
-  const { grant } = await (await call("/api/server-settings/step-up", { method: "POST", body: { challengeId: "c1" } }))!.json();
+  const { grant }: any = await (await call("/api/server-settings/step-up", { method: "POST", body: { challengeId: "c1" } }))!.json();
   expect((await change(grant, "other"))!.status).toBe(403);
-  const { grant: fresh } = await (await call("/api/server-settings/step-up", { method: "POST", body: { challengeId: "c1" } }))!.json();
+  const { grant: fresh }: any = await (await call("/api/server-settings/step-up", { method: "POST", body: { challengeId: "c1" } }))!.json();
   expect((await change(fresh))!.status).toBe(200);
   expect(settings.unrestricted()).toBe(true);
   expect((await change(fresh))!.status).toBe(403);
@@ -88,7 +88,7 @@ test("without a passkey the admin password confirms instead, and never when a pa
   expect((await noPasskey.call("/api/server-settings/step-up/options"))!.status).toBe(409);
   expect((await noPasskey.call("/api/server-settings/step-up", { method: "POST", body: { password: "wrong" } }))!.status).toBe(401);
   const ok = await noPasskey.call("/api/server-settings/step-up", { method: "POST", body: { password: "admin-pass" } });
-  expect((await ok!.json()).grant).toBeString();
+  expect(((await ok!.json()) as any).grant).toBeString();
   const withPasskey = setup();
   expect((await withPasskey.call("/api/server-settings/step-up", { method: "POST", body: { password: "admin-pass" } }))!.status).toBe(401);
 });

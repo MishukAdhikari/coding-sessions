@@ -39,7 +39,7 @@ export async function handleServerSettingsRoute(req: Request, deps: ServerSettin
   }
   if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
   if (req.headers.get("origin") !== deps.origin) return json({ error: "Same-origin request required." }, 403);
-  const body: Record<string, unknown> = await req.json().then((value) => value && typeof value === "object" ? value : {}).catch(() => ({}));
+  const body = await req.json().then((value): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {}).catch(() => ({} as Record<string, unknown>));
 
   if (path === "/api/server-settings/step-up") {
     if (deps.rateLimited(`step-up:${session}`)) return json({ error: "Too many attempts. Try again in 15 minutes." }, 429);
