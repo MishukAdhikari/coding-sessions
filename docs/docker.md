@@ -71,6 +71,10 @@ Set these under `environment:` in `docker-compose.yml`:
 The token encryption key is created on first start in `/home/cs/data/token-encryption-key`
 (mode 600). Back up the `home` volume to keep sessions, logins and that key together.
 
+The default repository, GitHub owners, claude.ai email, terminal mouse and agent permissions
+can also be changed in the app under **Settings → Server settings**. A value changed there wins
+over the environment until you reset it, and is kept in the `home` volume.
+
 ## Good to know
 
 - **Security:** agents run as `cs` with no sudo inside the container. Anyone signed in to
