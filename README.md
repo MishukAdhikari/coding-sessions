@@ -144,6 +144,41 @@ This is a tool for **one trusted operator per Unix account and instance**, not a
 
 The Ubuntu installer creates a dedicated non-root account without sudo access. New installations retain provider trust/approval prompts and filter inherited environment variables. These controls reduce exposure but do not isolate hostile workloads. Use a dedicated machine or VM for work you do not trust. Read [Security](docs/security.md) before exposing an instance.
 
+## Third-party software and services
+
+Coding Sessions is the glue. The coding itself is done by other companies' tools, and you sign in to them yourself.
+
+**Agents and where your work goes.** Each agent talks straight to its own vendor, under your account and that vendor's terms. Prompts, the code it reads and its output go to that vendor. Coding Sessions doesn't proxy or store that traffic.
+
+| Agent | Vendor |
+|---|---|
+| Claude Code | Anthropic |
+| Codex | OpenAI |
+| Command Code | Command Code |
+| Gemini CLI (preset) | Google |
+| Kimi Code (preset) | Moonshot AI |
+| Qwen Code (preset) | Alibaba (Qwen) |
+| opencode (preset) | opencode |
+
+Install only the agents you want; none is required. Details for the presets are in [docs/agents.md](docs/agents.md).
+
+**Software it runs on.** These are open-source projects under their own licenses:
+- [Bun](https://bun.sh) runs the app; Node.js and npm install the npm-based agents.
+- [ttyd](https://github.com/tsl0922/ttyd) serves the web terminal, and GNU screen keeps sessions alive. git, the GitHub CLI (`gh`), rsync and OpenSSH handle repositories and workspaces.
+- JavaScript libraries: SimpleWebAuthn (passkeys), jose, ipaddr.js and Playwright.
+- Optional, only if you turn them on:
+  - [Caddy](https://caddyserver.com) for HTTPS in Docker, or nginx with certbot from the Ubuntu installer. Both get certificates from Let's Encrypt.
+  - Playwright with Chromium for the claude.ai browser, which signs in to claude.ai to manage chats.
+
+**Connections the app makes itself:**
+- GitHub, for repositories you pick, for `gh` and for app updates.
+- The npm registry and claude.ai's installer, when you install or update agents.
+- The MCP servers you add as connectors, with their sign-in servers.
+- Let's Encrypt, if you use the HTTPS proxy.
+- claude.ai, if you enable the claude.ai browser.
+
+There is no telemetry or analytics, and the web app loads no scripts or fonts from other sites.
+
 ## Ubuntu quickstart
 
 Prerequisites:
