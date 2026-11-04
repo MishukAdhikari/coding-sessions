@@ -11,8 +11,41 @@ export interface BridgeOptions {
   revisionIntervalMs?: number;
 }
 
+/** Unset, empty, or a ${VAR} reference the agent left unexpanded because the variable was missing. */
+const absent = (value: string | undefined) => !value || /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(value);
+
+/**
+ * Started outside a managed launch — an agent's user-level config also loads this
+ * entry when the agent runs by hand — answer as an MCP server with no tools, so the
+ * agent starts cleanly instead of reporting a failed server on every run.
+ */
+async function runOffline(message: string): Promise<void> {
+  const reply = (id: unknown, body: Record<string, unknown>) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, ...body }) + "\n");
+  let buffer = "";
+  for await (const chunk of Bun.stdin.stream()) {
+    buffer += Buffer.from(chunk).toString("utf8");
+    if (buffer.length > 1024 * 1024) return;
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+      let msg: { id?: unknown; method?: unknown; params?: { protocolVersion?: unknown } };
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (msg.id === undefined || msg.id === null) continue;
+      if (msg.method === "initialize") {
+        reply(msg.id, { result: {
+          protocolVersion: typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "2025-06-18",
+          capabilities: { tools: {} }, serverInfo: { name: "coding-sessions", version: "offline" }, instructions: message,
+        } });
+      } else if (msg.method === "tools/list") reply(msg.id, { result: { tools: [] } });
+      else if (msg.method === "ping") reply(msg.id, { result: {} });
+      else reply(msg.id, { error: { code: -32601, message } });
+    }
+  }
+}
+
 export async function runBridge(options: BridgeOptions): Promise<void> {
   const token = process.env[options.tokenEnv] ?? "";
+  if (absent(process.env[options.tokenEnv]) && absent(process.env[options.urlEnv])) return runOffline(options.messages.unavailable);
   let endpoint: URL;
   try {
     endpoint = new URL(process.env[options.urlEnv] ?? "");

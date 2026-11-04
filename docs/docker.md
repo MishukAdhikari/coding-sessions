@@ -45,6 +45,8 @@ docker compose exec -it app claude      # sign in once; same for codex
 
 Or sign in from the app: **Settings → Agent authentication**.
 
+Agent presets install the same way (`install-provider-clis gemini kimi qwen opencode`), then add them in **Settings → Commands**. See [agents](agents.md).
+
 ## Update
 
 ```bash

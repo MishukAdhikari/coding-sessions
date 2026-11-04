@@ -491,7 +491,11 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <div id="sheet-commands" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-commands-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-commands-heading">Commands</h2>
-  <p class="sheet-body">Register any CLI agent on this server and it joins Claude, Codex and Command Code in the agent picker. It gets a managed session, a web terminal and history — but no remote control, chat link, or conversation resume.</p>
+  <p class="sheet-body">Add another CLI agent and it joins Claude, Codex and Command Code in the agent picker, with a managed session, a web terminal and history. Presets also connect the agent to Coding Sessions over MCP and follow the server's permission mode. Commands have no remote control, chat link, or conversation resume.</p>
+  <label class="label">Agent presets</label>
+  <div id="preset-list"></div>
+  <p class="hint">Third-party tools from their own vendors, with their own accounts and terms. <a href="https://github.com/MishukAdhikari/coding-sessions/blob/main/docs/agents.md" target="_blank" rel="noopener">What each preset sets up</a></p>
+  <label class="label">Your commands</label>
   <div id="command-list"></div>
   <form id="form-command" class="proj-form">
     <input id="input-command-label" class="field" type="text" placeholder="Name (e.g. Gemini)" maxlength="40" autocapitalize="off" required>

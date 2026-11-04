@@ -78,7 +78,7 @@ function fixture(mock: Mock, options: { live?: (id: string) => Promise<boolean> 
     database, codec: () => createSecretCodec(key), env: LOOPBACK,
     isLive: async identity => options.live ? await options.live(identity.launch_id) : true,
   });
-  const launch = (provider: "claude" | "codex" | "command-code", name: string = provider) => {
+  const launch = (provider: "claude" | "codex" | "command-code" | `cmd:${string}`, name: string = provider.replace(":", "-")) => {
     const launchId = randomUUID();
     database.query("INSERT INTO launches (screen,name,project_path,created_at,provider,launch_id,phase) VALUES (?,?,?,?,?,?,'ready')").run(`cs-${name}`, name, "/srv/demo", 1, provider, launchId);
     return { launchId, token: connectors.prepare(launchId) };
@@ -530,4 +530,16 @@ test("auth mode is explicit; credential, URL and mode changes advance the auth e
   expect(mock.seen.length).toBe(before);
   expect(() => f.connectors.setAuthMode(bearer.id, "magic" as never)).toThrow(ConnectorError);
   expect(f.connectors.setAuthMode(bearer.id, "none").auth.mode).toBe("none");
+});
+
+test("agent preset launches share one agent group, granted only when an operator picks it", async () => {
+  const mock = mockUpstream();
+  const f = await ready(mock, ["list_items"], ["codex"]);
+  const before = f.launch("cmd:gemini-cli");
+  expect(before.token).toMatch(/^csconn_/);
+  expect(await f.connectors.tools(before.token!)).toEqual([]);
+  f.connectors.setDefaultProviders(f.id, ["codex", "presets"]);
+  const after = f.launch("cmd:kimi-code");
+  expect((await f.connectors.tools(after.token!)).map(tool => tool.name)).toEqual(["lab__list_items"]);
+  expect(() => f.connectors.setDefaultProviders(f.id, ["cmd:kimi-code"])).toThrow();
 });

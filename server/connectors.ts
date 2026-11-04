@@ -10,8 +10,12 @@ import { ConnectorOAuthStore, type OAuthStatus } from "./connector-oauth-store";
 import { requestTokens, revokeTokens, sameAuthentication, scopeWithin, verifyIdToken } from "./connector-oauth-tokens";
 
 type Environment = Record<string, string | undefined>;
-export type Provider = "claude" | "codex" | "command-code";
-const PROVIDERS: readonly Provider[] = ["claude", "codex", "command-code"];
+/** "presets" covers every Command registered from an agent preset (cmd:<slug> launches). */
+export type Provider = "claude" | "codex" | "command-code" | "presets";
+const PROVIDERS: readonly Provider[] = ["claude", "codex", "command-code", "presets"];
+const providerOf = (launchProvider: string): Provider | null =>
+  /^cmd:[a-z0-9][a-z0-9-]{0,30}$/.test(launchProvider) ? "presets"
+    : PROVIDERS.includes(launchProvider as Provider) && launchProvider !== "presets" ? launchProvider as Provider : null;
 export const CONNECTOR_TOKEN = /^csconn_[A-Za-z0-9_-]{43}$/;
 
 export interface LaunchIdentity { launch_id: string; session_id: string; name: string; agent: Provider }
@@ -185,8 +189,9 @@ export class Connectors {
   private launch(launchId: string): LaunchIdentity | null {
     const row = this.db.query("SELECT launch_id, screen, name, provider FROM launches WHERE launch_id=? AND phase != 'failed'")
       .get(launchId) as { launch_id: string; screen: string; name: string; provider: string } | null;
-    if (!row || !PROVIDERS.includes(row.provider as Provider)) return null;
-    return { launch_id: row.launch_id, session_id: `m:${row.screen}`, name: row.name, agent: row.provider as Provider };
+    const agent = row ? providerOf(row.provider) : null;
+    if (!row || !agent) return null;
+    return { launch_id: row.launch_id, session_id: `m:${row.screen}`, name: row.name, agent };
   }
   /** The stored URL, revalidated against the current policy on every use. */
   private endpoint(row: Row): URL | null {
@@ -542,7 +547,7 @@ export class Connectors {
 
   setDefaultProviders(id: string, providers: unknown): ConnectorView {
     this.must(id);
-    if (!Array.isArray(providers) || providers.some(p => !PROVIDERS.includes(p as Provider))) return invalid("providers must be claude, codex or command-code.");
+    if (!Array.isArray(providers) || providers.some(p => !PROVIDERS.includes(p as Provider))) return invalid("providers must be claude, codex, command-code or presets.");
     this.db.query("UPDATE mcp_connectors SET default_providers=? WHERE id=?").run(JSON.stringify([...new Set(providers)].sort()), id);
     return this.view(id);
   }

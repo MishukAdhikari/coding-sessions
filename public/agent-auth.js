@@ -40,7 +40,7 @@
         label.dataset.authProviderCard = command.provider;
         const detail = command.envVar
           ? `${command.hasToken ? "Token stored" : "Token needed"} · ${command.envVar}`
-          : "Add a token env var first";
+          : command.preset ? "Signs in from its own terminal" : "Add a token env var first";
         label.innerHTML = `
           <input type="radio" name="auth-provider" value="${escapeHtml(command.provider)}"${command.envVar ? "" : " disabled"}>
           <span class="provider-mark provider-mark-command" aria-hidden="true">${escapeHtml((command.label[0] || "C").toUpperCase())}</span>
@@ -675,6 +675,6 @@
     // "Send a new code" replaces it on the server.
     $("btn-browser-cancel").addEventListener("click", stopBrowserPoll);
 
-    return { updateAvailability, dismissCodexAuth, dismissAccounts, openAccounts, refreshAccounts: loadAccounts };
+    return { updateAvailability, dismissCodexAuth, dismissAccounts, openAccounts, refreshAccounts: loadAccounts, openCommandToken: openCommandTokenSheet };
   };
 })();

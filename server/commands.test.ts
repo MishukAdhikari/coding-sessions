@@ -301,3 +301,40 @@ test("storing a token against a deleted command fails rather than resurrecting i
   deleteCommand(command.id, database);
   expect(setCommandToken(command.id, "sk-x", database).ok).toBe(false);
 });
+
+/* ---------- agent presets ---------- */
+
+test("a preset registers in one step with its binary and token variable, and is remembered", () => {
+  const database = freshDb();
+  const original = Bun.which;
+  // `sh` stands in for the agent's binary, so the test needs nothing installed.
+  (Bun as unknown as { which: (bin: string) => string | null }).which = (bin: string) => bin === "gemini" ? original("sh") : original(bin);
+  try {
+    const created = createCommand({ preset: "gemini" }, database);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.command).toMatchObject({ label: "Gemini CLI", slug: "gemini-cli", envVar: "GEMINI_API_KEY", preset: "gemini", args: [] });
+    expect(findCommand("gemini-cli", database)!.preset).toBe("gemini");
+    expect(createCommand({ preset: "gemini" }, database)).toMatchObject({ ok: false });
+    const renamed = createCommand({ preset: "gemini", label: "Gemini work", envVar: "GOOGLE_API_KEY" }, database);
+    expect(renamed).toMatchObject({ ok: true, command: { label: "Gemini work", envVar: "GOOGLE_API_KEY", preset: "gemini" } });
+    expect(createCommand({ preset: "gemini", label: "Gemini oauth", envVar: "" }, database)).toMatchObject({ ok: true, command: { envVar: null } });
+  } finally {
+    (Bun as unknown as { which: typeof original }).which = original;
+  }
+});
+
+test("a preset that is not installed says how to install it, and unknown presets are refused", () => {
+  const database = freshDb();
+  const result = createCommand({ preset: "kimi" }, database);
+  if (Bun.which("kimi")) return; // installed on this machine: covered by the test above
+  expect(result).toMatchObject({ ok: false });
+  if (!result.ok) expect(result.error).toContain("install-provider-clis kimi");
+  expect(createCommand({ preset: "nope" }, database)).toEqual({ ok: false, error: "Unknown agent preset." });
+});
+
+test("custom commands keep working and carry no preset", () => {
+  const database = freshDb();
+  const created = createCommand({ label: "Shell", bin: "sh" }, database);
+  expect(created).toMatchObject({ ok: true, command: { preset: null } });
+});

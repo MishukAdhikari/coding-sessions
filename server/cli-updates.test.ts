@@ -77,3 +77,15 @@ test("administrator-managed instance updates report their units and never invoke
   expect(await controller.control("run")).toMatchObject({ ok: false });
   expect(calls.some(argv => argv[0] === "sudo")).toBe(false);
 });
+
+test("preset agents report a version when installed and null when not", async () => {
+  const controller = createCliUpdates(async (argv) => {
+    if (argv[0] === "systemctl") return { code: 0, out: "LoadState=not-found\n" };
+    if (argv[0] === "gemini") return { code: 0, out: "0.66.0\n" };
+    if (["kimi", "qwen", "opencode"].includes(argv[0]!)) return { code: 127, out: "" };
+    return { code: 0, out: "1.2.3\n" };
+  }, async () => null);
+  expect((await controller.status()).versions).toEqual({
+    codex: "1.2.3", claude: "1.2.3", "command-code": "1.2.3", gemini: "0.66.0", kimi: null, qwen: null, opencode: null,
+  });
+});

@@ -1282,7 +1282,8 @@
     $("btn-cli-update-now").textContent = state?.running ? "Updating…" : "Update now";
     if (!state) return;
     $("cli-update-versions").replaceChildren();
-    for (const [id, name] of [["codex", "Codex"], ["claude", "Claude Code"], ["command-code", "Command Code"]]) {
+    const presets = [["gemini", "Gemini CLI"], ["kimi", "Kimi Code"], ["qwen", "Qwen Code"], ["opencode", "opencode"]];
+    for (const [id, name] of [["codex", "Codex"], ["claude", "Claude Code"], ["command-code", "Command Code"], ...presets.filter(([id]) => state.versions[id])]) {
       const label = document.createElement("dt");
       label.textContent = name;
       const version = document.createElement("dd");
@@ -1705,13 +1706,20 @@
         ? `${escapeHtml(c.envVar)} · ${c.hasToken ? "token stored" : "no token yet"}`
         : "no token env var";
       row.innerHTML = `<span>${escapeHtml(c.label)}<div class="pick-path">${escapeHtml(middlePath(argv, 44))}</div><div class="pick-path">${cred}</div></span>`;
+      if (c.envVar) {
+        const key = document.createElement("button");
+        key.className = "proj-del";
+        key.textContent = c.hasToken ? "Key" : "Add key";
+        key.addEventListener("click", () => agentAuth?.openCommandToken(c));
+        row.appendChild(key);
+      }
       const del = document.createElement("button");
       del.className = "proj-del";
       del.textContent = "Remove";
       del.addEventListener("click", async () => {
         try {
           await api(`/api/commands/${c.id}`, { method: "DELETE" });
-          await loadCommands();
+          await Promise.all([loadCommands(), loadPresets()]);
           await loadCapabilities(); // the agent picker is built from capabilities
         } catch (e) { showToast(e.message); }
       });
@@ -1720,11 +1728,52 @@
     }
   }
 
+  async function loadPresets() {
+    const wrap = $("preset-list");
+    wrap.replaceChildren();
+    let presets = [];
+    try { presets = (await api("/api/commands/presets")).presets; } catch (e) { showToast(e.message); return; }
+    for (const preset of presets) {
+      const row = document.createElement("div");
+      row.className = "proj-row";
+      const info = document.createElement("span");
+      info.textContent = preset.label;
+      const detail = document.createElement("div");
+      detail.className = "pick-path";
+      detail.textContent = preset.installed ? preset.notes : `Not installed. Run on the server: ${preset.installCommand}`;
+      info.append(detail);
+      const action = document.createElement("button");
+      action.className = "proj-del preset-add";
+      if (preset.registered) {
+        action.textContent = "Added";
+        action.disabled = true;
+      } else if (!preset.installed) {
+        action.textContent = "Copy";
+        action.addEventListener("click", () => {
+          navigator.clipboard?.writeText(preset.installCommand).then(() => showToast("Install command copied"), () => showToast(preset.installCommand));
+        });
+      } else {
+        action.textContent = "Add";
+        action.addEventListener("click", async () => {
+          action.disabled = true;
+          try {
+            const { command } = await api("/api/commands", { method: "POST", body: JSON.stringify({ preset: preset.id }) });
+            await Promise.all([loadPresets(), loadCommands(), loadCapabilities()]);
+            showToast(command.envVar ? `${command.label} added. Store its ${command.envVar} next.` : `${command.label} added — pick it when you start a session`);
+          } catch (e) { action.disabled = false; showToast(e.message); }
+        });
+      }
+      row.append(info, action);
+      wrap.append(row);
+    }
+  }
+
   $("btn-commands").addEventListener("click", () => {
     $("input-command-label").value = "";
     $("input-command-bin").value = "";
     $("input-command-args").value = "";
     $("input-command-env").value = "";
+    loadPresets();
     loadCommands();
     openSheet("sheet-commands");
   });

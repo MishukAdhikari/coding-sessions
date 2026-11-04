@@ -92,6 +92,23 @@ test("missing credentials or non-loopback endpoint fail without printing secrets
   }
 });
 
+test("outside a managed launch the bridge is an MCP server with no tools, not a failure", async () => {
+  for (const env of [{}, { CS_COMMUNICATOR_TOKEN: "${CS_COMMUNICATOR_TOKEN}", CS_COMMUNICATOR_URL: "$CS_COMMUNICATOR_URL" }]) {
+    const child = Bun.spawn([process.execPath, new URL("./communicator-stdio.ts", import.meta.url).pathname], {
+      stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "", ...env },
+    });
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n");
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) + "\n");
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_peers" } }) + "\n");
+    child.stdin.end();
+    const lines = (await new Response(child.stdout).text()).trim().split("\n").map(line => JSON.parse(line));
+    expect(await child.exited).toBe(0);
+    expect(lines[0].result.serverInfo.version).toBe("offline");
+    expect(lines[1].result.tools).toEqual([]);
+    expect(lines[2].error.message).toContain("outside a configured managed launch");
+  }
+});
+
 test("redirects cannot forward a launch credential to another endpoint", async () => {
   let targetHits = 0;
   const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => { targetHits++; return new Response("unexpected"); } });

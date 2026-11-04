@@ -55,3 +55,23 @@ test("ownership is rechecked after an awaited holder lookup before a new credent
  await checking;expect(await startCommunicatingSession(options,runtime)).toEqual({ok:true});const identity=await comm.identity(token,false);const originalToken=token;
  release();expect((await delayed).ok).toBe(false);expect(spawns).toBe(1);expect(await comm.identity(originalToken,false)).toEqual(identity);database.close();
 });
+test("an agent preset configures MCP itself: its env joins the launch, the token stays out of argv, and the built-in configure is skipped", async () => {
+ const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let configured=false;let connectorsSeen=null as boolean|null;
+ const result=await startCommunicatingSession({screen:"cs-gem",name:"gem",projectPath:"/srv/demo",provider:"cmd:gemini-cli",remoteControl:0,
+  env:{GEMINI_API_KEY:"key"},mcp:async(withConnectors)=>{connectorsSeen=withConnectors;return{OPENCODE_CONFIG_CONTENT:"{}"};},command:()=>"gemini --approval-mode=yolo"},
+  {database:db,communicator:comm,hasHolder:async()=>false,uuid:randomUUID,now:()=>1,configure:async()=>{configured=true;return[];},spawn:async(screen,cmd,{env}={})=>{
+   const token=env!.CS_COMMUNICATOR_TOKEN!;expect(cmd).not.toContain(token);
+   expect(env).toMatchObject({GEMINI_API_KEY:"key",OPENCODE_CONFIG_CONTENT:"{}"});
+   expect((await comm.identity(token,false)).session_id).toBe("m:"+screen);
+   return{code:0,out:"",err:""};
+  }});
+ expect(result).toEqual({ok:true});expect(configured).toBe(false);expect(connectorsSeen).toBe(false);
+ expect(db.query("SELECT provider,phase FROM launches WHERE screen='cs-gem'").get()).toEqual({provider:"cmd:gemini-cli",phase:"ready"});db.close();
+});
+test("a preset whose MCP setup fails does not spawn", async () => {
+ const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let spawned=false;
+ const result=await startCommunicatingSession({screen:"cs-kimi",name:"kimi",projectPath:"/srv/demo",provider:"cmd:kimi-code",remoteControl:0,
+  mcp:async()=>{throw new Error("Kimi Code MCP name coding_sessions_communicator is already used by another configuration.");},command:()=>"kimi"},
+  {database:db,communicator:comm,hasHolder:async()=>false,uuid:randomUUID,now:()=>1,configure:async()=>[],spawn:async()=>{spawned=true;return{code:0,out:"",err:""};}});
+ expect(result.ok).toBe(false);expect(spawned).toBe(false);db.close();
+});

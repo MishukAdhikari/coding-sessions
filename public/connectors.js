@@ -10,7 +10,7 @@
     unavailable: ["warning", "Unavailable", "The server could not be reached or answered unexpectedly."],
     disabled: ["neutral", "Disabled", "No session can use this connector until you enable it."],
   };
-  const PROVIDERS = [["claude", "Claude"], ["codex", "Codex"], ["command-code", "Command Code"]];
+  const PROVIDERS = [["claude", "Claude"], ["codex", "Codex"], ["command-code", "Command Code"], ["presets", "Agent presets"]];
   const OUTCOMES = { ok: "ok", tool_error: "tool error", denied: "denied", invalid: "invalid arguments", revoked: "revoked", rate_limited: "busy", blocked: "refused",
     auth: "token rejected", forbidden: "no permission", unavailable: "unavailable", timeout: "timed out", cancelled: "cancelled", protocol: "bad response", too_large: "too large", upstream_error: "server error" };
   const icons = {

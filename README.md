@@ -18,6 +18,7 @@ never sleeps. Drive them from your phone, your terminal, or another agent.
 - **Answer from anywhere.** See which session is waiting on you, read its screen and reply from your phone.
 - **Let agents team up.** Ask a Claude session to get a second opinion from a Codex session. Sessions find and message each other over a built-in MCP, with no setup.
 - **Connect a tool once.** Sign in to an MCP server one time and every agent shares it.
+- **Bring more agents.** One-click presets add Gemini CLI, Kimi Code, Qwen Code and opencode, with the same built-in MCP. They're third-party tools; see [agents](docs/agents.md).
 - **Steer it from other agents.** Claude Code, Codex or the Claude app can launch and drive sessions over MCP.
 - **Looks after itself.** Docker or Ubuntu install, passkey sign-in, and daily updates that roll back if a release won't start.
 
@@ -197,6 +198,8 @@ Install and authenticate agents as `cs-personal`, never as root. Once Node.js 22
 ```bash
 sudo -u cs-personal -H /opt/coding-sessions/personal/current/deploy/install-provider-clis codex claude command-code
 ```
+
+The same helper installs the agent presets (`gemini kimi qwen opencode`); see [docs/agents.md](docs/agents.md).
 
 Use **Agent authentication** in the app for supported sign-in/account actions. Account changes apply to the whole instance. Existing logins may have an unknown login date, and providers do not all expose email addresses.
 

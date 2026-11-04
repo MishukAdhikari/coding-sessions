@@ -18,6 +18,11 @@ const VERSION_COMMANDS: Array<{ name: string; argv: string[] }> = [
   { name: "codex", argv: ["codex", "--version"] },
   { name: "claude", argv: ["claude", "--version"] },
   { name: "command-code", argv: ["command-code", "--no-auto-update", "--version"] },
+  // Agent presets: reported as null when not installed.
+  { name: "gemini", argv: ["gemini", "--version"] },
+  { name: "kimi", argv: ["kimi", "--version"] },
+  { name: "qwen", argv: ["qwen", "--version"] },
+  { name: "opencode", argv: ["opencode", "--version"] },
 ];
 
 async function run(argv: string[]): Promise<CommandResult> {

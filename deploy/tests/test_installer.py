@@ -54,6 +54,18 @@ class InstallerContractTests(unittest.TestCase):
         none = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"], input="main\n", capture_output=True, text=True)
         self.assertEqual((none.returncode, none.stdout.strip()), (0, ""))
 
+    def test_preset_agents_install_and_update_from_their_official_npm_packages(self):
+        installer = (ROOT / "deploy/install-provider-clis").read_text()
+        updater = (ROOT / "deploy/update-coding-clis").read_text()
+        for provider, package, binary in [("gemini", "@google/gemini-cli", "gemini"), ("kimi", "@moonshot-ai/kimi-code", "kimi"),
+                                          ("qwen", "@qwen-code/qwen-code", "qwen"), ("opencode", "opencode-ai", "opencode")]:
+            with self.subTest(provider=provider):
+                self.assertIn(f"{provider}) echo '{package} {binary} ", installer)
+                self.assertIn(f"'{package} {binary}'", updater)
+        self.assertIn("kimi) echo '@moonshot-ai/kimi-code kimi 22.19.0'", installer)
+        unknown = subprocess.run(["bash", str(ROOT / "deploy/install-provider-clis"), "nope"], capture_output=True, text=True,
+                                 env={**os.environ, "HOME": tempfile.gettempdir()})
+        self.assertNotEqual(unknown.returncode, 0)
     @unittest.skipUnless(shutil.which("timeout"), "needs coreutils timeout, as on Ubuntu")
     def test_app_updater_reads_the_settings_channel_only_as_a_fixed_word(self):
         def choice(content=None, link=False):
