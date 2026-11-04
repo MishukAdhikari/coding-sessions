@@ -1281,7 +1281,8 @@
     $("btn-cli-update-now").textContent = state?.running ? "Updating…" : "Update now";
     if (!state) return;
     $("cli-update-versions").replaceChildren();
-    for (const [id, name] of [["codex", "Codex"], ["claude", "Claude Code"], ["command-code", "Command Code"]]) {
+    const presets = [["gemini", "Gemini CLI"], ["kimi", "Kimi Code"], ["qwen", "Qwen Code"], ["opencode", "opencode"]];
+    for (const [id, name] of [["codex", "Codex"], ["claude", "Claude Code"], ["command-code", "Command Code"], ...presets.filter(([id]) => state.versions[id])]) {
       const label = document.createElement("dt");
       label.textContent = name;
       const version = document.createElement("dd");

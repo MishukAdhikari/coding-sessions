@@ -36,6 +36,14 @@ if [[ -x $HOME/.local/bin/command-code ]]; then
   npm install --global --prefix "$HOME/.local" command-code@latest || failed=1
   "$HOME/.local/bin/command-code" --no-auto-update --version || failed=1
 fi
+# Agent presets: updated only where the operator installed them.
+for agent in '@google/gemini-cli gemini' '@moonshot-ai/kimi-code kimi' '@qwen-code/qwen-code qwen' 'opencode-ai opencode'; do
+  read -r package bin <<<"$agent"
+  if [[ -x $HOME/.local/bin/$bin ]]; then
+    npm install --global --prefix "$HOME/.local" "$package@latest" || failed=1
+    "$HOME/.local/bin/$bin" --version </dev/null || failed=1
+  fi
+done
 if [[ -x $HOME/.local/bin/claude ]]; then
   "$HOME/.local/bin/claude" install latest || failed=1
   "$HOME/.local/bin/claude" --version || failed=1
