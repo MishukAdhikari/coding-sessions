@@ -152,16 +152,17 @@ export function hasPasskey(): boolean {
   return usableCredentials().length > 0;
 }
 
-const challenges = new Map<string, { challenge: string; purpose: "reg" | "auth"; expiresAt: number }>();
+type ChallengePurpose = "reg" | "auth" | "step-up";
+const challenges = new Map<string, { challenge: string; purpose: ChallengePurpose; expiresAt: number }>();
 
-function stashChallenge(challenge: string, purpose: "reg" | "auth"): string {
+function stashChallenge(challenge: string, purpose: ChallengePurpose): string {
   const id = randomBytes(16).toString("base64url");
   challenges.set(id, { challenge, purpose, expiresAt: Date.now() + 5 * 60 * 1000 });
   for (const [k, v] of challenges) if (v.expiresAt < Date.now()) challenges.delete(k);
   return id;
 }
 
-function takeChallenge(id: string, purpose: "reg" | "auth"): string | null {
+function takeChallenge(id: string, purpose: ChallengePurpose): string | null {
   const entry = challenges.get(id);
   challenges.delete(id);
   if (!entry || entry.purpose !== purpose || entry.expiresAt < Date.now()) return null;
@@ -204,7 +205,7 @@ export async function verifyRegistration(challengeId: string, response: unknown,
   return { verified: true as const };
 }
 
-export async function authenticationOptions() {
+export async function authenticationOptions(purpose: "auth" | "step-up" = "auth") {
   const options = await generateAuthenticationOptions({
     rpID: RP_ID,
     userVerification: "preferred",
@@ -213,11 +214,16 @@ export async function authenticationOptions() {
       transports: c.transports ? JSON.parse(c.transports) : undefined,
     })),
   });
-  return { options, challengeId: stashChallenge(options.challenge, "auth") };
+  return { options, challengeId: stashChallenge(options.challenge, purpose) };
 }
 
-export async function verifyAuthentication(challengeId: string, response: unknown) {
-  const expectedChallenge = takeChallenge(challengeId, "auth");
+/**
+ * Check a passkey assertion. "step-up" re-confirms an already signed-in operator
+ * before a sensitive change; its challenges are never accepted for sign-in, and
+ * sign-in challenges are never accepted for it.
+ */
+export async function verifyAuthentication(challengeId: string, response: unknown, purpose: "auth" | "step-up" = "auth") {
+  const expectedChallenge = takeChallenge(challengeId, purpose);
   if (!expectedChallenge) return { verified: false as const, error: "Challenge expired — try again." };
   const credId = (response as { id?: string })?.id;
   const cred = usableCredentials().find((c) => c.cred_id === credId);

@@ -37,6 +37,8 @@ import { handleCliUpdatesRoute } from "./cli-updates-route";
 import { appUpdatePaths, createAppUpdates } from "./app-updates";
 import { handleAppUpdatesRoute } from "./app-updates-route";
 import { serverSettings } from "./server-settings-instance";
+import { handleServerSettingsRoute } from "./server-settings-route";
+import { createStepUpGrants } from "./step-up";
 import { agentAccounts } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 import { recordAccountLogin } from "./account-history";
@@ -45,6 +47,7 @@ const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
 const appUpdates = createAppUpdates(appUpdatePaths(config.dataDir), () => serverSettings.get("updateChannel"));
 useMouseSetting(serverSettings.mouseEnabled);
+const stepUpGrants = createStepUpGrants();
 const COOKIE_NAME = "xs_auth";
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 
@@ -308,6 +311,23 @@ const server = Bun.serve({
       controller: appUpdates,
     });
     if (appUpdatesResponse) return appUpdatesResponse;
+
+    const serverSettingsResponse = await handleServerSettingsRoute(req, {
+      cookieName: COOKIE_NAME,
+      origin: auth.ORIGIN,
+      checkBrowserSession: auth.checkAuthSession,
+      settings: serverSettings,
+      grants: stepUpGrants,
+      stepUp: {
+        hasPasskey: auth.hasPasskey,
+        options: () => auth.authenticationOptions("step-up"),
+        verifyPasskey: async (challengeId, response) =>
+          typeof challengeId === "string" && (await auth.verifyAuthentication(challengeId, response, "step-up")).verified,
+        verifyPassword: auth.verifyPassword,
+      },
+      rateLimited: (key) => auth.rateLimited(key, 10),
+    });
+    if (serverSettingsResponse) return serverSettingsResponse;
 
     const connectorsResponse = await handleConnectorsRoute(req, {
       cookieName: COOKIE_NAME, checkBrowserSession: auth.checkAuthSession, isAuthenticated: isAuthed, connectors,
