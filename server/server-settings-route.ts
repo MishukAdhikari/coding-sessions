@@ -55,7 +55,7 @@ export async function handleServerSettingsRoute(req: Request, deps: ServerSettin
   if (!isSettingName(name)) return json({ error: "Unknown setting." }, 422);
   // Turning agent prompts off (or back on) needs the operator to confirm again first.
   if (name === "agentPermissions" && !deps.grants.consume(body.grant, session)) {
-    return json({ error: "Confirm with your passkey before changing agent permissions." }, 403);
+    return json({ error: "Confirm it's you before changing agent permissions." }, 403);
   }
   if (body.reset === true) {
     deps.settings.reset(name);
