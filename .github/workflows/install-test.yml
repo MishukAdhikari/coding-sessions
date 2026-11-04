@@ -60,3 +60,41 @@ jobs:
         run: |
           sudo journalctl -u coding-sessions@personal -n 100 --no-pager || true
           sudo journalctl -u caddy -n 50 --no-pager || true
+
+  # The other supported systems, each booted with systemd in a privileged container.
+  distros:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "debian:13", "ubuntu:22.04", "ubuntu:26.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot ${{ matrix.image }} with systemd
+        run: |
+          printf 'FROM %s\nENV container=docker\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl\nCMD ["/sbin/init"]\n' "${{ matrix.image }}" > Dockerfile.ci
+          docker build -q -t cs-ci -f Dockerfile.ci .
+          docker run -d --name box --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock -v "$PWD":/src:ro cs-ci
+          for _ in $(seq 1 30); do docker exec box systemctl is-system-running 2>/dev/null | grep -qE 'running|degraded' && break; sleep 2; done
+          docker exec box sh -c 'cp -a /src /root/coding-sessions && cat /etc/os-release | head -n 2'
+      - name: Install
+        run: docker exec box /root/coding-sessions/deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes
+      - name: The app, the agents, the browser and the sign-in link work
+        run: |
+          set -x
+          docker exec box systemctl is-active --quiet coding-sessions@personal.service
+          docker exec box curl -fsS -o /dev/null http://127.0.0.1:9121/
+          docker exec box coding-sessions agents | tee agents.txt
+          grep -E '^ +claude +[0-9]' agents.txt
+          grep -E '^ +gemini +[0-9]' agents.txt
+          docker exec box sh -c 'ls /var/lib/coding-sessions/personal/.cache/ms-playwright' | grep chromium
+          docker exec box ttyd --version
+          docker exec box gh --version
+          docker exec box sh -c 'coding-sessions setup-link 2>/dev/null' | grep -q '#setup=cssetup_'
+          docker exec box coding-sessions setup --skip-dns-check --yes
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker exec box journalctl -u coding-sessions@personal -n 100 --no-pager || true
+          docker exec box journalctl -u caddy -n 30 --no-pager || true
