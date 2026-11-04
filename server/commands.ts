@@ -7,10 +7,12 @@
  * launch line quotes each token exactly once. A label of `; rm -rf /` is data.
  */
 import { accessSync, constants, statSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { db } from "./db";
 import { sealSecret, openSecret, type SecretCodec } from "./secrets";
+import { AGENT_PRESETS, findPreset, type AgentPresetId } from "./agent-presets";
 import { COMMAND_SLUG_RE, commandProviderId, type CommandProvider } from "./session-provider";
 
 export interface CustomCommand {
@@ -24,6 +26,8 @@ export interface CustomCommand {
   envVar: string | null;
   /** Whether a token is stored. The token itself never leaves the server. */
   hasToken: boolean;
+  /** Set when registered from an agent preset: the launch adds MCP and permission options. */
+  preset: AgentPresetId | null;
   createdAt: number;
 }
 
@@ -35,6 +39,7 @@ interface CommandRow {
   args: string;
   env_var: string | null;
   token: string | null;
+  preset: string | null;
   created_at: number;
 }
 
@@ -108,10 +113,33 @@ export function tokenizeArgs(line: string): { ok: true; args: string[] } | { ok:
   return { ok: true, args };
 }
 
-export type CommandDraft = { label: string; bin: string; args: string[]; envVar: string | null };
+export type CommandDraft = { label: string; bin: string; args: string[]; envVar: string | null; preset: AgentPresetId | null };
+
+/** A preset's binary: on PATH, or where deploy/install-provider-clis puts it. */
+export function presetBin(bin: string, home = homedir()): string {
+  return Bun.which(bin) ?? join(home, ".local", "bin", bin);
+}
 
 export function validateDraft(input: unknown): { ok: true; draft: CommandDraft & { slug: string } } | { ok: false; error: string } {
-  const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+  let body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+
+  // A preset fills in what the operator did not type; anything typed still wins.
+  let preset: AgentPresetId | null = null;
+  if (body.preset !== undefined && body.preset !== null) {
+    const found = findPreset(body.preset);
+    if (!found) return { ok: false, error: "Unknown agent preset." };
+    preset = found.id;
+    const typed = (key: string) => typeof body[key] === "string" && (body[key] as string).trim() !== "";
+    body = {
+      ...body,
+      label: typed("label") ? body.label : found.label,
+      bin: presetBin(found.bin),
+      envVar: typed("envVar") ? body.envVar : found.envVar,
+    };
+    if (!resolveBin(String(body.bin)).ok) {
+      return { ok: false, error: `${found.label} is not installed on this server. Install it with: install-provider-clis ${found.id}` };
+    }
+  }
 
   const label = String(body.label ?? "").trim();
   if (!label) return { ok: false, error: "Give the command a name." };
@@ -150,7 +178,7 @@ export function validateDraft(input: unknown): { ok: true; draft: CommandDraft &
   const resolved = resolveBin(String(body.bin ?? ""));
   if (!resolved.ok) return resolved;
 
-  return { ok: true, draft: { label, slug, bin: resolved.path, args, envVar: rawEnv || null } };
+  return { ok: true, draft: { label, slug, bin: resolved.path, args, envVar: rawEnv || null, preset } };
 }
 
 const toCommand = (row: CommandRow): CustomCommand => ({
@@ -162,6 +190,7 @@ const toCommand = (row: CommandRow): CustomCommand => ({
   args: parseArgs(row.args),
   envVar: row.env_var,
   hasToken: !!row.token,
+  preset: findPreset(row.preset)?.id ?? null,
   createdAt: row.created_at,
 });
 
@@ -176,13 +205,13 @@ function parseArgs(raw: string): string[] {
 }
 
 export function listCommands(database: Database = db): CustomCommand[] {
-  return (database.query("SELECT id, slug, label, bin, args, env_var, token, created_at FROM custom_commands ORDER BY label COLLATE NOCASE")
+  return (database.query("SELECT id, slug, label, bin, args, env_var, token, preset, created_at FROM custom_commands ORDER BY label COLLATE NOCASE")
     .all() as CommandRow[]).map(toCommand);
 }
 
 export function findCommand(slug: string, database: Database = db): CustomCommand | null {
   if (!COMMAND_SLUG_RE.test(slug)) return null;
-  const row = database.query("SELECT id, slug, label, bin, args, env_var, token, created_at FROM custom_commands WHERE slug = ?")
+  const row = database.query("SELECT id, slug, label, bin, args, env_var, token, preset, created_at FROM custom_commands WHERE slug = ?")
     .get(slug) as CommandRow | null;
   return row ? toCommand(row) : null;
 }
@@ -190,13 +219,13 @@ export function findCommand(slug: string, database: Database = db): CustomComman
 export function createCommand(input: unknown, database: Database = db): { ok: true; command: CustomCommand } | { ok: false; error: string } {
   const validated = validateDraft(input);
   if (!validated.ok) return validated;
-  const { label, slug, bin, args, envVar } = validated.draft;
+  const { label, slug, bin, args, envVar, preset } = validated.draft;
 
   if (findCommand(slug, database)) {
     return { ok: false, error: `A command called “${label}” already exists.` };
   }
-  database.query("INSERT INTO custom_commands (slug, label, bin, args, env_var, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(slug, label, bin, JSON.stringify(args), envVar, Date.now());
+  database.query("INSERT INTO custom_commands (slug, label, bin, args, env_var, preset, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(slug, label, bin, JSON.stringify(args), envVar, preset, Date.now());
   const created = findCommand(slug, database);
   return created ? { ok: true, command: created } : { ok: false, error: "Could not save that command." };
 }
@@ -244,4 +273,15 @@ export function commandEnv(slug: string, database: Database = db, secrets: Secre
  */
 export function deleteCommand(id: number, database: Database = db): boolean {
   return database.query("DELETE FROM custom_commands WHERE id = ?").run(id).changes > 0;
+}
+
+/** The presets, with whether each is installed here and already registered. */
+export function listPresets(database: Database = db) {
+  const registered = new Set(listCommands(database).map(command => command.preset).filter(Boolean));
+  return AGENT_PRESETS.map(preset => ({
+    id: preset.id, label: preset.label, envVar: preset.envVar, mcp: preset.mcp, homepage: preset.homepage, notes: preset.notes,
+    installed: resolveBin(presetBin(preset.bin)).ok,
+    registered: registered.has(preset.id),
+    installCommand: `install-provider-clis ${preset.id}`,
+  }));
 }

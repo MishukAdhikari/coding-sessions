@@ -162,6 +162,8 @@ export function applyDatabaseSchema(database: Database): void {
   // The token is write-only over the API and never travels in argv (see sessions.ts).
   addColumn(database, "ALTER TABLE custom_commands ADD COLUMN env_var TEXT");
   addColumn(database, "ALTER TABLE custom_commands ADD COLUMN token TEXT");
+  // Set when a Command was registered from an agent preset (server/agent-presets.ts).
+  addColumn(database, "ALTER TABLE custom_commands ADD COLUMN preset TEXT");
 
   // MCP connector OAuth (see server/oauth.ts). Clients register themselves; codes and
   // tokens are stored only as hashes, like auth_sessions and cli_tokens.

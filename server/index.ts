@@ -19,7 +19,7 @@ import { handleGithubAuthRoute } from "./github-auth-route";
 import { githubStatus, saveGithubToken, removeGithubAuth } from "./github-auth";
 import { validateProjectPath } from "./project-path";
 import { hostStats } from "./host-stats";
-import { clearCommandToken, createCommand, deleteCommand, findCommand, listCommands, setCommandToken } from "./commands";
+import { clearCommandToken, createCommand, deleteCommand, findCommand, listCommands, listPresets, setCommandToken } from "./commands";
 import { clearCommandCodeToken, hasCommandCodeToken, preflightCommandCode, setCommandCodeToken } from "./command-code";
 import { fetchBranches, fetchPull, parsePullRef, parseRepoRef } from "./repo-refs";
 import * as oauth from "./oauth";
@@ -374,6 +374,11 @@ const server = Bun.serve({
     if (path === "/api/commands" && method === "GET") {
       if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
       return json({ commands: listCommands() });
+    }
+
+    if (path === "/api/commands/presets" && method === "GET") {
+      if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
+      return json({ presets: listPresets() });
     }
 
     if (path === "/api/commands" && method === "POST") {

@@ -14,8 +14,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { lastTurnState, type TurnState } from "./turn-state";
-import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type SessionProvider } from "./session-provider";
+import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type CommandProvider, type SessionProvider } from "./session-provider";
 import { commandEnv, findCommand, resolveBin, type CustomCommand } from "./commands";
+import { findPreset, presetLaunch } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
 import { codexActivity, isCodexSessionId } from "./codex-state";
 import {
@@ -554,6 +555,22 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
   const resolved = resolveBin(command.bin);
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
+  const preset = findPreset(command.preset);
+  if (preset) {
+    // Read the permission mode once, so the flags and the session agree.
+    const unrestricted = config.unrestrictedAgents;
+    let launch: { args: string[]; env: Record<string, string> } = { args: [], env: {} };
+    return startCommunicatingSession({
+      screen: options.screen, name: options.name, projectPath: options.projectPath, provider: options.provider as CommandProvider, remoteControl: 0,
+      mcp: async (withConnectors) => {
+        launch = presetLaunch(preset, { unrestricted, connectors: withConnectors });
+        return launch.env;
+      },
+      env: commandEnv(slug!),
+      command: () => `${options.setupPrefix ?? ""}${buildCommandLaunch({ bin: resolved.path, args: [...command.args, ...launch.args] }, options.projectPath)}`,
+    });
+  }
+
   const inner = `${options.setupPrefix ?? ""}${buildCommandLaunch({ bin: resolved.path, args: command.args }, options.projectPath)}`;
   // The credential is handed to `screen` through its environment, which the agent
   // inherits. It must never go in argv: /proc/<pid>/cmdline is world-readable, so
@@ -576,8 +593,10 @@ export interface CommunicatingSessionOptions {
   screen: string;
   name: string;
   projectPath: string;
-  provider: "claude" | "command-code";
+  provider: "claude" | "command-code" | CommandProvider;
   providerBin?: string;
+  /** Agent presets configure MCP themselves; returns environment to add to the launch. */
+  mcp?: (withConnectors: boolean) => Promise<Record<string, string>>;
   remoteControl: number;
   resumeId?: string | null;
   claudeUrl?: string | null;
@@ -605,10 +624,14 @@ const communicatingRuntime: CommunicatingSessionRuntime = {
 
 /** Reserve identity before the child can initialize MCP; restore previous history if spawn fails. */
 export async function startCommunicatingSession(options: CommunicatingSessionOptions, runtime: CommunicatingSessionRuntime = communicatingRuntime): Promise<{ ok: true } | { ok: false; error: string }> {
-  let args: string[];
+  let args: string[] = [];
+  let mcpEnv: Record<string, string> = {};
   // Decided once, so the configured entry and the capability below always agree.
   const withConnectors = runtime.connectors?.available() ?? false;
-  try { args = await runtime.configure(options.provider, options.projectPath, options.providerBin, withConnectors); }
+  try {
+    if (options.mcp) mcpEnv = await options.mcp(withConnectors);
+    else if (!isCommandProvider(options.provider)) args = await runtime.configure(options.provider, options.projectPath, options.providerBin, withConnectors);
+  }
   catch (error) { return { ok: false, error: safeLaunchError((error as Error).message, "Could not configure session communication.") }; }
   const database = runtime.database;
   const previous = database.query(`SELECT ${launchColumns} FROM launches WHERE screen=?`).get(options.screen) as LaunchRow | null;
@@ -630,7 +653,7 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
     const { token } = runtime.communicator.prepare(launchId);
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
-    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...options.env, ...communicatorEnvironment(token, config.port, connectorToken) } });
+    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...options.env, ...mcpEnv, ...communicatorEnvironment(token, config.port, connectorToken) } });
     if (result.code !== 0) throw new Error(safeLaunchError(result.err, "Session failed to start."));
     database.query("UPDATE launches SET phase='ready' WHERE launch_id=? AND phase='preparing'").run(launchId);
     if (options.resumeArchiveId != null) database.query("DELETE FROM archive WHERE id=?").run(options.resumeArchiveId);

@@ -5,7 +5,7 @@ export interface CommunicatorIdentity {
   launch_id: string;
   session_id: string;
   name: string;
-  agent: "claude" | "codex" | "command-code";
+  agent: "claude" | "codex" | "command-code" | `cmd:${string}`;
 }
 export interface CommunicatorMessage {
   id: string;
@@ -42,6 +42,8 @@ const invalid = (message: string): never => { throw new CommunicatorError("inval
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 const RETENTION_MS = 30 * 86400_000;
 const PROVIDERS = new Set(["claude", "codex", "command-code"]);
+/** Built-in agents, and Commands registered from an agent preset (launched with the communicator). */
+const supportedProvider = (provider: string) => PROVIDERS.has(provider) || /^cmd:[a-z0-9][a-z0-9-]{0,30}$/.test(provider);
 const fields = (value: unknown, allowed: string[]): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid("Expected an object.");
   if (Object.keys(value).some(key => !allowed.includes(key))) return invalid("Unknown argument.");
@@ -70,7 +72,7 @@ export class Communicator {
   private current(launchId: string): CommunicatorIdentity | null {
     const row = this.database.query("SELECT launch_id, screen, name, provider FROM launches WHERE launch_id=? AND phase != 'failed'")
       .get(launchId) as { launch_id: string; screen: string; name: string; provider: string } | null;
-    if (!row || !PROVIDERS.has(row.provider)) return null;
+    if (!row || !supportedProvider(row.provider)) return null;
     return { launch_id: row.launch_id, session_id: `m:${row.screen}`, name: row.name, agent: row.provider as CommunicatorIdentity["agent"] };
   }
 
