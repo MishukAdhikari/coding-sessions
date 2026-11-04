@@ -88,7 +88,8 @@ jobs:
           docker exec box coding-sessions agents | tee agents.txt
           grep -E '^ +claude +[0-9]' agents.txt
           grep -E '^ +gemini +[0-9]' agents.txt
-          docker exec box sh -c 'ls /var/lib/coding-sessions/personal/.cache/ms-playwright' | grep chromium
+          # Playwright 1.59 doesn't support Ubuntu 26.04 yet: setup skips the browser there with a warning.
+          if [ "${{ matrix.image }}" != "ubuntu:26.04" ]; then docker exec box sh -c 'ls /var/lib/coding-sessions/personal/.cache/ms-playwright' | grep chromium; fi
           docker exec box ttyd --version
           docker exec box gh --version
           docker exec box sh -c 'coding-sessions setup-link 2>/dev/null' | grep -q '#setup=cssetup_'

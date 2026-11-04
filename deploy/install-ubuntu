@@ -264,8 +264,28 @@ if ((nginx)); then
   if ((start)); then systemctl reload nginx; fi
 fi
 systemd-analyze verify "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer" "coding-sessions-app-update@$instance.service" "coding-sessions-app-update@$instance.timer"
+credential_note="Credentials remain root-only in $config_root/credentials/$instance/."
 if ((start)); then
   systemctl daemon-reload
+  # Check that systemd can hand this service its credentials. Some hosts can't (LXC and
+  # other container-based VPSes); there the service gets owner-only copies in its own
+  # home instead, as the Docker image does. Only digests are compared, never printed.
+  probe=$config_root/credentials/$instance/token-encryption-key
+  want=$(sha256sum < "$probe" | cut -d' ' -f1)
+  got=$(systemd-run --wait --pipe --quiet --collect -p User="$service_user" -p LoadCredential=probe:"$probe" \
+    sh -c 'sha256sum < "$CREDENTIALS_DIRECTORY/probe"' 2>/dev/null | cut -d' ' -f1 || true)
+  if [[ $got != "$want" ]]; then
+    fallback=$instance_home/credentials
+    [[ ! -L $fallback ]] || fail 'refusing credential fallback symlink'
+    runuser -u "$service_user" -- install -d -m 0700 "$fallback"
+    for credential in admin-password token-encryption-key; do
+      [[ ! -L $fallback/$credential ]] || fail 'refusing credential fallback symlink'
+      install -o "$service_user" -g "$service_user" -m 0600 "$config_root/credentials/$instance/$credential" "$fallback/$credential"
+    done
+    grep -q '^CS_TOKEN_KEY_FILE=' "$config_root/$instance.env" \
+      || printf 'CS_TOKEN_KEY_FILE=%s/token-encryption-key\nCS_ADMIN_PASSWORD_FILE=%s/admin-password\n' "$fallback" "$fallback" >> "$config_root/$instance.env"
+    credential_note="systemd here can't pass credentials to services, so the service reads owner-only copies in $fallback."
+  fi
   systemctl enable "coding-sessions@$instance.service"
   systemctl restart "coding-sessions@$instance.service"
   healthy=0
@@ -278,7 +298,7 @@ if ((start)); then
   # Checks daily but changes nothing until the owner turns on automatic updates in Settings.
   systemctl enable --now "coding-sessions-app-update@$instance.timer"
 fi
-printf 'Installed %s. Credentials remain root-only in %s/credentials/%s/.\n' "$instance" "$config_root" "$instance"
+printf 'Installed %s. %s\n' "$instance" "${credential_note:-Credentials remain root-only in $config_root/credentials/$instance/.}"
 [[ ${CS_INSTALL_CALLER:-} = cli ]] || printf 'Complete HTTPS before browser use: sudo certbot --nginx -d %s\n' "$host"
 printf 'Administrator-controlled CLI updates: sudo systemctl enable --now coding-sessions-update@%s.timer\n' "$instance"
 printf 'App updates: turn on "Automatic updates" in Settings, or run now: sudo %s/current/deploy/update-app %s --now\n' "$app_root" "$instance"
