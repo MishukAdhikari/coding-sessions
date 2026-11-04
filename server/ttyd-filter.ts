@@ -55,7 +55,11 @@ export interface FilterOptions {
   mouse?: boolean;
 }
 
-const mouseAllowed = (opts?: FilterOptions): boolean => !!opts?.mouse && readCsSetting(process.env, "CS_TERM_MOUSE") !== "off";
+// The server wires this to Settings; on its own the filter follows CS_TERM_MOUSE as before.
+let mouseSetting = (): boolean => readCsSetting(process.env, "CS_TERM_MOUSE") !== "off";
+export function useMouseSetting(enabled: () => boolean): void { mouseSetting = enabled; }
+
+const mouseAllowed = (opts?: FilterOptions): boolean => !!opts?.mouse && mouseSetting();
 
 export type Frame = string | ArrayBuffer | Uint8Array;
 

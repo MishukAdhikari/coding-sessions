@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -52,6 +53,36 @@ class InstallerContractTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "v0.10.0")
         none = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"], input="main\n", capture_output=True, text=True)
         self.assertEqual((none.returncode, none.stdout.strip()), (0, ""))
+
+    @unittest.skipUnless(shutil.which("timeout"), "needs coreutils timeout, as on Ubuntu")
+    def test_app_updater_reads_the_settings_channel_only_as_a_fixed_word(self):
+        def choice(content=None, link=False):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "app-update-channel"
+                if link:
+                    target = Path(tmp) / "target"
+                    target.write_text("main\n")
+                    path.symlink_to(target)
+                elif content is not None:
+                    path.write_text(content)
+                result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--channel-choice", str(path)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+        self.assertEqual(choice("main\n"), "main")
+        self.assertEqual(choice("releases\n"), "releases")
+        self.assertEqual(choice("releases"), "releases")
+        for bad in ["mainline\n", "main; rm -rf /\n", "Main\n", "", "releases-x"]:
+            with self.subTest(content=bad):
+                self.assertEqual(choice(bad), "")
+        self.assertEqual(choice(), "")
+        self.assertEqual(choice(link=True), "")
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "app-update-channel"
+            os.mkfifo(fifo)
+            result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--channel-choice", str(fifo)], capture_output=True, text=True, timeout=10)
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, ""))
+        updater = (ROOT / "deploy/update-app").read_text()
+        self.assertIn('channel_choice "$instance_home/data/app-update-channel" runuser -u "cs-$instance" --', updater)
 
     def test_app_updater_rejects_bad_instances_and_needs_root(self):
         for instance in ["", "../etc", "Demo", "demo-"]:
