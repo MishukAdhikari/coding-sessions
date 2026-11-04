@@ -109,12 +109,13 @@ export function createServerSettings(options: ServerSettingsOptions) {
     return { value: DEFINITIONS[name].fallback, source: "default" };
   };
 
-  const writeChannelFile = () => {
+  // The root updater reads this file, so it always mirrors the stored choice.
+  const writeChannelFile = (choice: string | undefined) => {
     if (!options.channelFile) return;
-    const override = overrides.get("updateChannel");
-    if (override === undefined) rmSync(options.channelFile, { force: true });
-    else writeFileSync(options.channelFile, `${override}\n`, { mode: 0o600 });
+    if (choice === undefined) rmSync(options.channelFile, { force: true });
+    else writeFileSync(options.channelFile, `${choice}\n`, { mode: 0o600 });
   };
+  try { writeChannelFile(overrides.get("updateChannel")); } catch {}
 
   return {
     get: (name: ServerSettingName): string => resolve(name).value,
@@ -137,18 +138,23 @@ export function createServerSettings(options: ServerSettingsOptions) {
       }
       const normalized = DEFINITIONS[name].normalize(raw);
       if ("error" in normalized) return { ok: false, error: normalized.error };
+      if (name === "updateChannel") {
+        try { writeChannelFile(normalized.value); } catch { return { ok: false, error: "Could not save the update channel for the updater." }; }
+      }
       options.store.set(KEY_PREFIX + name, normalized.value);
       overrides.set(name, normalized.value);
-      if (name === "updateChannel") writeChannelFile();
       options.onChange?.(name);
       return { ok: true, value: normalized.value };
     },
 
-    reset(name: ServerSettingName): void {
+    reset(name: ServerSettingName): { ok: true } | { ok: false; error: string } {
+      if (name === "updateChannel") {
+        try { writeChannelFile(undefined); } catch { return { ok: false, error: "Could not save the update channel for the updater." }; }
+      }
       options.store.delete(KEY_PREFIX + name);
       overrides.delete(name);
-      if (name === "updateChannel") writeChannelFile();
       options.onChange?.(name);
+      return { ok: true };
     },
   };
 }

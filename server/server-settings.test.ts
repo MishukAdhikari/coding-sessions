@@ -56,11 +56,21 @@ test("terminal mouse keeps the old rule: only off turns it off", () => {
 test("the update channel is written for the root updater, and only where one exists", () => {
   const dir = mkdtempSync(join(tmpdir(), "cs-settings-")); dirs.push(dir);
   const file = join(dir, "app-update-channel");
-  const settings = createServerSettings({ store: memoryStore(), env: {}, channelFile: file });
+  const settingsStore = memoryStore();
+  const settings = createServerSettings({ store: settingsStore, env: {}, channelFile: file });
   expect(settings.set("updateChannel", "main")).toEqual({ ok: true, value: "main" });
   expect(readFileSync(file, "utf8")).toBe("main\n");
   settings.reset("updateChannel");
   expect(existsSync(file)).toBe(false);
+  // A missing file is rewritten from the stored choice at startup.
+  settings.set("updateChannel", "main");
+  rmSync(file);
+  createServerSettings({ store: settingsStore, env: {}, channelFile: file });
+  expect(readFileSync(file, "utf8")).toBe("main\n");
+  // When the file cannot be written, nothing is saved.
+  const blocked = createServerSettings({ store: memoryStore(), env: {}, channelFile: join(dir, "missing-dir", "app-update-channel") });
+  expect(blocked.set("updateChannel", "main")).toMatchObject({ ok: false });
+  expect(blocked.get("updateChannel")).toBe("releases");
   const noUpdater = createServerSettings({ store: memoryStore(), env: {} });
   expect(noUpdater.channelAvailable()).toBe(false);
   expect(noUpdater.set("updateChannel", "main")).toMatchObject({ ok: false });

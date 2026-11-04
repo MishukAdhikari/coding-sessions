@@ -17,6 +17,8 @@ export interface ServerSettingsRouteDependencies {
   rateLimited: (key: string) => boolean;
 }
 
+const CONFIRMED_SETTINGS = new Set(["agentPermissions", "updateChannel"]);
+
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: PRIVATE_NO_STORE_HEADERS });
 
 /** Settings → Server settings. Browser sessions only: a CLI or connector token can never change these. */
@@ -53,13 +55,13 @@ export async function handleServerSettingsRoute(req: Request, deps: ServerSettin
   if (path !== "/api/server-settings") return json({ error: "Not found" }, 404);
   const name = body.name;
   if (!isSettingName(name)) return json({ error: "Unknown setting." }, 422);
-  // Turning agent prompts off (or back on) needs the operator to confirm again first.
-  if (name === "agentPermissions" && !deps.grants.consume(body.grant, session)) {
-    return json({ error: "Confirm it's you before changing agent permissions." }, 403);
+  // Agent prompts, and which code root's updater installs, change only after the operator confirms again.
+  if (CONFIRMED_SETTINGS.has(name) && !deps.grants.consume(body.grant, session)) {
+    return json({ error: "Confirm it's you before changing this setting." }, 403);
   }
   if (body.reset === true) {
-    deps.settings.reset(name);
-    return json({ ok: true, setting: deps.settings.describe()[name] });
+    const reset = deps.settings.reset(name);
+    return reset.ok ? json({ ok: true, setting: deps.settings.describe()[name] }) : json({ error: reset.error }, 500);
   }
   const result = deps.settings.set(name, body.value);
   return result.ok ? json({ ok: true, setting: deps.settings.describe()[name] }) : json({ error: result.error }, 422);

@@ -83,6 +83,12 @@ test("the permission mode changes only with a fresh, single-use passkey confirma
   expect((await change(fresh))!.status).toBe(403);
 });
 
+test("the update channel also needs a fresh confirmation", async () => {
+  const { call } = setup();
+  const res = await call("/api/server-settings", { method: "POST", body: { name: "updateChannel", value: "main" } });
+  expect(res!.status).toBe(403);
+});
+
 test("without a passkey the admin password confirms instead, and never when a passkey exists", async () => {
   const noPasskey = setup({ hasPasskey: () => false });
   expect((await noPasskey.call("/api/server-settings/step-up/options"))!.status).toBe(409);

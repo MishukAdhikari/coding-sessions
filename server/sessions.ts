@@ -1250,9 +1250,10 @@ export async function launchWorkspaceSession(name: string, repoInput: string, re
   const trustScript = new URL("./trust.ts", import.meta.url).pathname;
   return startCommunicatingSession({
     screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: remoteControl ? 1 : 0,
-    command: mcp =>
-    `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${serverSettings.unrestricted() ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
-    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${remoteControl ? `--remote-control '${name}' ` : ""}${claudePermissionArgs()}`,
+    // Read the permission mode once, so a change mid-launch cannot mix two modes.
+    command: (mcp, unrestricted = serverSettings.unrestricted()) =>
+    `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${unrestricted ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
+    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${remoteControl ? `--remote-control '${name}' ` : ""}${claudePermissionArgs(unrestricted)}`,
   });
 }
 
@@ -1498,7 +1499,7 @@ export async function prepareSynced(rawName: string, repoInput: string, branchIn
 // `claude-auto-danger`'s mode: the auto-mode classifier on top of bypass, so the
 // session starts in auto and shift+tab still reaches bypass. Opt-in per launch.
 const AUTO_MODE_ARGS = "--permission-mode auto --enable-auto-mode ";
-const claudePermissionArgs = () => serverSettings.unrestricted() ? "--dangerously-skip-permissions " : "";
+const claudePermissionArgs = (unrestricted: boolean) => unrestricted ? "--dangerously-skip-permissions " : "";
 
 export async function launchSynced(
   rawName: string,
@@ -1531,9 +1532,9 @@ export async function launchSynced(
   const trustScript = new URL("./trust.ts", import.meta.url).pathname;
   const started = await startCommunicatingSession({
     screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: 1, resumeId: rid,
-    command: mcp =>
-    `cd ${shellQuote(ws)} && ${serverSettings.unrestricted() ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
-    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg}${opts.autoMode && serverSettings.unrestricted() ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs()}${promptArg}`,
+    command: (mcp, unrestricted = serverSettings.unrestricted()) =>
+    `cd ${shellQuote(ws)} && ${unrestricted ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
+    `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg}${opts.autoMode && unrestricted ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs(unrestricted)}${promptArg}`,
   });
   if (!started.ok) return started;
   const archived = db.query(
@@ -1633,7 +1634,8 @@ export async function launchSession(name: string, projectId: number, remoteContr
   // "Is this a project you trust?" inside the detached screen forever. The
   // workspace launch path does this via trust.ts; plain project launches need
   // it too (a folder registered through the Projects sheet isn't trusted yet).
-  if (serverSettings.unrestricted()) ensureTrusted(project.path);
+  const unrestricted = serverSettings.unrestricted();
+  if (unrestricted) ensureTrusted(project.path);
 
   const claudeBin = Bun.which("claude") ?? join(homedir(), ".local", "bin", "claude");
   // name and project are validated above; single-quoting is safe for both
@@ -1642,7 +1644,7 @@ export async function launchSession(name: string, projectId: number, remoteContr
   const rc = remoteControl ? `--remote-control '${name}' ` : "";
   return startCommunicatingSession({
     screen: screenName, name, projectPath: project.path, provider: "claude", remoteControl: remoteControl ? 1 : 0,
-    command: mcp => `cd ${shellQuote(project.path)} && exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${rc}${claudePermissionArgs()}`,
+    command: mcp => `cd ${shellQuote(project.path)} && exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${rc}${claudePermissionArgs(unrestricted)}`,
   });
 }
 
@@ -1877,7 +1879,7 @@ export async function resumeArchived(id: number, expectedProvider: SessionProvid
   return startCommunicatingSession({
     screen: screenName, name, projectPath: proj, provider: "claude", remoteControl: row.remote_control ?? 1,
     claudeUrl: row.claude_url, resumeId: row.resume_id, resumeArchiveId: id,
-    command: mcp => `cd ${shellQuote(proj)} && exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg} ${rc}${claudePermissionArgs()}`,
+    command: (mcp, unrestricted = serverSettings.unrestricted()) => `cd ${shellQuote(proj)} && exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg} ${rc}${claudePermissionArgs(unrestricted)}`,
   });
 }
 

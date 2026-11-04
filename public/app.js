@@ -519,6 +519,7 @@
     if (!keepHistory) sheetHistory = [];
     if (!openSheetEl) return;
     const el = openSheetEl;
+    if (el.id === "sheet-server-settings") cancelServerConfirm?.();
     if (el.id === "sheet-cli-updates") {
       clearTimeout(cliUpdatePoll);
       cliUpdatePoll = null;
@@ -1413,12 +1414,13 @@
       hint: "The account the Claude.ai browser signs in with." },
     { name: "terminalMouse", label: "Terminal mouse", options: [["on", "On"], ["off", "Off"]],
       hint: "Off keeps mouse clicks and scrolling out of agent terminals." },
-    { name: "updateChannel", label: "App update channel", options: [["releases", "Tagged releases"], ["main", "main branch"]],
-      hint: "What automatic app updates install." },
-    { name: "agentPermissions", label: "Agent permissions", options: [["standard", "Standard: agents ask first"], ["unrestricted", "Unrestricted: no permission prompts"]],
+    { name: "updateChannel", label: "App update channel", options: [["releases", "Tagged releases"], ["main", "main branch"]], confirm: true,
+      hint: "What automatic app updates install. Changing this asks you to confirm it's you." },
+    { name: "agentPermissions", label: "Agent permissions", options: [["standard", "Standard: agents ask first"], ["unrestricted", "Unrestricted: no permission prompts"]], confirm: true,
       hint: "Changing this asks you to confirm it's you. Applies to sessions started afterwards; running sessions keep the mode they started with." },
   ];
   let serverSettingsState = null;
+  let cancelServerConfirm = null;
 
   const SERVER_SOURCE = { settings: "Changed here", server: "From the server's configuration", default: "Built-in default" };
 
@@ -1475,13 +1477,14 @@
         source.append(reset);
       }
       block.append(label, control, hint, source);
-      if (def.name === "agentPermissions" && state.stepUp === "password") {
+      if (def.confirm && state.stepUp === "password") {
         const confirm = document.createElement("form");
         confirm.className = "server-setting-confirm";
         confirm.hidden = true;
-        confirm.innerHTML = '<label class="sr-only" for="server-settings-password">Admin password</label>'
-          + '<input id="server-settings-password" class="field" type="password" autocomplete="current-password" placeholder="Admin password" required>'
-          + '<button class="btn btn-primary" type="submit">Confirm change</button>';
+        confirm.innerHTML = `<label class="sr-only" for="server-settings-password-${def.name}">Admin password</label>`
+          + `<input id="server-settings-password-${def.name}" class="field" type="password" autocomplete="current-password" placeholder="Admin password" required>`
+          + '<button class="btn btn-primary" type="submit">Confirm change</button>'
+          + '<button class="btn btn-ghost" type="button" data-cancel>Cancel</button>';
         block.append(confirm);
       }
       list.append(block);
@@ -1499,7 +1502,8 @@
     renderServerSettings();
   }
 
-  // The permission mode needs a fresh check: the passkey when one exists, else the admin password.
+  // Sensitive settings need a fresh check: the passkey when one exists, else the admin password.
+  // Resolves to null when the person cancels or closes the sheet.
   async function serverSettingsGrant(block) {
     if (serverSettingsState.stepUp === "passkey") {
       const { options, challengeId } = await api("/api/server-settings/step-up/options");
@@ -1512,8 +1516,12 @@
     input.value = "";
     input.focus();
     const password = await new Promise((resolve) => {
+      cancelServerConfirm = () => resolve(null);
+      form.querySelector("[data-cancel]").onclick = cancelServerConfirm;
       form.onsubmit = (ev) => { ev.preventDefault(); resolve(input.value); };
     });
+    cancelServerConfirm = null;
+    if (password === null) return null;
     return (await api("/api/server-settings/step-up", { method: "POST", body: JSON.stringify({ password }) })).grant;
   }
 
@@ -1521,7 +1529,10 @@
     block.querySelectorAll("input, select, button").forEach((el) => { if (!el.closest(".server-setting-confirm")) el.disabled = true; });
     try {
       const body = { name: def.name, ...change };
-      if (def.name === "agentPermissions") body.grant = await serverSettingsGrant(block);
+      if (def.confirm) {
+        body.grant = await serverSettingsGrant(block);
+        if (!body.grant) throw Object.assign(new Error("Cancelled"), { name: "NotAllowedError" });
+      }
       const { setting } = await api("/api/server-settings", { method: "POST", body: JSON.stringify(body) });
       showToast(`${def.label}: ${serverSettingDisplay(def, setting.value)}`);
     } catch (e) {

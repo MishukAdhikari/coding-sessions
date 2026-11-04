@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -53,6 +54,7 @@ class InstallerContractTests(unittest.TestCase):
         none = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"], input="main\n", capture_output=True, text=True)
         self.assertEqual((none.returncode, none.stdout.strip()), (0, ""))
 
+    @unittest.skipUnless(shutil.which("timeout"), "needs coreutils timeout, as on Ubuntu")
     def test_app_updater_reads_the_settings_channel_only_as_a_fixed_word(self):
         def choice(content=None, link=False):
             with tempfile.TemporaryDirectory() as tmp:
@@ -74,6 +76,13 @@ class InstallerContractTests(unittest.TestCase):
                 self.assertEqual(choice(bad), "")
         self.assertEqual(choice(), "")
         self.assertEqual(choice(link=True), "")
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "app-update-channel"
+            os.mkfifo(fifo)
+            result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--channel-choice", str(fifo)], capture_output=True, text=True, timeout=10)
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, ""))
+        updater = (ROOT / "deploy/update-app").read_text()
+        self.assertIn('channel_choice "$instance_home/data/app-update-channel" runuser -u "cs-$instance" --', updater)
 
     def test_app_updater_rejects_bad_instances_and_needs_root(self):
         for instance in ["", "../etc", "Demo", "demo-"]:

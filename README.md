@@ -235,7 +235,7 @@ Six settings can also be changed from **Settings → Server settings**, without 
 | App update channel | `CS_APP_UPDATE_CHANNEL` | `releases` or `main`; installer-managed servers only |
 | Agent permissions | `CS_AGENT_PERMISSIONS` | `standard` or `unrestricted` |
 
-The server's configuration is the starting value. A value changed in Settings is stored in the app's database and wins until you choose **Reset to server default**. Changing agent permissions asks for your passkey (or the admin password when no passkey is registered) and applies to sessions started afterwards; running sessions keep the mode they started with. Origin, ports, proxy trust, cookies and secret files stay in the server's configuration only.
+The server's configuration is the starting value. A value changed in Settings is stored in the app's database and wins until you choose **Reset to server default**. Changing agent permissions or the update channel asks for your passkey (or the admin password when no passkey is registered). A new permission mode applies to sessions started afterwards; running sessions keep the mode they started with. Origin, ports, proxy trust, cookies and secret files stay in the server's configuration only.
 
 Legacy instances without an encryption key retain plaintext app-token compatibility. Adding a key encrypts subsequent token writes; it does not automatically rewrite old rows or backups. The application decrypts tokens for provider delivery, so encryption at rest does not hide them from the running account. Details: [secret handling and recovery](docs/security.md).
 
