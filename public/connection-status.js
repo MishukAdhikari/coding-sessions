@@ -25,6 +25,14 @@
       return state(data.enabled ? "positive" : "neutral", data.enabled ? "Daily" : "Off",
         `${data.enabled ? "Installs new releases every 24 hours." : "Automatic app updates are off."} ${running}`.trim());
     },
+    "server-settings": data => {
+      const settings = data.settings;
+      if (!settings || typeof settings !== "object") throw new Error("Missing status");
+      const changed = Object.values(settings).filter(setting => setting.source === "settings").length;
+      const unrestricted = settings.agentPermissions?.value === "unrestricted";
+      return state(unrestricted ? "warning" : "neutral", unrestricted ? "Unrestricted" : "Standard",
+        `${unrestricted ? "New agent sessions skip permission prompts." : "New agent sessions ask before risky actions."} ${changed ? `${changed} changed here.` : "All from the server's configuration."}`);
+    },
     history: data => {
       const count = array(data.archived).length;
       return state("neutral", `${count} ended`, "Clears this list only. Conversations and workspace folders stay.");
@@ -109,7 +117,7 @@
     document.getElementById(`connection-${key}-detail`).textContent = value.detail;
   }
   const endpoints = {
-    updates: "/api/cli-updates", "app-updates": "/api/app-updates", history: "/api/sessions", sessions: "/api/sessions",
+    updates: "/api/cli-updates", "app-updates": "/api/app-updates", "server-settings": "/api/server-settings", history: "/api/sessions", sessions: "/api/sessions",
     agents: "/api/agent-accounts", commands: "/api/commands", projects: "/api/projects",
     connect: "/api/mcp-connections", cli: "/api/cli-tokens", connectors: "/api/connectors", github: "/api/github-auth/status",
     browser: "/api/browser-auth/status", passkey: "/api/passkeys",

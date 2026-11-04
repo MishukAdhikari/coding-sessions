@@ -1403,6 +1403,142 @@
     }
   });
 
+  // Settings → Server settings: values that otherwise live only in the server's configuration.
+  const SERVER_SETTINGS = [
+    { name: "defaultRepo", label: "Default repository", type: "text", placeholder: "owner/repository",
+      hint: "Preselected when you start a session from a GitHub repository." },
+    { name: "githubOwners", label: "GitHub owners", type: "text", placeholder: "my-org, my-user",
+      hint: "Comma-separated accounts and organizations whose repositories are listed." },
+    { name: "claudeAiEmail", label: "Claude.ai sign-in email", type: "email", placeholder: "you@example.com",
+      hint: "The account the Claude.ai browser signs in with." },
+    { name: "terminalMouse", label: "Terminal mouse", options: [["on", "On"], ["off", "Off"]],
+      hint: "Off keeps mouse clicks and scrolling out of agent terminals." },
+    { name: "updateChannel", label: "App update channel", options: [["releases", "Tagged releases"], ["main", "main branch"]],
+      hint: "What automatic app updates install." },
+    { name: "agentPermissions", label: "Agent permissions", options: [["standard", "Standard: agents ask first"], ["unrestricted", "Unrestricted: no permission prompts"]],
+      hint: "Changing this asks you to confirm it's you. Applies to sessions started afterwards; running sessions keep the mode they started with." },
+  ];
+  let serverSettingsState = null;
+
+  const SERVER_SOURCE = { settings: "Changed here", server: "From the server's configuration", default: "Built-in default" };
+
+  function serverSettingDisplay(def, value) {
+    if (def.options) return def.options.find(([v]) => v === value)?.[1] || value;
+    return value || "not set";
+  }
+
+  function renderServerSettings() {
+    const list = $("server-settings-list");
+    list.replaceChildren();
+    const state = serverSettingsState;
+    if (!state) return;
+    for (const def of SERVER_SETTINGS) {
+      const setting = state.settings[def.name];
+      if (!setting) continue;
+      const unavailable = def.name === "updateChannel" && !state.channelAvailable;
+      const block = document.createElement("div");
+      block.className = "server-setting";
+      const id = `server-setting-${def.name}`;
+      const label = document.createElement("label");
+      label.className = "label";
+      label.htmlFor = id;
+      label.textContent = def.label;
+      let control;
+      if (def.options) {
+        control = document.createElement("select");
+        for (const [value, text] of def.options) control.add(new Option(text, value));
+      } else {
+        control = document.createElement("input");
+        control.type = def.type;
+        control.placeholder = def.placeholder;
+        control.autocomplete = "off";
+        control.autocapitalize = "off";
+        control.spellcheck = false;
+      }
+      control.id = id;
+      control.className = "field";
+      control.value = setting.value;
+      control.disabled = unavailable;
+      control.addEventListener("change", () => saveServerSetting(def, block, { value: control.value.trim() }));
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = unavailable ? "Not available on this server. App updates need an install made with deploy/install-ubuntu." : def.hint;
+      const source = document.createElement("p");
+      source.className = "server-setting-source";
+      source.append(SERVER_SOURCE[setting.source] || "");
+      if (setting.source === "settings") {
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "text-link";
+        reset.textContent = `Reset to server default (${serverSettingDisplay(def, setting.serverValue)})`;
+        reset.addEventListener("click", () => saveServerSetting(def, block, { reset: true }));
+        source.append(reset);
+      }
+      block.append(label, control, hint, source);
+      if (def.name === "agentPermissions" && state.stepUp === "password") {
+        const confirm = document.createElement("form");
+        confirm.className = "server-setting-confirm";
+        confirm.hidden = true;
+        confirm.innerHTML = '<label class="sr-only" for="server-settings-password">Admin password</label>'
+          + '<input id="server-settings-password" class="field" type="password" autocomplete="current-password" placeholder="Admin password" required>'
+          + '<button class="btn btn-primary" type="submit">Confirm change</button>';
+        block.append(confirm);
+      }
+      list.append(block);
+    }
+  }
+
+  async function loadServerSettings() {
+    try {
+      serverSettingsState = await api("/api/server-settings");
+      $("server-settings-status").textContent = "";
+    } catch (e) {
+      serverSettingsState = null;
+      $("server-settings-status").textContent = e.message;
+    }
+    renderServerSettings();
+  }
+
+  // The permission mode needs a fresh check: the passkey when one exists, else the admin password.
+  async function serverSettingsGrant(block) {
+    if (serverSettingsState.stepUp === "passkey") {
+      const { options, challengeId } = await api("/api/server-settings/step-up/options");
+      const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
+      return (await api("/api/server-settings/step-up", { method: "POST", body: JSON.stringify({ challengeId, response }) })).grant;
+    }
+    const form = block.querySelector(".server-setting-confirm");
+    form.hidden = false;
+    const input = form.querySelector("input");
+    input.value = "";
+    input.focus();
+    const password = await new Promise((resolve) => {
+      form.onsubmit = (ev) => { ev.preventDefault(); resolve(input.value); };
+    });
+    return (await api("/api/server-settings/step-up", { method: "POST", body: JSON.stringify({ password }) })).grant;
+  }
+
+  async function saveServerSetting(def, block, change) {
+    block.querySelectorAll("input, select, button").forEach((el) => { if (!el.closest(".server-setting-confirm")) el.disabled = true; });
+    try {
+      const body = { name: def.name, ...change };
+      if (def.name === "agentPermissions") body.grant = await serverSettingsGrant(block);
+      const { setting } = await api("/api/server-settings", { method: "POST", body: JSON.stringify(body) });
+      showToast(`${def.label}: ${serverSettingDisplay(def, setting.value)}`);
+    } catch (e) {
+      if (e.name !== "NotAllowedError") showToast(e.message);
+    }
+    await Promise.all([loadServerSettings(), loadCapabilities()]);
+    window.connectionStatus?.refresh(api);
+  }
+
+  $("btn-server-settings").addEventListener("click", () => {
+    openSheet("sheet-server-settings");
+    serverSettingsState = null;
+    $("server-settings-status").textContent = "Checking…";
+    renderServerSettings();
+    loadServerSettings();
+  });
+
   $("btn-menu").addEventListener("click", () => {
     openSheet("sheet-menu");
     loadPrefix().then(() => { $("input-prefix").value = sessionPrefix; });

@@ -103,3 +103,14 @@ test("one failed check leaves other statuses usable and an older response cannot
   await earlier;
   expect(h.nodes.get("connection-connect").textContent).toBe("Connected");
 });
+
+test("server settings show the permission mode for new sessions and how many values were changed here", () => {
+  const { describe } = harness();
+  const settings = { agentPermissions: { value: "standard", source: "default" }, defaultRepo: { value: "a/b", source: "server" } };
+  expect(describe["server-settings"]({ settings })).toMatchObject({ tone: "neutral", label: "Standard" });
+  expect(describe["server-settings"]({ settings }).detail).toContain("All from the server's configuration.");
+  settings.agentPermissions = { value: "unrestricted", source: "settings" };
+  expect(describe["server-settings"]({ settings })).toMatchObject({ tone: "warning", label: "Unrestricted" });
+  expect(describe["server-settings"]({ settings }).detail).toContain("1 changed here.");
+  expect(() => describe["server-settings"]({})).toThrow();
+});
