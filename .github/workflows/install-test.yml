@@ -96,5 +96,9 @@ jobs:
       - name: Logs on failure
         if: failure()
         run: |
-          docker exec box journalctl -u coding-sessions@personal -n 100 --no-pager || true
+          echo "--- what systemd hands the service as a credential"
+          docker exec box sh -c 'systemctl --version | head -n 1; findmnt -n /run/credentials 2>/dev/null || true'
+          docker exec box systemd-run --wait --pipe --quiet -p User=cs-personal -p LoadCredential=probe:/etc/coding-sessions/credentials/personal/token-encryption-key \
+            sh -c 'id; stat -c "dir %u:%g %a %T" "$CREDENTIALS_DIRECTORY" -f; stat -c "file %u:%g %a %F" "$CREDENTIALS_DIRECTORY/probe"; getfacl -p "$CREDENTIALS_DIRECTORY/probe" 2>/dev/null' || true
+          docker exec box journalctl -u coding-sessions@personal -n 30 --no-pager || true
           docker exec box journalctl -u caddy -n 30 --no-pager || true

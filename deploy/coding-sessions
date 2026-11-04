@@ -272,8 +272,15 @@ install_browser() {
   local bun; bun="$(app_dir)/bin/bun"
   # System libraries as root; the browser itself into the service account's cache.
   say "  ${D}Chromium needs about 100 system libraries; this step can take a few minutes…${N}"
-  (cd "$(app_dir)" && "$bun" x playwright install-deps chromium >/dev/null)
-  AS_CWD=$(app_dir) as_service "$bun" x playwright install chromium >/dev/null
+  # The browser is optional: if Playwright can't serve this system, say so and carry on.
+  if ! (cd "$(app_dir)" && "$bun" x playwright install-deps chromium >/dev/null 2>&1); then
+    warn "Playwright can't install Chromium's libraries on $OS_NAME yet; the browser was skipped. Everything else works. Try later with: sudo coding-sessions browser install"
+    return 0
+  fi
+  if ! AS_CWD=$(app_dir) as_service "$bun" x playwright install chromium >/dev/null 2>&1; then
+    warn "Chromium didn't download; try again with: sudo coding-sessions browser install"
+    return 0
+  fi
   ok "Playwright Chromium"
 }
 
