@@ -186,7 +186,7 @@ Prerequisites:
 - Ubuntu Server 24.04 or 26.04, amd64 or arm64, with systemd and administrative access.
 - A hostname whose DNS points to the server, and HTTPS termination with WebSocket support.
 - A reviewed checkout and a reviewed Linux Bun binary. Alternatively, supply an exact Bun release and its independently verified archive SHA-256.
-- Provider CLIs and accounts, installed separately under the dedicated service account; the helper requires Node.js 22+ and npm for Codex and Command Code.
+- Agent CLIs and accounts, installed separately under the dedicated service account. The installer installs no agents. Claude Code uses Anthropic's own installer. Every other agent (Codex, Command Code, Gemini CLI, Qwen Code, opencode) needs Node.js 22+ and npm, and Kimi Code needs 22.19+. Ubuntu's own `nodejs` package is too old, so install Node.js 22 from NodeSource or nvm.
 
 Clone and review the source, then substitute your hostname and Bun path:
 
@@ -234,7 +234,9 @@ Install and authenticate agents as `cs-personal`, never as root. Once Node.js 22
 sudo -u cs-personal -H /opt/coding-sessions/personal/current/deploy/install-provider-clis codex claude command-code
 ```
 
-The same helper installs the agent presets (`gemini kimi qwen opencode`); see [docs/agents.md](docs/agents.md).
+The same helper installs the agent presets (`gemini kimi qwen opencode`); see [docs/agents.md](docs/agents.md). Name only the agents you want. Each one checks its Node.js minimum first and prints its version once installed.
+
+Agents update automatically only if you installed with `--daily-updates`, or later run `sudo systemctl enable --now coding-sessions-update@personal.timer`. That timer runs daily at 00:00 UTC and updates the installed agents, presets included. Running sessions keep their version; new sessions use the updated one.
 
 Use **Agent authentication** in the app for supported sign-in/account actions. Account changes apply to the whole instance. Existing logins may have an unknown login date, and providers do not all expose email addresses.
 
