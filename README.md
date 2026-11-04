@@ -225,6 +225,21 @@ Use [.env.example](.env.example) for non-secret configuration. Keep secrets out 
 | Browser session, CLI bearer, and inbound OAuth code/access/refresh tokens (apps connecting to Coding Sessions) | Hashes in SQLite |
 | External MCP connector credentials (bearer tokens; outbound OAuth access/refresh tokens and client secrets) | AES-256-GCM ciphertext in SQLite; refused without the encryption key |
 
+### Server settings in the app
+
+Six settings can also be changed from **Settings → Server settings**, without editing the server's configuration or restarting:
+
+| Setting | Server configuration | Values |
+|---|---|---|
+| Default repository | `CS_DEFAULT_REPO` | `owner/repository`, or empty |
+| GitHub owners | `CS_GITHUB_OWNERS` | Comma-separated accounts and organizations |
+| Claude.ai sign-in email | `CAI_EMAIL` | An email address, or empty |
+| Terminal mouse | `CS_TERM_MOUSE` | `on` or `off` |
+| App update channel | `CS_APP_UPDATE_CHANNEL` | `releases` or `main`; installer-managed servers only |
+| Agent permissions | `CS_AGENT_PERMISSIONS` | `standard` or `unrestricted` |
+
+The server's configuration is the starting value. A value changed in Settings is stored in the app's database and wins until you choose **Reset to server default**. Changing agent permissions or the update channel asks for your passkey (or the admin password when no passkey is registered). A new permission mode applies to sessions started afterwards; running sessions keep the mode they started with. Origin, ports, proxy trust, cookies and secret files stay in the server's configuration only.
+
 Legacy instances without an encryption key retain plaintext app-token compatibility. Adding a key encrypts subsequent token writes; it does not automatically rewrite old rows or backups. The application decrypts tokens for provider delivery, so encryption at rest does not hide them from the running account. Details: [secret handling and recovery](docs/security.md).
 
 ## Updates and removal
@@ -239,7 +254,7 @@ Turn on **Settings → App updates → Update automatically every 24 hours**. On
 
 The last result and the running version show in the same panel. It is off by default. The toggle only writes a flag in the instance's own data folder; the update itself is done by a root timer (`coding-sessions-app-update@NAME.timer`) that the installer adds, so the web service never gets admin rights. A release that changes the system units is not installed automatically — the panel says so, and you rerun the installer for it.
 
-To follow the `main` branch instead of tagged releases, set `CS_APP_UPDATE_CHANNEL=main` in `/etc/coding-sessions/NAME.env`. To update from your own fork or a mirror, set `CS_APP_UPDATE_REPO` there to its https URL or to a root-owned local path. To update right away as an administrator:
+To follow the `main` branch instead of tagged releases, choose it in **Settings → Server settings → App update channel**, or set `CS_APP_UPDATE_CHANNEL=main` in `/etc/coding-sessions/NAME.env`. The choice in Settings wins; the app writes it to `data/app-update-channel`, which the root updater reads only as the word `releases` or `main`. To update from your own fork or a mirror, set `CS_APP_UPDATE_REPO` there to its https URL or to a root-owned local path. To update right away as an administrator:
 
 ```bash
 sudo /opt/coding-sessions/personal/current/deploy/update-app personal --now

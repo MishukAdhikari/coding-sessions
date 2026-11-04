@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { filterDownstream, filterUpstream } from "./ttyd-filter";
+import { filterDownstream, filterUpstream, useMouseSetting } from "./ttyd-filter";
 
 const E = "\x1b";
 const asStr = (x: unknown): string => {
@@ -78,5 +78,18 @@ test("CS_TERM_MOUSE=off strips the mouse even where passthrough was asked for", 
     expect(filterUpstream(`0${E}[<0;1;1M`, { mouse: true })).toBe("0");
   } finally {
     if (prev === undefined) delete process.env.CS_TERM_MOUSE; else process.env.CS_TERM_MOUSE = prev;
+  }
+});
+
+test("the mouse follows the live Settings value once the server wires it", () => {
+  const report = `0${E}[<0;10;5M`;
+  let enabled = false;
+  useMouseSetting(() => enabled);
+  try {
+    expect(filterUpstream(report, { mouse: true })).toBe("0");
+    enabled = true;
+    expect(filterUpstream(report, { mouse: true })).toBe(report);
+  } finally {
+    useMouseSetting(() => process.env.CS_TERM_MOUSE !== "off");
   }
 });

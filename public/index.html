@@ -266,6 +266,10 @@ Agent authentication…</span><span id="connection-agents" class="connection-sta
     <button id="btn-browser-auth" class="row-btn connection-row"><span>Claude.ai browser…</span><span id="connection-browser" class="connection-status" role="status">Checking…</span><span id="connection-browser-detail" class="connection-detail"></span></button>
     <button id="btn-add-passkey" class="row-btn connection-row"><span>Add Face ID / Touch ID</span><span id="connection-passkey" class="connection-status" role="status">Checking…</span><span id="connection-passkey-detail" class="connection-detail"></span></button>
   </section>
+  <section class="settings-section" aria-labelledby="settings-server-config">
+    <h3 id="settings-server-config">Server settings</h3>
+    <button id="btn-server-settings" class="row-btn connection-row"><span>Server settings…</span><span id="connection-server-settings" class="connection-status" role="status">Checking…</span><span id="connection-server-settings-detail" class="connection-detail"></span></button>
+  </section>
   <section class="settings-section" aria-labelledby="settings-server">
     <h3 id="settings-server">Server &amp; history</h3>
     <button id="btn-cli-updates" class="row-btn connection-row"><span class="connection-action"><svg aria-hidden="true" class="menu-icon"
@@ -322,6 +326,15 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <p id="cli-update-last" class="hint"></p>
   <p class="hint">New sessions use the updated versions. Existing sessions are not restarted.</p>
   <button id="btn-cli-update-now" class="btn btn-primary btn-big" disabled>Update now</button>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-server-settings" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-server-settings-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-server-settings-heading">Server settings</h2>
+  <p class="sheet-body">Change how this server behaves without editing its configuration. A value changed here wins over the server's configuration until you reset it. Changes apply right away, no restart.</p>
+  <div id="server-settings-list" class="server-settings-list"></div>
+  <p id="server-settings-status" class="sheet-body" role="status" aria-live="polite">Checking…</p>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 

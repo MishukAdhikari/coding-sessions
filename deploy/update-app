@@ -11,7 +11,20 @@ fail() { printf 'update-app: %s\n' "$*" >&2; exit 1; }
 # Newest stable release tag (vX.Y.Z) from a list of tags on stdin.
 newest_release() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true; }
 
+# The channel chosen in Settings → Server settings: a regular file holding
+# exactly "releases" or "main"; anything else is ignored. The file lives in a
+# folder the service account owns, so it is read with that account's rights
+# (the arguments after the path) and a timeout: swapping in a symlink or a
+# FIFO can neither reveal root's files nor stall the timer.
+channel_choice() {
+  local file=$1; shift
+  [[ -f $file && ! -L $file ]] || return 0
+  local word; word=$("$@" timeout 2 head -c 9 -- "$file" 2>/dev/null | tr -d '\n') || true
+  if [[ $word = releases || $word = main ]]; then printf '%s\n' "$word"; fi
+}
+
 if [[ ${1:-} = --newest-release ]]; then newest_release; exit 0; fi
+if [[ ${1:-} = --channel-choice ]]; then channel_choice "${2:-}"; exit 0; fi
 
 instance=${1:-} force=0
 [[ ${2:-} = --now ]] && force=1
@@ -37,7 +50,9 @@ if ((!force)) && ! { [[ -f $flag && ! -L $flag ]] && [[ $(head -c 2 "$flag") = o
 
 setting() { sed -n "s/^$1=//p" "$env_file" | tail -n 1; }
 repo=$(setting CS_APP_UPDATE_REPO); repo=${repo:-https://github.com/MishukAdhikari/coding-sessions.git}
-channel=$(setting CS_APP_UPDATE_CHANNEL); channel=${channel:-releases}
+channel=$(channel_choice "$instance_home/data/app-update-channel" runuser -u "cs-$instance" --)
+[[ -n $channel ]] || channel=$(setting CS_APP_UPDATE_CHANNEL)
+channel=${channel:-releases}
 port=$(setting PORT)
 # An https URL, or an absolute path to a root-owned mirror for offline hosts.
 if [[ $repo = /* ]]; then

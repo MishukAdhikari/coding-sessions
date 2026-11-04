@@ -40,7 +40,7 @@ Environment secrets can spread into child processes and diagnostics. Linux `/pro
 
 Configuration and new managed launches use the `CS_` prefix. Earlier prefixed settings remain readable during upgrades; `CS_` takes precedence. Existing encrypted tokens and live Codex launches remain compatible. Update the root-owned managed hook alongside the application before starting new Codex sessions.
 
-New deployments use `CS_AGENT_PERMISSIONS=standard`: the application does not add provider bypass flags. Provider settings and tool-specific policies still matter. `CS_CHILD_ENV=filtered` forwards operational variables and explicit per-provider values instead of the whole service environment. The filter is exposure reduction, not isolation from account-owned files or SSH-agent access.
+New deployments use `CS_AGENT_PERMISSIONS=standard`: the application does not add provider bypass flags. The mode can be changed in Settings → Server settings only by a browser session that has just confirmed with its passkey (or the admin password when no passkey exists); CLI and connector tokens cannot change it, and running sessions keep the mode they started with. Provider settings and tool-specific policies still matter. `CS_CHILD_ENV=filtered` forwards operational variables and explicit per-provider values instead of the whole service environment. The filter is exposure reduction, not isolation from account-owned files or SSH-agent access.
 
 Explicit `unrestricted` and `inherit` modes support deliberate legacy behavior. Review them before enabling either. No credential-pointer filtering can make arbitrary same-account shell access safe for mutually untrusted users.
 
