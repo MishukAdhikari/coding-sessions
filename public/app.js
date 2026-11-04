@@ -1739,7 +1739,7 @@
       const info = document.createElement("span");
       info.textContent = preset.label;
       const detail = document.createElement("div");
-      detail.className = "pick-path";
+      detail.className = "proj-note";
       detail.textContent = preset.installed ? preset.notes : `Not installed. Run on the server: ${preset.installCommand}`;
       info.append(detail);
       const action = document.createElement("button");
