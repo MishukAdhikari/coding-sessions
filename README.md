@@ -3,7 +3,7 @@
 [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/MishukAdhikari/coding-sessions?include_prereleases&label=release)](https://github.com/MishukAdhikari/coding-sessions/releases)
 [![Docker image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](docs/docker.md)
-[![Ubuntu 24.04 · 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%C2%B7%2026.04-E95420?logo=ubuntu&logoColor=white)](#ubuntu-quickstart)
+[![Ubuntu · Debian](https://img.shields.io/badge/Ubuntu%20%C2%B7%20Debian-one%20command-E95420?logo=ubuntu&logoColor=white)](#install-on-a-server)
 [![Built with Bun](https://img.shields.io/badge/built%20with-Bun-000?logo=bun)](https://bun.sh)
 
 *Faster than the fastest. Smoother than the smoothiest.*
@@ -132,7 +132,7 @@ Turn it on in **Settings → App updates**. Docker installs update by pulling th
 
 | Your server | Do this |
 | --- | --- |
-| Ubuntu 24.04 / 26.04 VPS | [Ubuntu quickstart](#ubuntu-quickstart) — dedicated account, systemd, optional nginx |
+| Ubuntu or Debian VPS | [Install on a server](#install-on-a-server): one guided command that sets up HTTPS, agents and the browser |
 | Anything with Docker | [Docker](#docker) — one `docker compose up`, automatic HTTPS with Caddy |
 | Your laptop, to hack on it | [Local development](docs/local-dev.md) |
 
@@ -179,11 +179,25 @@ Install only the agents you want; none is required. Details for the presets are 
 
 There is no telemetry or analytics, and the web app loads no scripts or fonts from other sites.
 
-## Ubuntu quickstart
+## Install on a server
+
+On Ubuntu (22.04, 24.04, 26.04) or Debian (12, 13), with a domain pointing at the server:
+
+```bash
+curl -fsSLO https://github.com/MishukAdhikari/coding-sessions/releases/latest/download/install.sh
+curl -fsSLO https://github.com/MishukAdhikari/coding-sessions/releases/latest/download/install.sh.sha256
+sha256sum -c install.sh.sha256 && sudo bash install.sh
+```
+
+The installer asks for the domain, an email for the HTTPS certificate, which coding agents you want, and a few yes/no choices. It checks DNS and ports, shows its plan, and asks before changing anything. Then it sets up everything coding agents need to run smoothly: HTTPS through Caddy, the runtimes, the agents you picked, Playwright's browser, server limits and daily updates. It finishes with a **one-time sign-in link**: open it and add a passkey.
+
+Afterwards, the `coding-sessions` command runs the server: `sudo coding-sessions doctor`, `agents install`, `update`, `setup-link` and more. Details, every option and troubleshooting: [docs/install.md](docs/install.md). You can also ask an AI agent in this repository to "install Coding Sessions on my server"; its install skill walks you through the same choices before running anything.
+
+### Manual install
 
 Prerequisites:
 
-- Ubuntu Server 24.04 or 26.04, amd64 or arm64, with systemd and administrative access.
+- Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13, amd64 or arm64, with systemd and administrative access.
 - A hostname whose DNS points to the server, and HTTPS termination with WebSocket support.
 - A reviewed checkout and a reviewed Linux Bun binary. Alternatively, supply an exact Bun release and its independently verified archive SHA-256.
 - Agent CLIs and accounts, installed separately under the dedicated service account. The installer installs no agents. Claude Code uses Anthropic's own installer. Every other agent (Codex, Command Code, Gemini CLI, Qwen Code, opencode) needs Node.js 22+ and npm, and Kimi Code needs 22.19+. Ubuntu's own `nodejs` package is too old, so install Node.js 22 from NodeSource or nvm.
@@ -220,7 +234,9 @@ See [Running with Docker](docs/docker.md) for installing agents, updates and set
 
 ## First sign-in
 
-Retrieve the installer-generated administrator password in your private SSH terminal:
+With the guided installer, open the one-time link it printed and add a passkey. Run `sudo coding-sessions setup-link` any time for a new link.
+
+After a manual install, retrieve the installer-generated administrator password in your private SSH terminal:
 
 ```bash
 sudo cat /etc/coding-sessions/credentials/personal/admin-password

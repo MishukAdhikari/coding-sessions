@@ -1,0 +1,60 @@
+name: Install test
+
+# Runs the real installer on a fresh Ubuntu runner (systemd, root), the way a user would.
+# The domain is fake, so HTTPS can't be issued; everything up to that point must work.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and lint
+        run: |
+          bash -n deploy/coding-sessions deploy/install.sh deploy/install-ubuntu
+          shellcheck -S warning deploy/coding-sessions deploy/install.sh
+      - name: Start from a plain server (the runner ships its own Node.js in /usr/local/bin)
+        run: sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+      - name: Dry run plans without changing anything
+        run: sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --no-browser --no-updates --no-swap --skip-dns-check --dry-run
+      - name: Install
+        run: sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes
+      - name: The app, the CLI, the agents and the browser are in place
+        run: |
+          set -x
+          systemctl is-active --quiet coding-sessions@personal.service
+          curl -fsS -o /dev/null http://127.0.0.1:9121/
+          sudo coding-sessions status
+          sudo coding-sessions agents | tee agents.txt
+          grep -E '^ +claude +[0-9]' agents.txt
+          grep -E '^ +gemini +[0-9]' agents.txt
+          sudo -u cs-personal -H sh -c 'ls ~/.cache/ms-playwright | grep -q chromium'
+          ttyd --version
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          test "$(cat /var/lib/coding-sessions/personal/data/app-auto-update)" = on
+      - name: A one-time sign-in link signs in once
+        run: |
+          link=$(sudo coding-sessions setup-link 2>/dev/null | grep -o 'https://[^ ]*#setup=[^ ]*')
+          token=${link#*#setup=}
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d "{\"token\":\"$token\"}" http://127.0.0.1:9121/api/auth/setup)
+          test "$code" = 200
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d "{\"token\":\"$token\"}" http://127.0.0.1:9121/api/auth/setup)
+          test "$code" = 401
+      - name: Re-running setup repairs without failing
+        run: sudo coding-sessions setup --skip-dns-check --yes
+      - name: Doctor reports the missing HTTPS for the fake domain
+        run: |
+          set +e
+          sudo coding-sessions doctor | tee doctor.txt
+          grep -q 'service running' doctor.txt
+      - name: Logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u coding-sessions@personal -n 100 --no-pager || true
+          sudo journalctl -u caddy -n 50 --no-pager || true

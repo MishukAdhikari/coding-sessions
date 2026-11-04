@@ -56,8 +56,8 @@ conf_save() {
   local tmp; tmp=$(mktemp /etc/coding-sessions/.setup.XXXXXX)
   {
     printf '# Choices from `coding-sessions setup`; re-runs start from these.\n'
-    printf 'INSTANCE=%s\nDOMAIN=%s\nEMAIL=%s\nPORT=%s\nAGENTS=%s\nBROWSER=%s\nUPDATES=%s\n' \
-      "$INSTANCE" "$DOMAIN" "$EMAIL" "$PORT" "$AGENTS" "$BROWSER" "$UPDATES"
+    printf 'INSTANCE=%s\nDOMAIN=%s\nEMAIL=%s\nPORT=%s\nAGENTS=%s\nBROWSER=%s\nUPDATES=%s\nSOURCE=%s\n' \
+      "$INSTANCE" "$DOMAIN" "$EMAIL" "$PORT" "$AGENTS" "$BROWSER" "$UPDATES" "$SOURCE"
   } > "$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$CONF"
 }
@@ -120,14 +120,18 @@ fetch_source() {
   SOURCE_REF=$ref
 }
 
-# Use this checkout when the CLI runs from one, else the pinned release.
+is_checkout() { [[ -n $1 && -f $1/deploy/install-ubuntu && -f $1/server/index.ts && $1 != /opt/coding-sessions* ]]; }
+
+# The source to install from: a checkout the CLI runs from, else the checkout a previous
+# setup used (unless a version is asked for), else the release this CLI belongs to.
 resolve_source() {
-  local here; here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd -P)
-  if [[ -f $here/deploy/install-ubuntu && -f $here/server/index.ts && $here != /opt/coding-sessions* ]]; then
-    SOURCE=$here; SOURCE_REF=$(git -c safe.directory="$here" -C "$here" describe --tags --always 2>/dev/null || echo local)
-  else
-    fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC
+  local here saved; here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd -P)
+  saved=$(conf_get SOURCE)
+  if is_checkout "$here" && [[ $here != "$SRC" ]]; then SOURCE=$here
+  elif [[ -z ${VERSION:-} && $saved != "$SRC" ]] && is_checkout "$saved"; then SOURCE=$saved
+  else fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC; return
   fi
+  SOURCE_REF=$(git -c safe.directory="$SOURCE" -C "$SOURCE" describe --tags --always 2>/dev/null || echo local)
 }
 
 svc() { printf 'cs-%s' "$INSTANCE"; }
@@ -144,7 +148,9 @@ as_service() {
 
 # Install this CLI from the source, stamped with the version it came from.
 install_cli() {
-  sed "s/^CLI_VERSION=\"dev\"/CLI_VERSION=\"$SOURCE_REF\"/" "$SOURCE/deploy/coding-sessions" > /usr/local/bin/.coding-sessions.tmp
+  local stamp=dev
+  [[ $SOURCE_REF =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && stamp=$SOURCE_REF
+  sed "s/^CLI_VERSION=\"dev\"/CLI_VERSION=\"$stamp\"/" "$SOURCE/deploy/coding-sessions" > /usr/local/bin/.coding-sessions.tmp
   chmod 0755 /usr/local/bin/.coding-sessions.tmp
   mv -f /usr/local/bin/.coding-sessions.tmp /usr/local/bin/coding-sessions
 }
@@ -183,7 +189,10 @@ install_node() {
   curl -fsSL --proto '=https' https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
   printf 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main\n' > /etc/apt/sources.list.d/nodesource.list
   apt-get update -qq && apt-get install -y -qq nodejs >/dev/null
-  (( $(node_major) >= 22 )) || die "Node.js 22 didn't install; see https://github.com/nodesource/distributions"
+  (( $(/usr/bin/node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0) >= 22 )) || die "Node.js 22 didn't install; see https://github.com/nodesource/distributions"
+  if (( $(node_major) < 22 )); then
+    die "Node.js 22 is installed in /usr/bin, but an older $(node -v) at $(command -v node) comes first on PATH. Remove that one (it isn't from a package), then run setup again."
+  fi
   ok "Node.js $(node -v) (NodeSource)"
 }
 
@@ -372,9 +381,9 @@ cmd_setup() {
   install_packages
   install_caddy
   [[ $needs_node = yes ]] && install_node
-  conf_save
   run_engine
   install_cli
+  conf_save
   configure_caddy
   tune_system
   set_app_updates
@@ -399,6 +408,7 @@ load_instance() {
 cmd_setup_link() { need_root setup-link; load_instance; print_setup_link; }
 
 cmd_status() {
+  need_root status
   load_instance
   say "${B}Coding Sessions${N} ($INSTANCE)"
   say "  URL      https://$DOMAIN"
@@ -410,6 +420,7 @@ cmd_status() {
 
 cmd_agents() {
   local sub=${1:-list}; shift || true
+  need_root agents
   load_instance
   case $sub in
     list)
@@ -418,9 +429,8 @@ cmd_agents() {
         v=$(as_service sh -c "PATH=\$HOME/.local/bin:\$PATH; $bin --version 2>/dev/null" </dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
         printf '  %-14s %s\n' "$a" "${v:-${D}not installed${N}}"
       done ;;
-    install) need_root agents; (($#)) || die "name agents to install: $ALL_AGENTS"; install_agents "$(tr ' ' ',' <<<"$*")" ;;
+    install) (($#)) || die "name agents to install: $ALL_AGENTS"; install_agents "$(tr ' ' ',' <<<"$*")" ;;
     update)
-      need_root agents
       local installed=''
       for a in $ALL_AGENTS; do as_service sh -c "test -x \$HOME/.local/bin/$a" && installed="$installed $a"; done
       [[ -n $installed ]] || die "no agents are installed yet"
@@ -500,8 +510,8 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
        --skip-dns-check  --dry-run  --yes
   sudo coding-sessions setup-link        one-time sign-in link (lost access, new device)
   sudo coding-sessions doctor            check everything, with fixes
-       coding-sessions status            what's running, where, which version
-       coding-sessions agents [list]     installed agents and versions
+  sudo coding-sessions status            what's running, where, which version
+  sudo coding-sessions agents [list]     installed agents and versions
   sudo coding-sessions agents install a… install agents (as the service account)
   sudo coding-sessions agents update     update installed agents
   sudo coding-sessions browser install   install Playwright Chromium
