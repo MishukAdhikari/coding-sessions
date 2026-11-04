@@ -56,7 +56,7 @@ test("ownership is rechecked after an awaited holder lookup before a new credent
  release();expect((await delayed).ok).toBe(false);expect(spawns).toBe(1);expect(await comm.identity(originalToken,false)).toEqual(identity);database.close();
 });
 test("an agent preset configures MCP itself: its env joins the launch, the token stays out of argv, and the built-in configure is skipped", async () => {
- const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let configured=false;let connectorsSeen:boolean|null=null;
+ const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let configured=false;let connectorsSeen=null as boolean|null;
  const result=await startCommunicatingSession({screen:"cs-gem",name:"gem",projectPath:"/srv/demo",provider:"cmd:gemini-cli",remoteControl:0,
   env:{GEMINI_API_KEY:"key"},mcp:async(withConnectors)=>{connectorsSeen=withConnectors;return{OPENCODE_CONFIG_CONTENT:"{}"};},command:()=>"gemini --approval-mode=yolo"},
   {database:db,communicator:comm,hasHolder:async()=>false,uuid:randomUUID,now:()=>1,configure:async()=>{configured=true;return[];},spawn:async(screen,cmd,{env}={})=>{
