@@ -318,6 +318,7 @@ test("a preset registers in one step with its binary and token variable, and is 
     expect(createCommand({ preset: "gemini" }, database)).toMatchObject({ ok: false });
     const renamed = createCommand({ preset: "gemini", label: "Gemini work", envVar: "GOOGLE_API_KEY" }, database);
     expect(renamed).toMatchObject({ ok: true, command: { label: "Gemini work", envVar: "GOOGLE_API_KEY", preset: "gemini" } });
+    expect(createCommand({ preset: "gemini", label: "Gemini oauth", envVar: "" }, database)).toMatchObject({ ok: true, command: { envVar: null } });
   } finally {
     (Bun as unknown as { which: typeof original }).which = original;
   }

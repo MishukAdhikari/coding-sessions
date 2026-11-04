@@ -50,19 +50,40 @@ function privateDirectory(home: string, parts: string[], label: string): string 
   return directory;
 }
 
+/** Remove // and block comments outside strings, as JSON-with-comments readers do. */
+export function stripJsonComments(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1); i = j; continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") { while (i < text.length && text[i] !== "\n") i++; out += "\n"; continue; }
+    if (ch === "/" && text[i + 1] === "*") { const end = text.indexOf("*/", i + 2); i = end < 0 ? text.length : end + 1; out += " "; continue; }
+    out += ch;
+  }
+  return out;
+}
+
 /**
  * Reconcile the app-owned MCP entries into an agent's JSON config file. Each entry
  * carries its own ownership record; an operator-edited entry is never overwritten or
  * removed, and everything else in the file is kept as it was.
  */
-export function reconcileMcpConfig(file: string, entries: { communicator: unknown; gateway: unknown | null }, label: string): void {
+export function reconcileMcpConfig(file: string, entries: { communicator: unknown; gateway: unknown | null }, label: string, comments = false): void {
   let config: Record<string, unknown> = {};
+  let commented = false;
   try {
     const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = fstatSync(fd);
       if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error(`${label} MCP configuration must be a regular JSON file smaller than 1 MiB.`);
-      const parsed: unknown = JSON.parse(readFileSync(fd, "utf8"));
+      const raw = readFileSync(fd, "utf8");
+      const text = comments ? stripJsonComments(raw) : raw;
+      commented = text !== raw;
+      const parsed: unknown = JSON.parse(text);
       if (!object(parsed) || (parsed.mcpServers !== undefined && !object(parsed.mcpServers))) throw new Error(`${label} MCP configuration must contain an object.`);
       config = parsed;
     } finally { closeSync(fd); }
@@ -84,7 +105,8 @@ export function reconcileMcpConfig(file: string, entries: { communicator: unknow
         if (wanted === null) return;
         throw new Error(`${label} MCP name ${name} is already used by another configuration.`);
       }
-      if (owned && isDeepStrictEqual(servers[name], wanted)) return;
+      // An identical entry is already in place; a commented file is only read, so it is not adopted.
+      if ((owned || commented) && isDeepStrictEqual(servers[name], wanted)) return;
     } else if (wanted === null) {
       if (owned) { delete next[ownershipKey]; changed = true; }
       return;
@@ -96,6 +118,11 @@ export function reconcileMcpConfig(file: string, entries: { communicator: unknow
   reconcile(CONNECTOR, OWNERSHIP, entries.communicator, "communicator");
   reconcile(GATEWAY, GATEWAY_OWNERSHIP, entries.gateway, "connector");
   if (!changed) return;
+  // Rewriting would drop the operator's comments; ask for the entry to be added by hand instead.
+  if (commented) {
+    throw new Error(`${file} has comments, so Coding Sessions will not rewrite it. Add this under "mcpServers" yourself: `
+      + JSON.stringify({ [CONNECTOR]: servers[CONNECTOR], ...(servers[GATEWAY] !== undefined ? { [GATEWAY]: servers[GATEWAY] } : {}) }));
+  }
   const temporary = join(dirname(file), `.mcp-${randomUUID()}.tmp`);
   try {
     writeFileSync(temporary, JSON.stringify({ ...next, mcpServers: servers }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
@@ -104,8 +131,8 @@ export function reconcileMcpConfig(file: string, entries: { communicator: unknow
 }
 
 /** Install the app-owned entries into ~/<parts...>/<fileName>; never into a repository. */
-export function installUserMcpConfig(home: string, parts: string[], fileName: string, entries: { communicator: unknown; gateway: unknown | null }, label: string): void {
-  reconcileMcpConfig(join(privateDirectory(home, parts, label), fileName), entries, label);
+export function installUserMcpConfig(home: string, parts: string[], fileName: string, entries: { communicator: unknown; gateway: unknown | null }, label: string, comments = false): void {
+  reconcileMcpConfig(join(privateDirectory(home, parts, label), fileName), entries, label, comments);
 }
 
 /** Private local scope has precedence over repository config; never write into the repository. */

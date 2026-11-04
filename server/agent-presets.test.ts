@@ -82,3 +82,18 @@ test("opencode gets the server through its config variable with {env:} reference
   });
   expect(config.mcp.coding_sessions_connectors).toBeUndefined();
 });
+
+test("Gemini settings with comments are read, left unchanged when already set up, and never rewritten", () => {
+  const dir = home();
+  mkdirSync(join(dir, ".gemini"));
+  const file = join(dir, ".gemini", "settings.json");
+  writeFileSync(file, '{\n  // my theme\n  "theme": "dark", "url": "http://a//b"\n}\n');
+  expect(() => launch("gemini", { home: dir })).toThrow(/has comments.*coding_sessions_communicator/);
+  expect(readFileSync(file, "utf8")).toContain("// my theme");
+  // Once the operator adds the entry by hand, launches go ahead without touching the file.
+  launch("gemini", { home: home() });
+  const entry = { command: "/opt/bun", args: ["/app/communicator-stdio.ts"], env: { CS_COMMUNICATOR_TOKEN: "${CS_COMMUNICATOR_TOKEN}", CS_COMMUNICATOR_URL: "${CS_COMMUNICATOR_URL}" } };
+  writeFileSync(file, `{ /* mine */ "mcpServers": { "coding_sessions_communicator": ${JSON.stringify(entry)} } }`);
+  expect(() => launch("gemini", { home: dir })).not.toThrow();
+  expect(readFileSync(file, "utf8")).toContain("/* mine */");
+});

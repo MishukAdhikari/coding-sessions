@@ -33,7 +33,7 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     // --skip-trust: Gemini starts MCP servers only in trusted folders.
     unrestrictedArgs: ["--approval-mode=yolo", "--skip-trust"],
     mcp: "~/.gemini/settings.json", homepage: "https://github.com/google-gemini/gemini-cli",
-    notes: "Needs a Gemini API key or a Gemini Code Assist Standard/Enterprise account.",
+    notes: "Needs a Gemini API key or Gemini Code Assist. In standard mode, trust the folder when Gemini asks so its MCP servers start.",
   },
   {
     id: "kimi", label: "Kimi Code", bin: "kimi", envVar: null, npmPackage: "@moonshot-ai/kimi-code",
@@ -86,7 +86,7 @@ export function presetLaunch(preset: AgentPreset, options: PresetLaunchOptions):
       installUserMcpConfig(home, [".gemini"], "settings.json", {
         communicator: stdio(communicator, true),
         gateway: gateway ? { ...stdio(gateway, true), timeout: 130_000 } : null,
-      }, "Gemini CLI");
+      }, "Gemini CLI", true);
       return { args, env: {} };
     case "kimi":
       // Kimi passes its environment to MCP servers but does not expand ${VAR}.

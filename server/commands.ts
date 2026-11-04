@@ -134,7 +134,7 @@ export function validateDraft(input: unknown): { ok: true; draft: CommandDraft &
       ...body,
       label: typed("label") ? body.label : found.label,
       bin: presetBin(found.bin),
-      envVar: typed("envVar") ? body.envVar : found.envVar,
+      envVar: body.envVar !== undefined ? body.envVar : found.envVar,
     };
     if (!resolveBin(String(body.bin)).ok) {
       return { ok: false, error: `${found.label} is not installed on this server. Install it with: install-provider-clis ${found.id}` };
@@ -174,6 +174,9 @@ export function validateDraft(input: unknown): { ok: true; draft: CommandDraft &
   if (rawEnv && !ENV_VAR_RE.test(rawEnv)) {
     return { ok: false, error: "That env var name should look like GEMINI_API_KEY — capitals, digits and underscores." };
   }
+
+  // The preset's launch sets this itself; a stored key under the same name would replace it.
+  if (preset === "opencode" && rawEnv === "OPENCODE_CONFIG_CONTENT") return { ok: false, error: "opencode's preset sets OPENCODE_CONFIG_CONTENT itself; store the key under another name." };
 
   const resolved = resolveBin(String(body.bin ?? ""));
   if (!resolved.ok) return resolved;
