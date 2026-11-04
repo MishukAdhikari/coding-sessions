@@ -336,8 +336,8 @@ const server = Bun.serve({
         defaults: { repository: config.repository },
         agentPermissions: config.unrestrictedAgents ? "unrestricted" : "standard",
         commandCode: { hasToken: hasCommandCodeToken() },
-        commands: listCommands().map(({ id, slug, provider, label, envVar, hasToken }) =>
-          ({ id, slug, provider, label, envVar, hasToken })),
+        commands: listCommands().map(({ id, slug, provider, label, envVar, hasToken, preset }) =>
+          ({ id, slug, provider, label, envVar, hasToken, preset })),
       });
     }
 
