@@ -1,5 +1,5 @@
 /* Coding Sessions — service worker: network-first app shell, offline fallback */
-const CACHE = "xs-v75";
+const CACHE = "xs-v76";
 const ASSETS = [
   "/",
   "/app.css",

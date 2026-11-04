@@ -368,3 +368,4 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .server-setting-source .text-link { color: var(--action-primary); font-size: 12px; font-weight: 600; padding: 0; background: none; }
 .server-setting-confirm { display: grid; gap: 8px; margin-top: 12px; }
 .server-setting-confirm[hidden] { display: none; }
+.agent-install-output { max-height: 160px; overflow: auto; margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-control); background: var(--surface-muted); color: var(--text-secondary); font: 11px/1.5 var(--font-data); white-space: pre-wrap; overflow-wrap: anywhere; }

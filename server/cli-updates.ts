@@ -27,7 +27,11 @@ const VERSION_COMMANDS: Array<{ name: string; argv: string[] }> = [
 
 async function run(argv: string[]): Promise<CommandResult> {
   try {
-    const child = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: childEnvironment() });
+    // Agents install into ~/.local/bin (deploy/install-provider-clis), which the service's PATH may lack.
+    const PATH = [join(homedir(), ".local", "bin"), process.env.PATH ?? ""].filter(Boolean).join(":");
+    const bin = Bun.which(argv[0]!, { PATH });
+    if (!bin) return { code: 127, out: "" };
+    const child = Bun.spawn([bin, ...argv.slice(1)], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: childEnvironment({ PATH }) });
     const timeout = setTimeout(() => child.kill(), 10_000);
     try {
       const out = await new Response(child.stdout).text();
@@ -79,6 +83,11 @@ export function createCliUpdates(execute: Runner = run, readHistory: () => Promi
     return value;
   }
   return {
+    /** Installed versions by agent id; null where an agent is not installed. */
+    async versions(fresh = false) {
+      if (fresh) versionsCache = null;
+      return versions();
+    },
     async status() {
       const [timerResult, serviceResult, installedVersions, history] = await Promise.all([
         execute(["systemctl", "show", settings.timer, "--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime"]),
