@@ -52,7 +52,7 @@ Then install selected CLIs as the instance user:
 sudo -u cs-personal -H /opt/coding-sessions/personal/current/deploy/install-provider-clis codex claude command-code
 ```
 
-The helper uses the providers' official npm/native installation methods and intentionally selects their latest releases. Supply only desired provider names. Authentication is a separate operator step, as this same account, through the app or the provider CLI. Never run provider login as root. The account has no passwordless sudo and no Docker group.
+The helper uses the providers' official npm/native installation methods and intentionally selects their latest releases. Supply only desired provider names; `gemini`, `kimi`, `qwen` and `opencode` install the [agent presets](../docs/agents.md). Authentication is a separate operator step, as this same account, through the app or the provider CLI. Never run provider login as root. The account has no passwordless sudo and no Docker group.
 
 `screen` is installed even if another multiplexer is later selected, because Claude's CLI sign-in flow uses it. `SCREENDIR` points to the private instance runtime directory; an administrator attaching manually must use that same directory. Optional claude.ai browser automation additionally needs the repository's matching Playwright Chromium, OS browser libraries, Xvfb and xauth; it is not installed or configured by this baseline installer.
 
