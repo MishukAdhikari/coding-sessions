@@ -39,7 +39,7 @@ These are third-party tools. Each comes from its own vendor and has its own acco
 - **Gemini CLI and Kimi Code** have no per-launch MCP option, so the app adds one entry, marked as its own, to the agent's user config. It never edits an entry you created, and it never writes into your repositories. When you run the agent yourself outside Coding Sessions, that entry starts as an MCP server with no tools, so nothing fails. If `~/.gemini/settings.json` has comments, the app won't rewrite it; the launch error shows the exact entry to add by hand.
 - **Gemini CLI** starts MCP servers only in folders it trusts. In standard mode it asks you to trust the folder, and Coding Sessions' MCP connects once you do; unrestricted mode passes `--skip-trust`.
 
-**Permission mode:** with the server set to unrestricted (Settings → Server settings, or `CS_AGENT_PERMISSIONS`), presets start with the option above. In standard mode they start with the agent's own prompts.
+**Permission mode:** with the server's agent permission mode set to unrestricted (`CS_AGENT_PERMISSIONS=unrestricted`), presets start with the option above. In standard mode they start with the agent's own prompts.
 
 ## Not supported yet
 
