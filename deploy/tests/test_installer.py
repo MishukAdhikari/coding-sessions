@@ -53,6 +53,28 @@ class InstallerContractTests(unittest.TestCase):
         none = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"], input="main\n", capture_output=True, text=True)
         self.assertEqual((none.returncode, none.stdout.strip()), (0, ""))
 
+    def test_app_updater_reads_the_settings_channel_only_as_a_fixed_word(self):
+        def choice(content=None, link=False):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "app-update-channel"
+                if link:
+                    target = Path(tmp) / "target"
+                    target.write_text("main\n")
+                    path.symlink_to(target)
+                elif content is not None:
+                    path.write_text(content)
+                result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--channel-choice", str(path)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+        self.assertEqual(choice("main\n"), "main")
+        self.assertEqual(choice("releases\n"), "releases")
+        self.assertEqual(choice("releases"), "releases")
+        for bad in ["mainline\n", "main; rm -rf /\n", "Main\n", "", "releases-x"]:
+            with self.subTest(content=bad):
+                self.assertEqual(choice(bad), "")
+        self.assertEqual(choice(), "")
+        self.assertEqual(choice(link=True), "")
+
     def test_app_updater_rejects_bad_instances_and_needs_root(self):
         for instance in ["", "../etc", "Demo", "demo-"]:
             with self.subTest(instance=instance):
