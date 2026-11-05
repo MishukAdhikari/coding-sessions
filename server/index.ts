@@ -41,6 +41,7 @@ import { handleAppUpdatesRoute } from "./app-updates-route";
 import { serverSettings } from "./server-settings-instance";
 import { handleServerSettingsRoute } from "./server-settings-route";
 import { createStepUpGrants } from "./step-up";
+import { createCliLogins, handleCliLoginRoute } from "./cli-login";
 import { agentAccounts } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 import { recordAccountLogin } from "./account-history";
@@ -50,6 +51,7 @@ const COOKIE_SECURE = config.cookieSecure;
 const appUpdates = createAppUpdates(appUpdatePaths(config.dataDir), () => serverSettings.get("updateChannel"));
 useMouseSetting(serverSettings.mouseEnabled);
 const stepUpGrants = createStepUpGrants();
+const cliLogins = createCliLogins();
 const agentInstaller = createAgentInstaller({ onFinished: () => { void cliUpdates.versions(true); } });
 const COOKIE_NAME = "xs_auth";
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
@@ -291,6 +293,15 @@ const server = Bun.serve({
       const token = auth.createAuthSession(req.headers.get("user-agent"));
       return json({ ok: true }, 200, { "set-cookie": authCookie(token, 30 * 24 * 3600) });
     }
+
+    /* ----- browser sign-in for the cs CLI (device-code style) ----- */
+
+    const cliLoginResponse = await handleCliLoginRoute(req, {
+      origin: auth.ORIGIN, cookieName: COOKIE_NAME, checkBrowserSession: auth.checkAuthSession,
+      logins: cliLogins, mintToken: auth.createCliToken,
+      rateLimited: (key, max) => auth.rateLimited(key, max), clientIp: (r) => clientIp(r, srv),
+    });
+    if (cliLoginResponse) return cliLoginResponse;
 
     /* ----- machine-wide Codex auth: browser session only, never CLI bearer ----- */
 
