@@ -104,6 +104,15 @@
   let setupToken = location.hash.startsWith("#setup=") ? location.hash.slice("#setup=".length) : null;
   if (setupToken) history.replaceState(null, "", location.pathname + location.search);
 
+  // `cs server add` opens #cli-login=CODE. The code alone grants nothing: Allow needs
+  // this signed-in browser, so it waits through a sign-in if there is one first.
+  const readCliLoginCode = () => {
+    const m = location.hash.match(/^#cli-login=([A-Za-z-]{4,12})$/);
+    if (location.hash.startsWith("#cli-login=")) history.replaceState(null, "", location.pathname + location.search);
+    return m ? m[1].toUpperCase() : null;
+  };
+  let cliLoginCode = readCliLoginCode();
+
   async function boot() {
     try {
       me = await api("/api/me");
@@ -228,6 +237,7 @@
         history.replaceState(null, "", location.pathname);
       }
     }
+    if (cliLoginCode) openCliLogin();
     refresh(true);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 4000);
@@ -2004,6 +2014,7 @@
   $("btn-cli-access").addEventListener("click", () => {
     $("cli-token-new").hidden = true;
     $("input-cli-label").value = "";
+    $("cli-origin").textContent = location.origin;
     loadCliTokens();
     loadMcpConnections();
     openSheet("sheet-cli");
@@ -2022,6 +2033,36 @@
       $("input-cli-label").value = "";
       loadCliTokens();
     } catch (e) { showToast(e.message); }
+  });
+
+  /* ---------- Allow a cs sign-in (cs server add) ---------- */
+
+  async function openCliLogin() {
+    const code = cliLoginCode;
+    cliLoginCode = null;
+    try {
+      const { label } = await api(`/api/cli-login/request?user_code=${encodeURIComponent(code)}`);
+      $("cli-login-label").textContent = label;
+      $("cli-login-code").textContent = code;
+      $("btn-cli-login-allow").dataset.code = code;
+      openSheet("sheet-cli-login");
+    } catch (e) { showToast(e.message); }
+  }
+
+  async function answerCliLogin(allow) {
+    const code = $("btn-cli-login-allow").dataset.code;
+    try {
+      await api(`/api/cli-login/${allow ? "approve" : "deny"}`, { method: "POST", body: JSON.stringify({ user_code: code }) });
+      showToast(allow ? "Allowed. Go back to your terminal." : "Denied. Nothing was given to cs.");
+    } catch (e) { showToast(e.message); }
+    closeSheet();
+  }
+
+  $("btn-cli-login-allow").addEventListener("click", () => answerCliLogin(true));
+  $("btn-cli-login-deny").addEventListener("click", () => answerCliLogin(false));
+  window.addEventListener("hashchange", () => {
+    cliLoginCode = readCliLoginCode();
+    if (cliLoginCode && me?.authed && !$("app").hidden) openCliLogin();
   });
 
   /* ---------- Connect Claude or Codex (MCP connector) ---------- */

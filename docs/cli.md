@@ -27,17 +27,54 @@ git clone https://github.com/MishukAdhikari/coding-sessions.git
 cd coding-sessions
 bun install
 bun link            # puts `cs` on your PATH
-cs login            # server URL, CLI token, optional SSH host
+cs server add personal https://sessions.example.com --ssh you@sessions.example.com
 cs doctor           # checks everything is wired up
 ```
 
-Mint the token in the app under **Settings → CLI access**. `cs upgrade` pulls the
-checkout to the latest; `cs --version` shows what you run.
+`cs server add` prints a link and a short code and opens the app in your browser.
+Check the code matches and press **Allow**; `cs` gets its own CLI token, listed in
+**Settings → CLI access** as "cs on <your computer>". Nothing to copy. Over SSH, open
+the link on any device that is signed in to the app. For scripts and CI, pass a token
+minted in **Settings → CLI access** instead: `--token -` reads it from stdin.
 
-Settings live in `~/.config/cs/config.json` (mode 600). `CS_API`, `CS_TOKEN` and
-`CS_SSH` override them. If the server sits behind Cloudflare Access, either add an
-Access service token in `cs login`, or let `cs` route API calls over SSH to the
-server's localhost.
+`cs login` asks the same questions one by one, if you prefer that. `cs upgrade` pulls
+the checkout to the latest; `cs --version` shows what you run.
+
+Settings live in `~/.config/cs/config.json` (mode 600). If the server sits behind
+Cloudflare Access, either add an Access service token in `cs login`, or let `cs` route
+API calls over SSH to the server's localhost (`--ssh-api`).
+
+## Several servers
+
+`cs` keeps each server under a short name, so one laptop can drive a lab server and a
+personal one:
+
+```bash
+cs server add lab https://lab.example.com
+cs server add personal https://personal.example.net --ssh you@personal.example.net
+cs server ls                  # * marks the default, and whether each one answers
+cs server use personal        # make it the default
+cs server rename lab work
+cs server rm work             # then revoke its token in that app
+```
+
+Every command that talks to a server takes `--server=<name>` or `-S <name>`; without
+one it uses `CS_SERVER`, then the default:
+
+```bash
+cs --server "fix the flaky test"          # default server
+cs --server=lab "fix the flaky test"      # lab
+cs list -S lab
+CS_SERVER=lab cs list
+```
+
+`cs term` keeps `-S` as its short `--sync`, so pick its server with `--server=<name>`.
+`CS_API`, `CS_TOKEN` and `CS_SSH` still work for a one-off server that is not saved;
+they are ignored when you name a server.
+
+A config from before named servers is moved over the first time `cs` runs: the server
+is named after the first part of its host (`sessions` for `sessions.example.com`) and
+becomes the default. The old file stays next to it as `config.json.v1.bak`.
 
 ## Commands
 
@@ -51,6 +88,7 @@ cs term [name] [--sync]       interactive claude on the server that survives dis
 cs mirror [name]              join a live session in your terminal, next to the app
 cs ssh [name]                 shell on the server, in the session's folder
 cs mcp add|status|remove      let Claude Code / Codex drive sessions over MCP
+cs server add|ls|use|rm       the servers this machine uses
 cs                            anything else goes to your local `claude`
 ```
 
@@ -71,3 +109,8 @@ cs mcp status
 With `--token`, Claude Code stores the token in its MCP settings; Codex reads it from
 `$CS_TOKEN`, so export that in the shell you start Codex from. See [MCP](mcp.md) for the
 tools agents get.
+
+Each server gets its own MCP connection: `coding-sessions` for the default server and
+`coding-sessions-<name>` for the others. `cs mcp add --server=lab` adds lab's, `cs mcp add
+--all` adds every saved server, and `cs mcp status` shows them all. With `--token`, Codex
+reads a non-default server's token from `$CS_TOKEN_<NAME>`, such as `$CS_TOKEN_LAB`.

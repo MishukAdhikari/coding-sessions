@@ -69,13 +69,14 @@ export const MCP_NAME = "coding-sessions";
  * default (the agent opens a browser once); `withToken` uses the CLI token instead,
  * for machines without a browser. The token itself never goes in argv for Codex.
  */
-export function mcpAddCommand(client: McpClient, api: string, opts: { withToken?: string } = {}): string[] {
+export function mcpAddCommand(client: McpClient, api: string, opts: { withToken?: string; name?: string; tokenEnv?: string } = {}): string[] {
   const url = `${api.replace(/\/$/, "")}/mcp`;
+  const name = opts.name ?? MCP_NAME;
   if (client === "claude") {
-    return ["claude", "mcp", "add", "--transport", "http", "-s", "user", MCP_NAME, url,
+    return ["claude", "mcp", "add", "--transport", "http", "-s", "user", name, url,
       ...(opts.withToken ? ["--header", `Authorization: Bearer ${opts.withToken}`] : [])];
   }
-  return ["codex", "mcp", "add", MCP_NAME, "--url", url, ...(opts.withToken ? ["--bearer-token-env-var", "CS_TOKEN"] : [])];
+  return ["codex", "mcp", "add", name, "--url", url, ...(opts.withToken ? ["--bearer-token-env-var", opts.tokenEnv ?? "CS_TOKEN"] : [])];
 }
 
 export function mcpRemoveCommand(client: McpClient, name = MCP_NAME): string[] {
@@ -86,4 +87,118 @@ export function mcpRemoveCommand(client: McpClient, name = MCP_NAME): string[] {
 export function mcpListedLine(output: string, name = MCP_NAME): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return output.split("\n").find((line) => new RegExp(`^\\s*${escaped}(?::|\\s)`).test(line))?.trim() ?? null;
+}
+
+/* ---------- named servers ---------- */
+
+export interface ServerEntry {
+  api: string;       // https://sessions.example.com
+  token: string;     // CLI token (browser sign-in or Settings → CLI access)
+  ssh: string;       // user@host — used for the Synced Launch upload and terminal commands
+  sshApi?: boolean;  // route API calls over SSH to the server's localhost (bypasses Cloudflare)
+  origin?: string;   // server-local API URL used in SSH mode (default http://127.0.0.1:9121)
+  cfId?: string;     // Cloudflare Access service-token Client-Id
+  cfSecret?: string; // Cloudflare Access service-token Client-Secret
+}
+
+export interface ConfigFile {
+  servers: Record<string, ServerEntry>;
+  default?: string;
+}
+
+const SERVER_NAME = /^[a-z0-9][a-z0-9_-]{0,30}$/;
+export const isServerName = (name: unknown): name is string => typeof name === "string" && SERVER_NAME.test(name);
+
+/** A short name for a server URL: its first DNS label ("lab" for https://lab.example.com), deduped. */
+export function serverNameFromUrl(url: string, taken: Iterable<string> = []): string {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch {}
+  const isIp = /^[\d.]+$/.test(host) || host.includes(":");
+  let base = host === "localhost" || host.endsWith(".localhost") ? "local"
+    : isIp || !host ? "server"
+    : host.split(".")[0]!.replace(/[^a-z0-9_-]/g, "-").replace(/^[-_]+/, "").slice(0, 24).replace(/[-_]+$/, "");
+  if (!isServerName(base)) base = "server";
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  for (let i = 2; ; i++) if (!used.has(`${base}-${i}`)) return `${base}-${i}`;
+}
+
+/**
+ * Read the config file's JSON. The old flat shape ({api, token, ssh, …}) becomes one
+ * server named after its host and made the default; `migrated` says the caller should
+ * back up the old file and save the new one.
+ */
+export function migrateConfig(raw: unknown): { config: ConfigFile; migrated: boolean } {
+  const obj = raw && typeof raw === "object" ? raw as Record<string, any> : {};
+  if (obj.servers && typeof obj.servers === "object") {
+    const servers: Record<string, ServerEntry> = {};
+    for (const [name, entry] of Object.entries(obj.servers)) if (isServerName(name) && entry && typeof entry === "object") servers[name] = entry as ServerEntry;
+    return { config: { servers, default: isServerName(obj.default) && servers[obj.default] ? obj.default : undefined }, migrated: false };
+  }
+  if (!obj.api && !obj.token) return { config: { servers: {} }, migrated: false };
+  const entry: ServerEntry = { api: String(obj.api || "").replace(/\/$/, ""), token: String(obj.token || ""), ssh: String(obj.ssh || "") };
+  if (obj.sshApi) entry.sshApi = true;
+  for (const key of ["origin", "cfId", "cfSecret"] as const) if (obj[key]) entry[key] = String(obj[key]);
+  const name = serverNameFromUrl(entry.api);
+  return { config: { servers: { [name]: entry }, default: name }, migrated: true };
+}
+
+/** The MCP connection name for a server: plain for the default, suffixed for the others. */
+export const mcpNameFor = (server: string | undefined, isDefault: boolean) =>
+  isDefault || !server ? MCP_NAME : `${MCP_NAME}-${server}`;
+
+/** The env var Codex reads a server's token from: CS_TOKEN, or CS_TOKEN_LAB for "lab". */
+export const tokenEnvFor = (server: string | undefined, isDefault: boolean) =>
+  isDefault || !server ? "CS_TOKEN" : `CS_TOKEN_${server.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+
+/** Subcommands that run on a server and take --server=<name> / -S <name> to choose it. */
+export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "attach", "mirror", "doctor", "mcp", "install", "login"]);
+
+/**
+ * Pull the server choice out of argv without disturbing anything else.
+ *
+ * `--server` alone keeps meaning "run this on the server" (default server) and stays in
+ * place for the run parser. `--server=<name>` and `-S <name>` choose a server; in front of
+ * a prompt they also mean "run on it". After a subcommand, bare `--server` just means the
+ * default. `cs term` keeps `-S` as its short `--sync`. Nothing after `--` is touched.
+ */
+/** Subcommands that never talk to a chosen server (or choose it themselves). */
+const LOCAL_COMMANDS = new Set(["server", "pull", "upgrade", "version", "--version", "-V", "help", "--help", "-h"]);
+/** What parseServerArgs returns as `sub` for a prompt: local claude, or a run on the server. */
+export const RUN = "<run>";
+
+export function parseServerArgs(argv: string[]): { sub: string | undefined; args: string[]; server?: string } {
+  let server: string | undefined;
+  const pick = (list: string[], keepBare: boolean, shortS: boolean) => {
+    const out: string[] = [];
+    let chose = false;
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i]!;
+      if (a === "--") { out.push(...list.slice(i)); break; }
+      if (a.startsWith("--server=")) { const v = a.slice(9); if (v) { server = v; chose = true; } else if (keepBare) out.push("--server"); continue; }
+      if (shortS && a === "-S" && i + 1 < list.length) { server = list[++i]; chose = true; continue; }
+      if (a === "--server" && !keepBare) continue;
+      out.push(a);
+    }
+    return { out, chose };
+  };
+
+  // A leading choice followed by a subcommand: `cs -S lab list`, `cs --server=lab list`.
+  const lead = argv[0]?.startsWith("--server=") && argv[0].length > 9 ? 1 : argv[0] === "-S" && argv.length > 1 ? 2 : 0;
+  if (lead && SERVER_COMMANDS.has(argv[lead] ?? "")) {
+    server = lead === 1 ? argv[0]!.slice(9) : argv[1];
+    const sub = argv[lead]!;
+    return { sub, args: pick(argv.slice(lead + 1), false, sub !== "term" && sub !== "attach").out, server };
+  }
+
+  const sub = argv[0];
+  if (sub && SERVER_COMMANDS.has(sub)) {
+    return { sub, args: pick(argv.slice(1), false, sub !== "term" && sub !== "attach").out, server };
+  }
+  if (sub === undefined || LOCAL_COMMANDS.has(sub)) return { sub, args: argv.slice(1) };
+
+  // The run path: `cs [--server[=name] | -S name] [flags] "<prompt>"`, flags in any order.
+  const { out, chose } = pick(argv, true, true);
+  if (chose && !out.includes("--server") && !out.includes("-s")) out.unshift("--server");
+  return { sub: RUN, args: out, server };
 }

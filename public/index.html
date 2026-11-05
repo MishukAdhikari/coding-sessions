@@ -339,6 +339,15 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Later</button>
 </div>
 
+<div id="sheet-cli-login" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-login-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-cli-login-heading">Allow <code>cs</code> on <span id="cli-login-label"></span> to use this server?</h2>
+  <p class="sheet-body">It gets a CLI token with full control of your sessions. You can revoke it any time in Settings → CLI access.</p>
+  <p class="hint">Code <code id="cli-login-code"></code>. Allow only if you just ran <code>cs</code> yourself and your terminal shows the same code.</p>
+  <button id="btn-cli-login-allow" class="btn btn-primary btn-big">Allow</button>
+  <button id="btn-cli-login-deny" class="btn btn-ghost btn-big">Deny</button>
+</div>
+
 <div id="sheet-server-settings" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-server-settings-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-server-settings-heading">Server settings</h2>
@@ -574,6 +583,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-cli-heading">CLI &amp; MCP access</h2>
   <p class="sheet-body">Tokens for the <code>cs</code> command-line client. Each one has full control of your sessions — treat it like a password.</p>
+  <p class="hint">On your laptop, <code>cs server add &lt;name&gt; <span id="cli-origin">https://this-server</span></code> signs in through this browser, no copying needed.</p>
   <div id="cli-token-list"></div>
   <div id="cli-token-new" class="menu-group" hidden>
     <label class="label">New token — copy it now, it won't be shown again</label>
@@ -721,6 +731,6 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/session-status.js?v=2"></script>
 <script src="/connection-status.js?v=4"></script>
 <script src="/connectors.js?v=6"></script>
-<script src="/app.js?v=57"></script>
+<script src="/app.js?v=58"></script>
 </body>
 </html>
