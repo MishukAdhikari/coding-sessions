@@ -1,0 +1,119 @@
+name: Install test
+
+# Runs the real installer on a fresh Ubuntu runner (systemd, root), the way a user would.
+# The domain is fake, so HTTPS can't be issued; everything up to that point must work.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and lint
+        run: |
+          bash -n deploy/coding-sessions deploy/install.sh deploy/install-ubuntu
+          shellcheck -S warning deploy/coding-sessions deploy/install.sh
+      - name: Start from a plain server (the runner ships its own Node.js in /usr/local/bin)
+        run: sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
+      - name: Dry run plans without changing anything
+        run: sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --no-browser --no-updates --no-swap --skip-dns-check --dry-run
+      - name: Install
+        run: |
+          sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes | tee install.log
+          # A full VM passes credentials through systemd, not the fallback.
+          grep -q 'Credentials remain root-only' install.log
+      - name: The app, the CLI, the agents and the browser are in place
+        run: |
+          set -x
+          systemctl is-active --quiet coding-sessions@personal.service
+          curl -fsS -o /dev/null http://127.0.0.1:9121/
+          sudo coding-sessions status
+          sudo coding-sessions agents | tee agents.txt
+          grep -E '^ +claude +[0-9]' agents.txt
+          grep -E '^ +gemini +[0-9]' agents.txt
+          sudo -u cs-personal -H sh -c 'ls ~/.cache/ms-playwright' | grep chromium
+          gh --version | head -n 1
+          caddy version
+          ttyd --version
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          test "$(sudo cat /var/lib/coding-sessions/personal/data/app-auto-update)" = on
+      - name: A one-time sign-in link signs in once
+        run: |
+          link=$(sudo coding-sessions setup-link 2>/dev/null | grep -o 'https://[^ ]*#setup=[^ ]*')
+          token=${link#*#setup=}
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d "{\"token\":\"$token\"}" http://127.0.0.1:9121/api/auth/setup)
+          test "$code" = 200
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d "{\"token\":\"$token\"}" http://127.0.0.1:9121/api/auth/setup)
+          test "$code" = 401
+      - name: Re-running setup repairs, and refuses a domain change before installing anything
+        run: |
+          sudo deploy/coding-sessions setup --skip-dns-check --no-updates --no-link --yes | tee rerun.log
+          grep -q 'sudo coding-sessions setup-link' rerun.log
+          ! systemctl is-enabled --quiet coding-sessions-update@personal.timer
+          ! sudo deploy/coding-sessions setup --domain other.coding-sessions.invalid --skip-dns-check --yes
+      - name: Doctor reports the missing HTTPS for the fake domain
+        run: |
+          set +e
+          sudo coding-sessions doctor | tee doctor.txt
+          grep -q 'service running' doctor.txt
+      - name: Uninstall --purge stops everything and removes the account
+        run: |
+          sudo coding-sessions uninstall --purge --confirm personal
+          ! systemctl is-active --quiet coding-sessions@personal.service
+          ! id cs-personal
+          test ! -e /var/lib/coding-sessions/personal
+          ! pgrep -u cs-personal
+      - name: Logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u coding-sessions@personal -n 100 --no-pager || true
+          sudo journalctl -u caddy -n 50 --no-pager || true
+
+  # The other supported systems, each booted with systemd in a privileged container.
+  distros:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "debian:13", "ubuntu:22.04", "ubuntu:26.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot ${{ matrix.image }} with systemd
+        run: |
+          printf 'FROM %s\nENV container=docker\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv dbus ca-certificates curl\nCMD ["/sbin/init"]\n' "${{ matrix.image }}" > Dockerfile.ci
+          docker build -q -t cs-ci -f Dockerfile.ci .
+          docker run -d --name box --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock -v "$PWD":/src:ro cs-ci
+          for _ in $(seq 1 30); do docker exec box systemctl is-system-running 2>/dev/null | grep -qE 'running|degraded' && break; sleep 2; done
+          docker exec box sh -c 'cp -r /src /root/coding-sessions && chown -R root:root /root/coding-sessions && cat /etc/os-release | head -n 2'
+      - name: Install
+        run: docker exec box /root/coding-sessions/deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents claude,gemini --browser --updates --no-swap --skip-dns-check --yes
+      - name: The app, the agents, the browser and the sign-in link work
+        run: |
+          set -x
+          docker exec box systemctl is-active --quiet coding-sessions@personal.service
+          docker exec box curl -fsS -o /dev/null http://127.0.0.1:9121/
+          docker exec box coding-sessions agents | tee agents.txt
+          grep -E '^ +claude +[0-9]' agents.txt
+          grep -E '^ +gemini +[0-9]' agents.txt
+          # Playwright 1.59 doesn't support Ubuntu 26.04 yet: setup skips the browser there with a warning.
+          if [ "${{ matrix.image }}" != "ubuntu:26.04" ]; then docker exec box sh -c 'ls /var/lib/coding-sessions/personal/.cache/ms-playwright' | grep chromium; fi
+          docker exec box ttyd --version
+          docker exec box gh --version
+          docker exec box sh -c 'coding-sessions setup-link 2>/dev/null' | grep -q '#setup=cssetup_'
+          docker exec box coding-sessions setup --skip-dns-check --yes
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "--- what systemd hands the service as a credential"
+          docker exec box sh -c 'systemctl --version | head -n 1; findmnt -n /run/credentials 2>/dev/null || true'
+          docker exec box systemd-run --wait --pipe --quiet -p User=cs-personal -p LoadCredential=probe:/etc/coding-sessions/credentials/personal/token-encryption-key \
+            sh -c 'id; stat -c "dir %u:%g %a %T" "$CREDENTIALS_DIRECTORY" -f; stat -c "file %u:%g %a %F" "$CREDENTIALS_DIRECTORY/probe"; getfacl -p "$CREDENTIALS_DIRECTORY/probe" 2>/dev/null' || true
+          docker exec box journalctl -u coding-sessions@personal -n 30 --no-pager || true
+          docker exec box journalctl -u caddy -n 30 --no-pager || true

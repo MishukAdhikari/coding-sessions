@@ -98,6 +98,12 @@
 
   /* ---------- boot ---------- */
 
+  // A one-time link from `coding-sessions setup-link`. It's taken out of the address bar
+  // at once, so it isn't kept in history or copied with the URL, and it's only spent
+  // when someone presses the button: a link scanner that merely opens it can't use it.
+  let setupToken = location.hash.startsWith("#setup=") ? location.hash.slice("#setup=".length) : null;
+  if (setupToken) history.replaceState(null, "", location.pathname + location.search);
+
   async function boot() {
     try {
       me = await api("/api/me");
@@ -106,13 +112,30 @@
       return;
     }
     me.authed ? enterApp() : showLogin();
+    if (setupToken && me.authed) setupToken = null; // already signed in; leave the link unused
   }
+
+  $("btn-setup-link").addEventListener("click", async () => {
+    try {
+      await api("/api/auth/setup", { method: "POST", body: JSON.stringify({ token: setupToken }) });
+      setupToken = null;
+      me = await api("/api/me");
+      enterApp();
+      if (!me.hasPasskey) openSheet("sheet-welcome");
+    } catch (e) {
+      setupToken = null;
+      $("btn-setup-link").hidden = true;
+      showLogin();
+      loginError(e.message);
+    }
+  });
 
   /* ---------- login ---------- */
 
   function showLogin() {
     $("login").hidden = false;
     $("app").hidden = true;
+    $("btn-setup-link").hidden = !setupToken;
     const canPasskey = me.hasPasskey && window.SimpleWebAuthnBrowser?.browserSupportsWebAuthn();
     $("btn-passkey").hidden = !canPasskey;
     $("form-password").hidden = canPasskey;
@@ -1578,6 +1601,7 @@
     }
   });
   $("btn-add-passkey").addEventListener("click", () => { closeSheet(); addPasskey(); });
+  $("btn-welcome-passkey").addEventListener("click", () => { closeSheet(); addPasskey(); });
   $("btn-logout").addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" }).catch(() => {});
     location.reload();

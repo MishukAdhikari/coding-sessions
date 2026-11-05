@@ -33,6 +33,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <p class="login-sub">Your coding agents on your server</p>
 
     <div class="login-actions">
+      <button id="btn-setup-link" class="btn btn-primary" hidden>Sign in with this link</button>
       <button id="btn-passkey" class="btn btn-primary" hidden>Unlock</button>
       <form id="form-password" hidden>
         <input id="input-password" class="field" type="password" autocomplete="current-password"
@@ -327,6 +328,15 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <p class="hint">New sessions use the updated versions. Existing sessions are not restarted.</p>
   <button id="btn-cli-update-now" class="btn btn-primary btn-big" disabled>Update now</button>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
+<div id="sheet-welcome" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-welcome-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-welcome-heading">You're in</h2>
+  <p class="sheet-body">That link worked once and is now used up. Add a passkey so you can sign in from this device with Face ID, Touch ID or your device PIN.</p>
+  <button id="btn-welcome-passkey" class="btn btn-primary btn-big">Add a passkey</button>
+  <p class="hint">Next: install agents in Settings → Agent authentication. Lost access later? Run <code>sudo coding-sessions setup-link</code> on the server.</p>
+  <button class="btn btn-ghost btn-big" data-close>Later</button>
 </div>
 
 <div id="sheet-server-settings" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-server-settings-heading" tabindex="-1" hidden>

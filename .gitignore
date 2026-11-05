@@ -3,7 +3,11 @@ node_modules
 
 # vendored agent skills (a local copy of mattpocock/skills)
 # skills-lock.json is the tracked record of what's installed
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+# Our own skill is tracked; it links to .claude/skills.
+!.agents/skills/install-coding-sessions
 
 # output
 out

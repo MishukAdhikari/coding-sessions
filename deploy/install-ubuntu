@@ -65,9 +65,12 @@ if ((check)); then
   exit 0
 fi
 [[ $(id -u) = 0 ]] || fail 'run the installer as root; agents will run under the dedicated non-root account'
-[[ $(uname -s) = Linux && -r /etc/os-release ]] || fail 'Ubuntu Linux required'
+[[ $(uname -s) = Linux && -r /etc/os-release ]] || fail 'Ubuntu or Debian Linux required'
 . /etc/os-release
-[[ ${ID:-} = ubuntu && ( ${VERSION_ID:-} = 24.04 || ${VERSION_ID:-} = 26.04 ) ]] || fail 'supported releases are Ubuntu 24.04 and 26.04'
+case "${ID:-}:${VERSION_ID:-}" in
+  ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12|debian:13) ;;
+  *) fail 'supported releases are Ubuntu 22.04, 24.04, 26.04 and Debian 12, 13' ;;
+esac
 case $(uname -m) in x86_64) bun_arch=x64;; aarch64|arm64) bun_arch=aarch64;; *) fail 'supported architectures are amd64 and arm64';; esac
 for path in /opt/coding-sessions "$config_root" "$config_root/instances" "$config_root/credentials" "$config_root/credentials/$instance" "$app_root" "$app_root/releases" /var/lib/coding-sessions; do
   [[ ! -L $path ]] || fail "refusing symlink: $path"
@@ -121,8 +124,36 @@ for existing in "$config_root"/*.env; do
 done
 
 export DEBIAN_FRONTEND=noninteractive
+# GitHub CLI from GitHub's signed repository: its maintainers mark the distribution
+# packages in Ubuntu 24.04/26.04 and Debian 13 as broken against current GitHub APIs.
+if [[ ! -f /etc/apt/sources.list.d/github-cli.list ]]; then
+  install -d -m 0755 /etc/apt/keyrings
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 -o /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg
+  chmod 0644 /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list
+fi
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl unzip git gh rsync openssh-client screen ttyd procps lsof sudo bash coreutils grep sed libc-bin openssl systemd util-linux
+apt-get install -y --no-install-recommends ca-certificates curl unzip git gh rsync openssh-client screen procps lsof sudo bash coreutils grep sed libc-bin openssl systemd util-linux
+# The web terminal needs ttyd 1.7+ (--writable). Debian 12 has no package and Ubuntu 22.04's
+# is 1.6, so those get the pinned upstream build, checked against its published digest.
+ttyd_ok() { [[ -n $1 ]] && printf '1.7.0\n%s\n' "$1" | sort -VC; }
+ttyd_have=$(ttyd --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+if ! ttyd_ok "$ttyd_have"; then
+  ttyd_candidate=$(apt-cache policy ttyd 2>/dev/null | sed -n 's/^ *Candidate: //p' | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)
+  if ttyd_ok "$ttyd_candidate"; then
+    apt-get install -y --no-install-recommends ttyd
+  else
+    case $bun_arch in
+      x64) ttyd_file=ttyd.x86_64 ttyd_sum=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55;;
+      *) ttyd_file=ttyd.aarch64 ttyd_sum=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165;;
+    esac
+    ttyd_tmp=$(mktemp)
+    curl --fail --location --proto '=https' --tlsv1.2 -o "$ttyd_tmp" "https://github.com/tsl0922/ttyd/releases/download/1.7.7/$ttyd_file"
+    printf '%s  %s\n' "$ttyd_sum" "$ttyd_tmp" | sha256sum --check --status || { rm -f "$ttyd_tmp"; fail 'ttyd checksum mismatch'; }
+    install -o root -g root -m 0755 "$ttyd_tmp" /usr/local/bin/ttyd
+    rm -f "$ttyd_tmp"
+  fi
+fi
 if ((nginx)); then apt-get install -y nginx certbot python3-certbot-nginx; fi
 stage=$(mktemp -d /tmp/cs-install.XXXXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
@@ -233,8 +264,41 @@ if ((nginx)); then
   if ((start)); then systemctl reload nginx; fi
 fi
 systemd-analyze verify "coding-sessions@$instance.service" "coding-sessions-update@$instance.service" "coding-sessions-update@$instance.timer" "coding-sessions-app-update@$instance.service" "coding-sessions-app-update@$instance.timer"
+credential_note="Credentials remain root-only in $config_root/credentials/$instance/."
 if ((start)); then
   systemctl daemon-reload
+  # Check that systemd can hand this service its credentials. Some hosts can't (LXC and
+  # other container-based VPSes); there the service gets owner-only copies in its own
+  # home instead, as the Docker image does. Only digests are compared, never printed.
+  probe=$config_root/credentials/$instance/token-encryption-key
+  want=$(sha256sum < "$probe" | cut -d' ' -f1)
+  got=''
+  for _ in 1 2 3; do
+    got=$(systemd-run --wait --pipe --quiet --collect -p User="$service_user" -p LoadCredential=probe:"$probe" \
+      sh -c 'sha256sum < "$CREDENTIALS_DIRECTORY/probe"' 2>/dev/null | cut -d' ' -f1 || true)
+    [[ $got = "$want" ]] && break
+    sleep 1
+  done
+  fallback=$instance_home/credentials
+  env_file=$config_root/$instance.env
+  if [[ $got != "$want" ]]; then
+    printf 'Note: systemd on this host cannot pass credentials to services; giving the service owner-only copies in %s.\n' "$fallback"
+    # The home belongs to the service account, so the account writes there itself:
+    # root only opens the source files and never follows a path the account controls.
+    runuser -u "$service_user" -- install -d -m 0700 "$fallback"
+    for credential in admin-password token-encryption-key; do
+      runuser -u "$service_user" -- sh -c 'umask 077; d=$1; f=$2; [ -d "$d" ] && [ ! -L "$d" ] || exit 1; cat > "$d/.$f.new" && mv -f "$d/.$f.new" "$d/$f"' sh "$fallback" "$credential" \
+        < "$config_root/credentials/$instance/$credential" || fail 'could not write the credential fallback'
+    done
+    grep -q '^CS_TOKEN_KEY_FILE=' "$env_file" \
+      || printf 'CS_TOKEN_KEY_FILE=%s/token-encryption-key\nCS_ADMIN_PASSWORD_FILE=%s/admin-password\n' "$fallback" "$fallback" >> "$env_file"
+    credential_note="systemd here can't pass credentials to services, so the service reads owner-only copies in $fallback."
+  elif grep -qx "CS_TOKEN_KEY_FILE=$fallback/token-encryption-key" "$env_file"; then
+    # systemd works now: go back to root-only credentials and remove the copies.
+    sed -i "\|^CS_TOKEN_KEY_FILE=$fallback/token-encryption-key\$|d; \|^CS_ADMIN_PASSWORD_FILE=$fallback/admin-password\$|d" "$env_file"
+    runuser -u "$service_user" -- rm -f -- "$fallback/token-encryption-key" "$fallback/admin-password"
+    printf 'systemd can pass credentials here now; removed the owner-only copies.\n'
+  fi
   systemctl enable "coding-sessions@$instance.service"
   systemctl restart "coding-sessions@$instance.service"
   healthy=0
@@ -247,8 +311,8 @@ if ((start)); then
   # Checks daily but changes nothing until the owner turns on automatic updates in Settings.
   systemctl enable --now "coding-sessions-app-update@$instance.timer"
 fi
-printf 'Installed %s. Credentials remain root-only in %s/credentials/%s/.\n' "$instance" "$config_root" "$instance"
-printf 'Complete HTTPS before browser use: sudo certbot --nginx -d %s\n' "$host"
+printf 'Installed %s. %s\n' "$instance" "${credential_note:-Credentials remain root-only in $config_root/credentials/$instance/.}"
+[[ ${CS_INSTALL_CALLER:-} = cli ]] || printf 'Complete HTTPS before browser use: sudo certbot --nginx -d %s\n' "$host"
 printf 'Administrator-controlled CLI updates: sudo systemctl enable --now coding-sessions-update@%s.timer\n' "$instance"
 printf 'App updates: turn on "Automatic updates" in Settings, or run now: sudo %s/current/deploy/update-app %s --now\n' "$app_root" "$instance"
 printf 'No provider login was performed. See deploy/README.md for provider and operator setup.\n'

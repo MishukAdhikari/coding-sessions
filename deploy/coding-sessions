@@ -1,0 +1,621 @@
+#!/usr/bin/env bash
+# coding-sessions: set up and run a Coding Sessions server with one command.
+#
+#   sudo coding-sessions setup        guided install; re-run any time to repair or change
+#   sudo coding-sessions doctor       check everything and say how to fix what's wrong
+#   sudo coding-sessions help         all commands
+#
+# Every change is listed and confirmed before it is made. Nothing here edits SSH,
+# resets a firewall, or runs coding agents as root.
+set -euo pipefail
+umask 022
+
+CLI_VERSION="dev"   # stamped with the release tag when published
+REPO_URL="https://github.com/MishukAdhikari/coding-sessions.git"
+SRC=/usr/local/lib/coding-sessions/source
+CONF=/etc/coding-sessions/setup.conf
+BUN_VERSION=1.3.14
+BUN_SHA_X64=951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f
+BUN_SHA_ARM64=a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
+ALL_AGENTS="claude codex command-code gemini kimi qwen opencode"
+NPM_AGENTS="codex command-code gemini kimi qwen opencode"
+
+# ---------- output ----------
+if [[ -t 1 ]]; then B=$'\e[1m' D=$'\e[2m' G=$'\e[32m' Y=$'\e[33m' R=$'\e[31m' N=$'\e[0m'; else B='' D='' G='' Y='' R='' N=''; fi
+say()  { printf '%s\n' "$*"; }
+step() { printf '\n%s==>%s %s%s%s\n' "$G" "$N" "$B" "$*" "$N"; }
+ok()   { printf '  %s✓%s %s\n' "$G" "$N" "$*"; }
+warn() { printf '  %s!%s %s\n' "$Y" "$N" "$*"; }
+bad()  { printf '  %s✗%s %s\n' "$R" "$N" "$*"; }
+die()  { printf '%scoding-sessions:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+interactive() { [[ -t 0 && -t 1 && ${ASSUME_YES:-0} = 0 ]]; }
+
+# ask "Question" "default" -> reply on stdout
+ask() {
+  local reply
+  if ! interactive; then printf '%s' "$2"; return; fi
+  read -r -p "  $1${2:+ [$2]}: " reply </dev/tty || true
+  printf '%s' "${reply:-$2}"
+}
+# confirm "Question" Y|N -> exit status
+confirm() {
+  local hint=y/N reply
+  [[ $2 = Y ]] && hint=Y/n
+  if ! interactive; then [[ $2 = Y || ${ASSUME_YES:-0} = 1 ]]; return; fi
+  read -r -p "  $1 [$hint]: " reply </dev/tty || true
+  reply=${reply:-$2}
+  [[ $reply =~ ^[Yy] ]]
+}
+
+need_root() { [[ $(id -u) = 0 ]] || die "run as root: sudo coding-sessions $*"; }
+
+# ---------- saved choices (k=v, never sourced) ----------
+conf_get() { [[ -f $CONF ]] && sed -n "s/^$1=//p" "$CONF" | tail -n 1 || true; }
+conf_save() {
+  install -d -m 0755 /etc/coding-sessions
+  local tmp; tmp=$(mktemp /etc/coding-sessions/.setup.XXXXXX)
+  {
+    printf '# Choices from `coding-sessions setup`; re-runs start from these.\n'
+    printf 'INSTANCE=%s\nDOMAIN=%s\nEMAIL=%s\nPORT=%s\nAGENTS=%s\nBROWSER=%s\nUPDATES=%s\nSOURCE=%s\nVERSION=%s\nCOMMIT=%s\n' \
+      "$INSTANCE" "$DOMAIN" "$EMAIL" "$PORT" "$AGENTS" "$BROWSER" "$UPDATES" "$SOURCE" "${SOURCE_REF:-}" "${SOURCE_COMMIT:-}"
+  } > "$tmp"
+  chmod 0644 "$tmp"; mv -f "$tmp" "$CONF"
+}
+
+# ---------- platform ----------
+detect_platform() {
+  [[ $(uname -s) = Linux && -r /etc/os-release ]] || die "Coding Sessions installs on Linux. On macOS or Windows, use Docker on a Linux server instead: docs/docker.md"
+  # shellcheck disable=SC1091
+  OS_ID=$(. /etc/os-release && echo "${ID:-}") OS_VERSION=$(. /etc/os-release && echo "${VERSION_ID:-}")
+  OS_NAME=$(. /etc/os-release && echo "${PRETTY_NAME:-$ID}")
+  case "$OS_ID:$OS_VERSION" in
+    ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12|debian:13) ;;
+    *) die "$OS_NAME isn't supported by this installer (Ubuntu 22.04/24.04/26.04, Debian 12/13 and Raspberry Pi OS 64-bit are). On RHEL, Fedora, Amazon Linux, Arch or Alpine, use Docker: docs/docker.md" ;;
+  esac
+  case $(uname -m) in
+    x86_64) ARCH=x64 ;;
+    aarch64|arm64) ARCH=arm64 ;;
+    *) die "supported CPUs are x86_64 and arm64" ;;
+  esac
+  [[ -d /run/systemd/system ]] || die "systemd isn't running. On WSL, enable systemd first; in a container, use Docker Compose instead"
+}
+
+mem_mb()  { awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo; }
+swap_mb() { awk '/^SwapTotal:/ {print int($2/1024)}' /proc/meminfo; }
+disk_gb() { df -BG --output=avail / | tail -n 1 | tr -dc '0-9'; }
+
+# Under pipefail an empty grep fails the pipeline, so lookups that may find nothing end in || true.
+port_owner() { { ss -Hltnp "sport = :$1" 2>/dev/null | grep -o 'users:(("[^"]*' | head -n 1 | sed 's/users:(("//'; } || true; }
+
+dns_check() {
+  local domain=$1 resolved local_ips public=''
+  resolved=$({ getent ahosts "$domain" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' '; } || true)
+  [[ -n $resolved ]] || { bad "$domain doesn't resolve yet. Add an A record pointing at this server's public IP."; return 1; }
+  local_ips=" $(hostname -I 2>/dev/null) "
+  for ip in $resolved; do [[ $local_ips = *" $ip "* ]] && { ok "$domain points at this server ($ip)"; return 0; }; done
+  # Behind 1:1 NAT (most clouds) the public IP isn't on an interface: ask a public echo service.
+  public=$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
+  [[ -n $public && " $resolved " = *" $public "* ]] && { ok "$domain points at this server ($public)"; return 0; }
+  local target=${public:-"the server's public IP"}
+  bad "$domain points at $resolved but this server is ${public:-unknown}."
+  say "    Set its A record to $target, wait a few minutes, and run setup again."
+  say "    Behind a proxy such as Cloudflare? Re-run with --skip-dns-check."
+  return 1
+}
+
+# ---------- source and engine ----------
+# A source root runs installers from must be root-owned and not writable by others, all the way up.
+root_owned_path() {
+  local path; path=$(readlink -f -- "$1") || return 1
+  while :; do
+    [[ $(stat -c %u -- "$path") = 0 ]] && (( (8#$(stat -c %a -- "$path") & 022) == 0 )) || return 1
+    [[ $path = / ]] && return 0
+    path=$(dirname -- "$path")
+  done
+}
+
+fetch_source() {
+  local ref=$1
+  install -d -m 0755 /usr/local/lib/coding-sessions
+  if [[ -d $SRC/.git ]]; then
+    git -c safe.directory="$SRC" -C "$SRC" fetch --quiet --tags --force origin
+  else
+    rm -rf -- "$SRC"
+    git clone --quiet --no-checkout "$REPO_URL" "$SRC"
+  fi
+  if [[ $ref = latest ]]; then
+    ref=$(git -c safe.directory="$SRC" -C "$SRC" tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+    [[ -n $ref ]] || die "no release found in $REPO_URL"
+  fi
+  git -c safe.directory="$SRC" -C "$SRC" -c advice.detachedHead=false checkout --quiet --force "$ref"
+  if [[ -n ${EXPECT_COMMIT:-} ]]; then
+    [[ $(git -c safe.directory="$SRC" -C "$SRC" rev-parse HEAD) = "$EXPECT_COMMIT" ]] \
+      || die "release $ref isn't the commit this installer was published with ($EXPECT_COMMIT). Stopping."
+  fi
+  SOURCE_REF=$ref
+  SOURCE_COMMIT=$(git -c safe.directory="$SRC" -C "$SRC" rev-parse HEAD)
+}
+
+is_checkout() { [[ -n $1 && -f $1/deploy/install-ubuntu && -f $1/server/index.ts && $1 != /opt/coding-sessions* ]]; }
+
+# The source to install from: a checkout the CLI runs from, else the checkout a previous
+# setup used (unless a version is asked for), else the release this CLI belongs to.
+resolve_source() {
+  local here saved; here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd -P)
+  saved=$(conf_get SOURCE)
+  if is_checkout "$here" && [[ $here != "$SRC" ]]; then SOURCE=$here
+  elif [[ -z ${VERSION:-} && $saved != "$SRC" ]] && is_checkout "$saved" && root_owned_path "$saved"; then SOURCE=$saved
+  else
+    # Re-running a release install checks the same commit it was installed from.
+    [[ -z ${EXPECT_COMMIT:-} && -z ${VERSION:-} && $(conf_get VERSION) = "$CLI_VERSION" ]] && EXPECT_COMMIT=$(conf_get COMMIT)
+    fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC; return
+  fi
+  SOURCE_REF=$(git -c safe.directory="$SOURCE" -C "$SOURCE" describe --tags --always 2>/dev/null || echo local)
+}
+
+svc() { printf 'cs-%s' "$INSTANCE"; }
+home_dir() { printf '/var/lib/coding-sessions/%s' "$INSTANCE"; }
+app_dir() { printf '/opt/coding-sessions/%s/current' "$INSTANCE"; }
+
+# Run a command as the instance account with its own environment file, from AS_CWD (default /).
+as_service() {
+  local env_file=/etc/coding-sessions/$INSTANCE.env vars=()
+  [[ -f $env_file ]] || die "instance $INSTANCE isn't installed; run: sudo coding-sessions setup"
+  mapfile -t vars < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$env_file")
+  # Its own session and no input: a program the account controls can't reach this terminal.
+  (cd "${AS_CWD:-/}" && setsid -w runuser -u "$(svc)" -- env -i "${vars[@]}" "$@" </dev/null)
+}
+
+# Install this CLI from the source, stamped with the version it came from.
+install_cli() {
+  local stamp=dev
+  [[ $SOURCE_REF =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && stamp=$SOURCE_REF
+  sed "s/^CLI_VERSION=\"dev\"/CLI_VERSION=\"$stamp\"/" "$SOURCE/deploy/coding-sessions" > /usr/local/bin/.coding-sessions.tmp
+  chmod 0755 /usr/local/bin/.coding-sessions.tmp
+  mv -f /usr/local/bin/.coding-sessions.tmp /usr/local/bin/coding-sessions
+}
+
+# ---------- setup steps ----------
+install_packages() {
+  export DEBIAN_FRONTEND=noninteractive
+  say "  ${D}Updating packages; on a new server this takes a minute or two…${N}"
+  apt-get update -qq
+  # Tools coding agents expect on a dev box, plus what the app needs. ttyd and Caddy are handled below.
+  apt-get install -y -qq --no-install-recommends \
+    ca-certificates curl git gh rsync openssh-client screen procps lsof sudo unzip jq ripgrep \
+    build-essential python3 python3-venv iproute2 >/dev/null
+  ok "system packages"
+}
+
+install_caddy() {
+  say "  ${D}Adding Caddy's repository…${N}"
+  # Caddy's own signed repository: distributions ship 2.6.2 (2022) or none (Ubuntu 22.04).
+  if [[ ! -f /etc/apt/sources.list.d/caddy-stable.list ]]; then
+    apt-get install -y -qq --no-install-recommends gnupg >/dev/null
+    curl -fsSL --proto '=https' 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -fsSL --proto '=https' 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -qq
+  fi
+  apt-get install -y -qq caddy >/dev/null
+  ok "Caddy $(caddy version 2>/dev/null | awk '{print $1}')"
+}
+
+node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; }
+install_node() {
+  if (( $(node_major) >= 22 )); then ok "Node.js $(node -v)"; return; fi
+  # NodeSource's signed repository, set up by hand rather than by piping their script into a shell.
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL --proto '=https' https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+  printf 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main\n' > /etc/apt/sources.list.d/nodesource.list
+  apt-get update -qq && apt-get install -y -qq nodejs >/dev/null
+  (( $(/usr/bin/node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0) >= 22 )) || die "Node.js 22 didn't install; see https://github.com/nodesource/distributions"
+  if (( $(node_major) < 22 )); then
+    die "Node.js 22 is installed in /usr/bin, but an older $(node -v) at $(command -v node) comes first on PATH. Remove that one (it isn't from a package), then run setup again."
+  fi
+  ok "Node.js $(node -v) (NodeSource)"
+}
+
+run_engine() {
+  local sha=$BUN_SHA_X64 args=()
+  [[ $ARCH = arm64 ]] && sha=$BUN_SHA_ARM64
+  args=(--instance "$INSTANCE" --origin "https://$DOMAIN" --port "$PORT" --bun-version "$BUN_VERSION" --bun-sha256 "$sha" --source "$SOURCE")
+  [[ $UPDATES = yes ]] && args+=(--daily-updates)
+  CS_INSTALL_CALLER=cli "$SOURCE/deploy/install-ubuntu" "${args[@]}"
+}
+
+# The packaged Caddyfile, once comments and blank lines are dropped.
+caddy_is_package_default() {
+  [[ -f $1 ]] || return 1
+  [[ $(grep -vE '^\s*(#|$)' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '\n' '|') = ':80 {|root * /usr/share/caddy|file_server|}|' ]]
+}
+
+configure_caddy() {
+  local dir=/etc/caddy/coding-sessions site main=/etc/caddy/Caddyfile backup='' import='import /etc/caddy/coding-sessions/*.caddy'
+  site=$dir/$INSTANCE.caddy
+  install -d -m 0755 "$dir"
+  [[ -f $main ]] && backup=$(mktemp /etc/caddy/.Caddyfile.XXXXXX) && cp -p "$main" "$backup"
+  cat > "$site.tmp" <<CADDY
+# Managed by coding-sessions setup; re-running setup rewrites this file.
+$DOMAIN {
+	tls $EMAIL
+	reverse_proxy 127.0.0.1:$PORT
+}
+CADDY
+  mv -f "$site.tmp" "$site"
+  if ! grep -qxF "$import" "$main" 2>/dev/null; then
+    if [[ ! -f $main ]] || caddy_is_package_default "$main"; then
+      # The package's placeholder on :80 would compete for the port; it's kept as a copy.
+      [[ -f $main ]] && cp -p "$main" "$main.before-coding-sessions"
+      printf '%s\n' "$import" > "$main"
+    else
+      printf '\n# Added by coding-sessions setup\n%s\n' "$import" >> "$main"
+    fi
+  fi
+  if ! caddy validate --config "$main" --adapter caddyfile >/dev/null 2>&1; then
+    # Put everything back so a later Caddy restart can't take other sites down.
+    if [[ -n $backup ]]; then cp -p "$backup" "$main"; else rm -f "$main"; fi
+    rm -f "$site" "$backup"
+    die "Caddy rejected the new site (is $DOMAIN already defined in $main?). Your Caddy configuration was restored."
+  fi
+  rm -f "$backup"
+  systemctl enable --now caddy >/dev/null 2>&1
+  systemctl reload caddy
+  ok "HTTPS for $DOMAIN through Caddy (certificate is requested automatically)"
+}
+
+# Raise a kernel limit to at least $2; never lower what's already set higher.
+sysctl_at_least() {
+  local current; current=$(sysctl -n "$1" 2>/dev/null || echo 0)
+  (( current > $2 )) && echo "$current" || echo "$2"
+}
+
+tune_system() {
+  local watches instances
+  watches=$(sysctl_at_least fs.inotify.max_user_watches 524288)
+  instances=$(sysctl_at_least fs.inotify.max_user_instances 1024)
+  cat > /etc/sysctl.d/60-coding-sessions.conf <<SYSCTL
+# Coding agents, dev servers and test watchers open many file watches.
+fs.inotify.max_user_watches = $watches
+fs.inotify.max_user_instances = $instances
+SYSCTL
+  sysctl -q -p /etc/sysctl.d/60-coding-sessions.conf >/dev/null 2>&1 || warn "couldn't apply file-watch limits now; they apply after a reboot"
+  install -d -m 0755 /etc/systemd/system/coding-sessions@.service.d
+  printf '[Service]\nLimitNOFILE=65536\n' > /etc/systemd/system/coding-sessions@.service.d/50-limits.conf
+  systemctl daemon-reload
+  ok "file-watch and open-file limits raised"
+  if [[ $SWAP = yes ]] && (( $(swap_mb) == 0 )) && [[ ! -e /swapfile ]]; then
+    if fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile >/dev/null && swapon /swapfile; then
+      grep -q '^/swapfile ' /etc/fstab || printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
+      ok "2 GB swap added at /swapfile"
+    else
+      swapoff /swapfile 2>/dev/null || true; rm -f /swapfile
+      warn "couldn't add swap here (some VPS types don't allow it); continuing without"
+    fi
+  fi
+  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 443/udp >/dev/null
+    ok "firewall (ufw) allows 80 and 443"
+  fi
+}
+
+set_app_updates() {
+  local flag; flag="$(home_dir)/data/app-auto-update"
+  if [[ $UPDATES = yes ]]; then
+    runuser -u "$(svc)" -- sh -c 'printf "on\n" > "$1"' sh "$flag"
+    ok "daily app and agent updates on"
+  else
+    runuser -u "$(svc)" -- rm -f -- "$flag"
+    systemctl disable --now "coding-sessions-update@$INSTANCE.timer" >/dev/null 2>&1 || true
+  fi
+}
+
+install_agents() {
+  [[ -n $1 && $1 != none ]] || return 0
+  local list; list=$(tr ',' ' ' <<<"$1")
+  as_service bash "$(app_dir)/deploy/install-provider-clis" $list
+}
+
+install_browser() {
+  local bun; bun="$(app_dir)/bin/bun"
+  # System libraries as root; the browser itself into the service account's cache.
+  say "  ${D}Chromium needs about 100 system libraries; this step can take a few minutes…${N}"
+  # The browser is optional: if Playwright can't serve this system, say so and carry on.
+  if ! (cd "$(app_dir)" && "$bun" x playwright install-deps chromium >/dev/null 2>&1); then
+    warn "Playwright can't install Chromium's libraries on $OS_NAME yet; the browser was skipped. Everything else works. Try later with: sudo coding-sessions browser install"
+    return 0
+  fi
+  if ! AS_CWD=$(app_dir) as_service "$bun" x playwright install chromium >/dev/null 2>&1; then
+    warn "Chromium didn't download; try again with: sudo coding-sessions browser install"
+    return 0
+  fi
+  ok "Playwright Chromium"
+}
+
+wait_https() {
+  local _
+  say "  ${D}Waiting for the HTTPS certificate (up to 90 seconds)…${N}"
+  for _ in $(seq 1 45); do
+    curl -fsS -o /dev/null --max-time 5 "https://$DOMAIN/" 2>/dev/null && { ok "https://$DOMAIN is up"; return 0; }
+    sleep 2
+  done
+  warn "https://$DOMAIN isn't answering yet. Check DNS and ports 80/443, then: journalctl -u caddy -n 50"
+  return 1
+}
+
+print_setup_link() {
+  local link
+  link=$(AS_CWD=$(app_dir) as_service "$(app_dir)/bin/bun" server/setup-token-cli.ts 2>/dev/null) || die "couldn't create a sign-in link"
+  printf '\n  %sOpen this link to sign in, then add a passkey:%s\n\n    %s\n\n' "$B" "$N" "$link"
+  printf '  %sIt works once and expires in 30 minutes. New one: sudo coding-sessions setup-link%s\n' "$D" "$N"
+}
+
+# ---------- commands ----------
+cmd_setup() {
+  need_root setup
+  DOMAIN=$(conf_get DOMAIN) EMAIL=$(conf_get EMAIL) INSTANCE=$(conf_get INSTANCE) PORT=$(conf_get PORT)
+  AGENTS=$(conf_get AGENTS) BROWSER=$(conf_get BROWSER) UPDATES=$(conf_get UPDATES)
+  local skip_dns=0 dry=0 no_link=0 SWAP=''
+  while (($#)); do
+    case $1 in
+      --domain) DOMAIN=${2:?}; shift 2 ;; --email) EMAIL=${2:?}; shift 2 ;;
+      --agents) AGENTS=${2:?}; shift 2 ;; --instance) INSTANCE=${2:?}; shift 2 ;; --port) PORT=${2:?}; shift 2 ;;
+      --version) VERSION=${2:?}; shift 2 ;;
+      --browser) BROWSER=yes; shift ;; --no-browser) BROWSER=no; shift ;;
+      --updates) UPDATES=yes; shift ;; --no-updates) UPDATES=no; shift ;;
+      --swap) SWAP=yes; shift ;; --no-swap) SWAP=no; shift ;;
+      --skip-dns-check) skip_dns=1; shift ;; --dry-run) dry=1; shift ;;
+      --no-link) no_link=1; shift ;; --expect-commit) EXPECT_COMMIT=${2:?}; shift 2 ;;
+      --yes|-y) ASSUME_YES=1; shift ;;
+      *) die "unknown option for setup: $1 (see: coding-sessions help)" ;;
+    esac
+  done
+  INSTANCE=${INSTANCE:-personal} PORT=${PORT:-9121}
+
+  step "Checking this server"
+  detect_platform
+  ok "$OS_NAME ($(uname -m)), systemd"
+  local mem disk; mem=$(mem_mb) disk=$(disk_gb)
+  ok "${mem} MB RAM, $(swap_mb) MB swap, ${disk} GB free"
+  (( disk >= 8 )) || warn "under 8 GB free: agents, browsers and repositories fill disks fast"
+  local existing=/etc/coding-sessions/$INSTANCE.env
+  if [[ -f /etc/coding-sessions/instances/$INSTANCE ]]; then ok "existing install found: setup will repair and update it"; fi
+
+  step "Your choices"
+  [[ -n $DOMAIN ]] || { say "  Your domain must already point at this server (an A record)."; DOMAIN=$(ask "Domain for Coding Sessions (e.g. sessions.example.com)" ""); }
+  DOMAIN=${DOMAIN#https://}; DOMAIN=${DOMAIN%%/*}; DOMAIN=${DOMAIN,,}
+  [[ $DOMAIN =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] || die "give a domain like sessions.example.com (--domain)"
+  [[ -n $EMAIL ]] || EMAIL=$(ask "Email for HTTPS certificate notices" "")
+  [[ $EMAIL =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "give an email address for the HTTPS certificate (--email)"
+  if [[ -f $existing ]]; then
+    # Passkeys are bound to the domain, so moving an instance is a deliberate step, not a re-run.
+    grep -qx "ORIGIN=https://$DOMAIN" "$existing" || die "instance '$INSTANCE' already serves $(sed -n 's|^ORIGIN=https://||p' "$existing"). Changing the domain isn't done by re-running setup; install a new instance with --instance NAME, or see docs/install.md"
+    grep -qx "PORT=$PORT" "$existing" || die "instance '$INSTANCE' uses port $(sed -n 's/^PORT=//p' "$existing"); keep --port the same"
+  fi
+  if [[ -z $AGENTS ]]; then
+    say "  Coding agents to install. Each is a third-party tool with its own account and terms."
+    say "    1 claude   2 codex   3 command-code   4 gemini   5 kimi   6 qwen   7 opencode"
+    local picked; picked=$(ask "Numbers or names, comma or space separated (Enter for none)" "")
+    AGENTS=''
+    for word in ${picked//,/ }; do
+      case $word in 1) word=claude ;; 2) word=codex ;; 3) word=command-code ;; 4) word=gemini ;; 5) word=kimi ;; 6) word=qwen ;; 7) word=opencode ;; esac
+      AGENTS="${AGENTS:+$AGENTS,}$word"
+    done
+    AGENTS=${AGENTS:-none}
+  fi
+  for word in ${AGENTS//,/ }; do [[ $word = none || " $ALL_AGENTS " = *" $word "* ]] || die "unknown agent: $word (choose from: $ALL_AGENTS)"; done
+  if [[ -z $BROWSER ]]; then
+    if confirm "Install the Playwright browser (Chromium) so agents can open and test web pages?" "$( ((mem >= 1800)) && echo Y || echo N)"; then BROWSER=yes; else BROWSER=no; fi
+  fi
+  if [[ -z $UPDATES ]]; then
+    if confirm "Turn on daily app and agent updates (a new version is kept only if it starts cleanly)?" Y; then UPDATES=yes; else UPDATES=no; fi
+  fi
+  if [[ -z $SWAP ]]; then
+    SWAP=no
+    if (( mem < 4096 && $(swap_mb) == 0 )) && (( disk >= 6 )); then
+      if confirm "This server has ${mem} MB RAM and no swap. Add 2 GB of swap so builds aren't killed?" Y; then SWAP=yes; fi
+    fi
+  fi
+  local needs_node=no
+  for word in ${AGENTS//,/ }; do [[ " $NPM_AGENTS " = *" $word "* ]] && needs_node=yes; done
+
+  step "Checking the network"
+  local owner
+  for port in 80 443; do
+    owner=$(port_owner "$port")
+    if [[ -n $owner && $owner != caddy ]]; then die "port $port is used by $owner. Stop it, or put Coding Sessions behind it yourself (docs/install.md)"; fi
+  done
+  ok "ports 80 and 443 are free for Caddy"
+  if ((skip_dns)); then warn "DNS check skipped"; else dns_check "$DOMAIN" || exit 1; fi
+
+  step "Plan"
+  say "  • Install system packages, ttyd 1.7+, Caddy$( [[ $needs_node = yes ]] && echo ', Node.js 22 (NodeSource)')"
+  say "  • Install Coding Sessions as instance '$INSTANCE': account cs-$INSTANCE (no sudo), app on 127.0.0.1:$PORT"
+  say "  • Serve https://$DOMAIN with an automatic Let's Encrypt certificate (email: $EMAIL)"
+  say "  • Raise file-watch and open-file limits$( [[ $SWAP = yes ]] && echo '; add 2 GB swap')$(command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active' && echo '; allow 80/443 in ufw')"
+  say "  • Agents: ${AGENTS//,/, }"
+  say "  • Playwright browser: $BROWSER   • Daily updates: $UPDATES"
+  say "  ${D}Not touched: SSH settings, existing firewall rules, other sites. The DNS check asked api.ipify.org for this server's public IP.${N}"
+  ((dry)) && { say ""; say "Dry run: nothing was changed."; return 0; }
+  confirm "Go ahead?" Y || die "nothing was changed"
+
+  step "Installing"
+  resolve_source
+  ok "Coding Sessions source $SOURCE_REF"
+  install_packages
+  install_caddy
+  [[ $needs_node = yes ]] && install_node
+  run_engine
+  install_cli
+  conf_save
+  configure_caddy
+  tune_system
+  set_app_updates
+  systemctl restart "coding-sessions@$INSTANCE.service"
+  if [[ $AGENTS != none ]]; then step "Installing agents"; install_agents "$AGENTS"; fi
+  if [[ $BROWSER = yes ]]; then step "Installing the browser"; install_browser; fi
+
+  step "Finishing"
+  wait_https || true
+  if ((no_link)); then
+    say ""; say "  ${B}To sign in, run this yourself on the server:${N} sudo coding-sessions setup-link"
+  else
+    print_setup_link
+  fi
+  say ""
+  say "  Next: Settings → Agent authentication to sign in to your agents."
+  say "  Check anything later with: sudo coding-sessions doctor"
+}
+
+load_instance() {
+  INSTANCE=${INSTANCE:-$(conf_get INSTANCE)}; INSTANCE=${INSTANCE:-personal}
+  DOMAIN=$(conf_get DOMAIN)
+  [[ -f /etc/coding-sessions/instances/$INSTANCE ]] || die "Coding Sessions isn't installed here yet. Run: sudo coding-sessions setup"
+}
+
+cmd_setup_link() { need_root setup-link; load_instance; print_setup_link; }
+
+cmd_status() {
+  need_root status
+  load_instance
+  say "${B}Coding Sessions${N} ($INSTANCE)"
+  say "  URL      https://$DOMAIN"
+  say "  Version  $(cat "$(app_dir)/.source-version" 2>/dev/null || echo unknown)   CLI $CLI_VERSION"
+  say "  Service  $(systemctl is-active "coding-sessions@$INSTANCE.service" 2>/dev/null || true)   Caddy $(systemctl is-active caddy 2>/dev/null || true)"
+  say "  Updates  app $( [[ -f $(home_dir)/data/app-auto-update ]] && echo on || echo off), agents $(systemctl is-enabled "coding-sessions-update@$INSTANCE.timer" 2>/dev/null || echo off)"
+  say "  Server   $(mem_mb) MB RAM, $(swap_mb) MB swap, $(disk_gb) GB free"
+}
+
+cmd_agents() {
+  local sub=${1:-list}; shift || true
+  need_root agents
+  load_instance
+  case $sub in
+    list)
+      for a in $ALL_AGENTS; do
+        local bin=$a v
+        v=$(as_service sh -c "PATH=\$HOME/.local/bin:\$PATH; $bin --version 2>/dev/null" </dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+        printf '  %-14s %s\n' "$a" "${v:-${D}not installed${N}}"
+      done ;;
+    install) (($#)) || die "name agents to install: $ALL_AGENTS"; install_agents "$(tr ' ' ',' <<<"$*")" ;;
+    update)
+      local installed=''
+      for a in $ALL_AGENTS; do as_service sh -c "test -x \$HOME/.local/bin/$a" && installed="$installed $a"; done
+      [[ -n $installed ]] || die "no agents are installed yet"
+      install_agents "$(tr ' ' ',' <<<"${installed# }")" ;;
+    *) die "usage: coding-sessions agents [list|install <agent…>|update]" ;;
+  esac
+}
+
+cmd_browser() { need_root browser; load_instance; [[ ${1:-install} = install ]] || die "usage: coding-sessions browser install"; detect_platform; install_browser; }
+
+cmd_doctor() {
+  need_root doctor
+  load_instance; detect_platform
+  local problems=0 v
+  check() { if eval "$2"; then ok "$1"; else bad "$1 — $3"; problems=$((problems + 1)); fi; }
+  say "${B}Checking Coding Sessions ($INSTANCE)${N}"
+  check "service running" "systemctl is-active --quiet coding-sessions@$INSTANCE.service" "see: sudo coding-sessions logs"
+  check "app answers on 127.0.0.1" "curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:$(sed -n 's/^PORT=//p' /etc/coding-sessions/$INSTANCE.env)/" "restart it: sudo coding-sessions restart"
+  check "Caddy running" "systemctl is-active --quiet caddy" "see: journalctl -u caddy -n 50"
+  check "Caddy configuration valid" "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1" "run: caddy validate --config /etc/caddy/Caddyfile"
+  check "DNS points here" "dns_check $DOMAIN >/dev/null" "set the A record for $DOMAIN to this server's IP"
+  check "https://$DOMAIN answers" "curl -fsS -o /dev/null --max-time 8 https://$DOMAIN/" "check ports 80/443 and: journalctl -u caddy -n 50"
+  v=$(ttyd --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+  check "ttyd ${v:-missing} (needs 1.7+)" "[[ -n '$v' ]] && printf '1.7.0\n%s\n' '$v' | sort -VC" "run: sudo coding-sessions setup"
+  check "screen installed" "command -v screen >/dev/null" "run: sudo coding-sessions setup"
+  check "disk has 5 GB+ free ($(disk_gb) GB)" "(( $(disk_gb) >= 5 ))" "new sessions are refused under 5 GB; free some space"
+  check "memory + swap 2 GB+" "(( $(mem_mb) + $(swap_mb) >= 2000 ))" "add swap: sudo coding-sessions setup --swap"
+  if (( problems )); then say ""; say "$problems problem(s) found."; return 1; fi
+  say ""; say "All good."
+}
+
+cmd_update() {
+  need_root update
+  load_instance
+  step "Updating the coding-sessions CLI"
+  fetch_source latest; SOURCE=$SRC
+  install_cli
+  ok "CLI $SOURCE_REF"
+  step "Updating the app"
+  "$(app_dir)/deploy/update-app" "$INSTANCE" --now
+  ok "app $(cat "$(app_dir)/.source-version" 2>/dev/null || echo updated)"
+  if [[ ${1:-} = --agents ]]; then step "Updating agents"; cmd_agents update; fi
+}
+
+cmd_logs()    { need_root logs; load_instance; journalctl -u "coding-sessions@$INSTANCE.service" -n 200 --no-pager "${@}"; }
+cmd_restart() { need_root restart; load_instance; systemctl restart "coding-sessions@$INSTANCE.service"; ok "restarted (running agent sessions keep running)"; }
+
+cmd_uninstall() {
+  need_root uninstall
+  load_instance
+  local purge=0 confirm_name=''
+  while (($#)); do
+    case $1 in --purge) purge=1; shift ;; --confirm) confirm_name=${2:?}; shift 2 ;; *) die "usage: coding-sessions uninstall [--purge] [--confirm NAME]" ;; esac
+  done
+  say "This stops Coding Sessions ($INSTANCE) and every agent session it runs, and removes the app and its HTTPS site."
+  if ((purge)); then say "${R}--purge also deletes all data: sessions, settings, agent logins and workspaces in $(home_dir).${N}"
+  else say "Your data in $(home_dir) and /etc/coding-sessions is kept."; fi
+  [[ -n $confirm_name ]] || confirm_name=$(ask "Type the instance name ($INSTANCE) to confirm" "")
+  [[ $confirm_name = "$INSTANCE" ]] || die "nothing was changed"
+  # KillMode=process keeps agent sessions alive across restarts; here they must stop too.
+  systemctl kill --kill-whom=all "coding-sessions@$INSTANCE.service" 2>/dev/null || true
+  systemctl disable --now "coding-sessions@$INSTANCE.service" "coding-sessions-update@$INSTANCE.timer" "coding-sessions-app-update@$INSTANCE.timer" 2>/dev/null || true
+  pkill -KILL -u "$(svc)" 2>/dev/null || true
+  rm -f -- "/etc/caddy/coding-sessions/$INSTANCE.caddy"; systemctl reload caddy 2>/dev/null || true
+  rm -rf -- "/opt/coding-sessions/$INSTANCE"
+  if ((purge)); then
+    sleep 1; pkill -KILL -u "$(svc)" 2>/dev/null || true
+    userdel "$(svc)" || die "couldn't remove the account $(svc) (still in use?). Data in $(home_dir) was kept; re-run uninstall --purge"
+    groupdel "$(svc)" 2>/dev/null || true
+    rm -rf -- "$(home_dir)" "/etc/coding-sessions/credentials/$INSTANCE" "/etc/coding-sessions/$INSTANCE.env" "/etc/coding-sessions/instances/$INSTANCE" "$CONF"
+  fi
+  ok "removed"
+}
+
+cmd_help() {
+  cat <<HELP
+${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
+
+  sudo coding-sessions setup [options]   guided install; re-run to repair or change
+       --domain HOST --email ADDR        where it's served, and the HTTPS contact
+       --agents a,b|none                 $ALL_AGENTS
+       --browser | --no-browser          Playwright Chromium for agents
+       --updates | --no-updates          daily app and agent updates
+       --swap | --no-swap                add 2 GB swap on small servers
+       --instance NAME --port PORT       defaults: personal, 9121
+       --skip-dns-check  --dry-run  --yes
+       --no-link                         don't print the sign-in link (e.g. when an AI agent runs setup)
+  sudo coding-sessions setup-link        one-time sign-in link (lost access, new device)
+  sudo coding-sessions doctor            check everything, with fixes
+  sudo coding-sessions status            what's running, where, which version
+  sudo coding-sessions agents [list]     installed agents and versions
+  sudo coding-sessions agents install a… install agents (as the service account)
+  sudo coding-sessions agents update     update installed agents
+  sudo coding-sessions browser install   install Playwright Chromium
+  sudo coding-sessions update [--agents] update the CLI and the app (and agents)
+  sudo coding-sessions logs [-f]         service log
+  sudo coding-sessions restart           restart the app; agent sessions keep running
+  sudo coding-sessions uninstall [--purge] [--confirm NAME]
+HELP
+}
+
+main() {
+  local cmd=${1:-help}; shift || true
+  case $cmd in
+    setup|install) cmd_setup "$@" ;;
+    setup-link|link) cmd_setup_link ;;
+    status) cmd_status ;;
+    doctor) cmd_doctor ;;
+    agents|agent) cmd_agents "$@" ;;
+    browser) cmd_browser "$@" ;;
+    update|upgrade) cmd_update "$@" ;;
+    logs|log) cmd_logs "$@" ;;
+    restart) cmd_restart ;;
+    uninstall) cmd_uninstall "$@" ;;
+    version|--version|-V) say "coding-sessions $CLI_VERSION" ;;
+    help|--help|-h) cmd_help ;;
+    *) die "unknown command: $cmd (see: coding-sessions help)" ;;
+  esac
+}
+
+main "$@"

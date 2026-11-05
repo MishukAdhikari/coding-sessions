@@ -1,0 +1,29 @@
+name: Installer
+
+# Publishes install.sh with each release, pinned to the release's tag and exact commit,
+# plus its SHA-256 so people can check the download before running it.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Stamp, check and attach install.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          sed "s/local version=\"dev\" commit=\"\"/local version=\"$TAG\" commit=\"$commit\"/" deploy/install.sh > install.sh
+          grep -q "local version=\"$TAG\" commit=\"$commit\"" install.sh
+          bash -n install.sh
+          sha256sum install.sh > install.sh.sha256
+          gh release upload "$TAG" install.sh install.sh.sha256 --clobber
