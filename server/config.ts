@@ -32,7 +32,13 @@ export function readConfig(env: Environment) {
   if (repository && !/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("CS_DEFAULT_REPO must be owner/repository.");
   const repoOwners = (readCsSetting(env, "CS_GITHUB_OWNERS") ?? "").split(",").map(value => value.trim()).filter(Boolean);
   if (repoOwners.some(owner => !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(owner))) throw new Error("CS_GITHUB_OWNERS must contain comma-separated GitHub owners.");
-  return { port, listenHost, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
+  // Optional loopback-only listener for the last-activity signal (server/activity-signal.ts).
+  const activityValue = readCsSetting(env, "CS_ACTIVITY_PORT");
+  const activityPort = activityValue ? Number(activityValue) : null;
+  if (activityPort !== null && (!Number.isInteger(activityPort) || activityPort < 1 || activityPort > 65535 || activityPort === port)) {
+    throw new Error("CS_ACTIVITY_PORT must be an integer from 1 to 65535, different from PORT.");
+  }
+  return { port, listenHost, activityPort, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
     unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: readCsSetting(env, "CS_TRUST_PROXY") === "1",
     trustedProxies: parseTrustedProxies(readCsSetting(env, "CS_TRUSTED_PROXIES")) };
 }
