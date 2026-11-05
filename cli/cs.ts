@@ -714,6 +714,44 @@ The CLI itself keeps using the HTTPS API; MCP is the agent-facing door.`);
 
 /* ---------- dispatch ---------- */
 
+/* ---------- install agents on the server ---------- */
+
+function printAgents(agents: any[]): void {
+  for (const a of agents) {
+    const state = a.version ? paint(`v${a.version}`, "32") : paint("not installed", "90");
+    console.log(`  ${a.id.padEnd(14)}${a.label.padEnd(16)}${state}`);
+  }
+}
+
+async function cmdInstall(cfg: Config, args: string[]): Promise<void> {
+  const names = args.filter((a) => !a.startsWith("-"));
+  if (!names.length || args.includes("--list")) {
+    const { agents, job } = await api(cfg, "/api/agent-installs");
+    console.log("Agents on the server:\n");
+    printAgents(agents);
+    if (job?.running) console.log(`\nInstalling now: ${job.agents.join(", ")}`);
+    console.log(`\nInstall with: cs install <agent> [agent…]   e.g. cs install gemini kimi`);
+    return;
+  }
+  await api(cfg, "/api/agent-installs", { method: "POST", body: JSON.stringify({ agents: names }) });
+  console.log(`Installing ${names.join(", ")} on the server. npm installs can take a minute or two…`);
+  let shown = 0;
+  for (;;) {
+    await Bun.sleep(2000);
+    const { job } = await api(cfg, "/api/agent-installs");
+    const output: string = job?.output ?? "";
+    if (output.length > shown) { process.stdout.write(paint(output.slice(shown), "2")); shown = output.length; }
+    if (job && !job.running) {
+      const fresh = (await api(cfg, "/api/agent-installs?fresh=1")).agents as any[];
+      console.log("");
+      printAgents(fresh.filter((a) => names.includes(a.id)));
+      if (job.result !== "success") die("the install failed — see the output above.");
+      console.log(`\nDone. Sign in next: Settings → Agent authentication (or Settings → Commands for presets).`);
+      return;
+    }
+  }
+}
+
 function printHelp(): void {
   console.log(`cs — run Coding Sessions work on your server from this machine
 
@@ -738,6 +776,8 @@ USAGE
   cs term --sync [-- claude…]    ↑ but upload your working tree first (Synced Launch)
   cs mirror [name]               mirror a LIVE server session in your terminal
   cs mcp add|status|remove       let Claude Code / Codex drive sessions over MCP
+  cs install [agent…]            install agents on the server (no args: list them)
+                                   claude codex command-code gemini kimi qwen opencode
   cs doctor                      check bun/claude/config/ssh/token/rsync setup
   cs pull                        git pull the current branch
   cs login                       configure server URL, token, and SSH host
@@ -765,6 +805,7 @@ try {
     case "upgrade": await cmdUpgrade(); break;
     case "doctor": await cmdDoctor(cfg); break;
     case "mcp": await cmdMcp(cfg, argv.slice(1)); break;
+    case "install": await cmdInstall(cfg, argv.slice(1)); break;
     case "version": case "--version": case "-V": console.log(`cs v${csVersion()}`); break;
     case undefined: process.exit(run(["claude"])); break; // bare `cs` → local claude
     case "help": case "--help": case "-h": printHelp(); break;

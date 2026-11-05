@@ -1728,6 +1728,67 @@
     }
   }
 
+  /* ---------- install agents on this server ----------
+     One install at a time, run by the server as its own account. The list polls
+     while an install runs, so the output and versions update in place. */
+  let agentInstallPoll = null;
+
+  async function startAgentInstall(agents) {
+    try {
+      await api("/api/agent-installs", { method: "POST", body: JSON.stringify({ agents }) });
+      showToast(`Installing ${agents.join(", ")}…`);
+      await loadAgentInstalls();
+    } catch (e) { showToast(e.message); }
+  }
+
+  async function loadAgentInstalls(fresh = false) {
+    clearTimeout(agentInstallPoll);
+    let data;
+    try { data = await api(`/api/agent-installs${fresh ? "?fresh=1" : ""}`); }
+    catch (e) { $("agent-install-status").textContent = e.message; return; }
+    const { agents, job } = data;
+    const running = !!job?.running;
+    const wrap = $("agent-install-list");
+    wrap.replaceChildren();
+    for (const agent of agents) {
+      const row = document.createElement("div");
+      row.className = "proj-row";
+      const info = document.createElement("span");
+      info.textContent = agent.label;
+      const detail = document.createElement("div");
+      detail.className = "proj-note";
+      detail.textContent = running && job.agents.includes(agent.id) ? "Installing…"
+        : agent.version ? `Installed · v${agent.version}` : agent.preset ? "Not installed · preset" : "Not installed";
+      info.append(detail);
+      const action = document.createElement("button");
+      action.className = "proj-del";
+      action.textContent = agent.version ? "Update" : "Install";
+      action.disabled = running;
+      action.addEventListener("click", () => startAgentInstall([agent.id]));
+      row.append(info, action);
+      wrap.append(row);
+    }
+    const output = $("agent-install-output");
+    output.hidden = !job?.output;
+    output.textContent = job?.output || "";
+    output.scrollTop = output.scrollHeight;
+    $("agent-install-status").textContent = !job ? ""
+      : running ? `Installing ${job.agents.join(", ")}… npm installs can take a minute or two.`
+      : job.result === "success" ? `Installed ${job.agents.join(", ")}.` : `Installing ${job.agents.join(", ")} failed — see the output below.`;
+    if (running) {
+      agentInstallPoll = setTimeout(async () => {
+        await loadAgentInstalls();
+        // Finished since the last poll: read versions again, and refresh what depends on them.
+        if (!$("agent-install-list").querySelector("button:disabled")) {
+          await loadAgentInstalls(true);
+          agentAuth?.refreshAccounts?.();
+          if (!$("sheet-commands").hidden) loadPresets();
+        }
+      }, 2000);
+    }
+  }
+  $("btn-agent-auth").addEventListener("click", () => loadAgentInstalls());
+
   async function loadPresets() {
     const wrap = $("preset-list");
     wrap.replaceChildren();
@@ -1740,7 +1801,7 @@
       info.textContent = preset.label;
       const detail = document.createElement("div");
       detail.className = "proj-note";
-      detail.textContent = preset.installed ? preset.notes : `Not installed. Run on the server: ${preset.installCommand}`;
+      detail.textContent = preset.installed ? preset.notes : "Not installed yet. Install puts it on this server.";
       info.append(detail);
       const action = document.createElement("button");
       action.className = "proj-del preset-add";
@@ -1748,9 +1809,18 @@
         action.textContent = "Added";
         action.disabled = true;
       } else if (!preset.installed) {
-        action.textContent = "Copy";
-        action.addEventListener("click", () => {
-          navigator.clipboard?.writeText(preset.installCommand).then(() => showToast("Install command copied"), () => showToast(preset.installCommand));
+        action.textContent = "Install";
+        action.addEventListener("click", async () => {
+          action.disabled = true;
+          await startAgentInstall([preset.id]);
+          detail.textContent = "Installing… this can take a minute or two.";
+          const wait = setInterval(async () => {
+            const { job } = await api("/api/agent-installs").catch(() => ({ job: null }));
+            if (job?.running) return;
+            clearInterval(wait);
+            if (job?.result !== "success") showToast(`Installing ${preset.label} failed. Details in Settings → Agent authentication.`);
+            loadPresets();
+          }, 2000);
         });
       } else {
         action.textContent = "Add";

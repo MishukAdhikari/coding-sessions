@@ -399,6 +399,11 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button id="btn-auth-provider-continue" class="btn btn-primary btn-big" disabled>Sign in</button>
   <button id="btn-agent-signout" class="btn btn-ghost btn-big" hidden>Sign out</button>
   <button id="btn-agent-account-refresh" class="btn btn-ghost btn-big">Refresh accounts</button>
+  <label class="label">Install agents on this server</label>
+  <div id="agent-install-list"></div>
+  <p id="agent-install-status" class="hint" role="status" aria-live="polite"></p>
+  <pre id="agent-install-output" class="agent-install-output" hidden></pre>
+  <p class="hint">Installs as this server's account, never as root; agents that come from npm need Node.js 22 or newer. Third-party tools with their own accounts and terms — sign in above, or for presets in Settings → Commands.</p>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 

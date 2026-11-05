@@ -15,7 +15,7 @@ These are third-party tools. Each comes from its own vendor and has its own acco
    docker compose exec app install-provider-clis gemini kimi qwen opencode
    ```
 
-   Install only the ones you want. Each comes from its official npm package, and the daily CLI update keeps the installed ones current.
+   Or skip SSH: press **Install** next to the agent in **Settings → Agent authentication** (or **Settings → Commands**), or run `cs install gemini kimi` from your laptop. Install only the ones you want. Each comes from its official npm package, and the daily CLI update keeps the installed ones current.
 
 2. Open **Settings → Commands** and press **Add** next to the agent. If it isn't installed yet, the row offers the install command to copy.
 3. Sign in the way the agent expects (table below). For agents that read an API key, press **Add key** on the command. The key is stored encrypted and handed to the agent through its environment, never on the command line.
