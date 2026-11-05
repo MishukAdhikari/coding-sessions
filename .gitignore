@@ -55,3 +55,6 @@ data/
 *.sqlite
 *.sqlite3
 __pycache__/
+
+# local planning notes stay out of the repository
+docs/plans/
