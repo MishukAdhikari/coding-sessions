@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { lastTurnState, type TurnState } from "./turn-state";
 import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type CommandProvider, type SessionProvider } from "./session-provider";
 import { commandEnv, findCommand, resolveBin, type CustomCommand } from "./commands";
+import { sessionSecretEnv } from "./secret-store";
 import { findPreset, presetLaunch } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
 import { codexActivity, isCodexSessionId } from "./codex-state";
@@ -578,7 +579,8 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
   // `ps` on this box would print the token to anyone with an account. This is why
   // the Codex path's `exec env KEY=value` shape is not reused here — those markers
   // are non-secret, a token is not.
-  const { code, err } = await mux.spawn(options.screen, inner, { env: commandEnv(slug) });
+  // Stored secrets first, so the Command's own token wins on a name clash.
+  const { code, err } = await mux.spawn(options.screen, inner, { env: { ...await sessionSecretEnv(), ...commandEnv(slug) } });
   if (code !== 0) return { ok: false, error: err || "session failed to start" };
 
   db.query(
@@ -613,6 +615,8 @@ interface CommunicatingSessionRuntime {
   installSkill?: () => void;
   configure: (provider: "claude" | "command-code", cwd: string, bin?: string, withConnectors?: boolean) => Promise<string[]>;
   spawn: typeof mux.spawn;
+  /** Stored secrets for the session's environment; absent in tests that predate them. */
+  secretEnv?: () => Promise<Record<string, string>>;
   hasHolder: (screen: string) => Promise<boolean>;
   uuid: () => string;
   now: () => number;
@@ -620,7 +624,7 @@ interface CommunicatingSessionRuntime {
 const communicatingRuntime: CommunicatingSessionRuntime = {
   database: db, communicator, connectors, installSkill: installCollaborationSkill,
   configure: (provider, cwd, bin, withConnectors) => providerCommunicatorArgs(provider, cwd, { commandCodeBin: bin, connectors: withConnectors }),
-  spawn: mux.spawn, hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
+  spawn: mux.spawn, secretEnv: sessionSecretEnv, hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
 };
 
 /** Reserve identity before the child can initialize MCP; restore previous history if spawn fails. */
@@ -654,7 +658,9 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
     const { token } = runtime.communicator.prepare(launchId);
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
-    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...options.env, ...mcpEnv, ...communicatorEnvironment(token, config.port, connectorToken) } });
+    // Precedence: stored secrets < the provider's own credential < session plumbing.
+    const secrets = await runtime.secretEnv?.() ?? {};
+    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...secrets, ...options.env, ...mcpEnv, ...communicatorEnvironment(token, config.port, connectorToken) } });
     if (result.code !== 0) throw new Error(safeLaunchError(result.err, "Session failed to start."));
     database.query("UPDATE launches SET phase='ready' WHERE launch_id=? AND phase='preparing'").run(launchId);
     if (options.resumeArchiveId != null) database.query("DELETE FROM archive WHERE id=?").run(options.resumeArchiveId);
@@ -1343,10 +1349,13 @@ export interface ManagedCodexRuntime {
   now: () => number;
   connectors?: Pick<Connectors, "available" | "prepare" | "revoke">;
   installSkill?: () => void;
+  /** Stored secrets for the session's environment; absent in tests that predate them. */
+  secretEnv?: () => Promise<Record<string, string>>;
 }
 
 const defaultManagedCodexRuntime: ManagedCodexRuntime = {
   database: db,
+  secretEnv: sessionSecretEnv,
   connectors,
   installSkill: installCollaborationSkill,
   dbPath: DB_PATH,
@@ -1410,7 +1419,8 @@ export async function startManagedCodex(
     const { token } = launchCommunicator.prepare(launchId);
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
-    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), communicatorEnvironment(token, config.port, connectorToken));
+    const secrets = await runtime.secretEnv?.() ?? {};
+    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken) });
   } catch { result = { code: 1, out: "", err: "Could not start Codex with its session communicator." }; }
   if (result.code !== 0) {
     launchCommunicator.revoke(launchId);

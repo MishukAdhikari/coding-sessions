@@ -75,3 +75,23 @@ test("a preset whose MCP setup fails does not spawn", async () => {
   {database:db,communicator:comm,hasHolder:async()=>false,uuid:randomUUID,now:()=>1,configure:async()=>[],spawn:async()=>{spawned=true;return{code:0,out:"",err:""};}});
  expect(result.ok).toBe(false);expect(spawned).toBe(false);db.close();
 });
+test("stored secrets reach the session environment, below the provider credential and session plumbing", async () => {
+ const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let seen:Record<string,string>={};let command="";
+ const result=await startCommunicatingSession({screen:"cs-sec",name:"sec",projectPath:"/srv/demo",provider:"command-code",remoteControl:0,env:{COMMAND_CODE_API_KEY:"provider-key"},command:()=>"agent"},{database:db,communicator:comm,hasHolder:async()=>false,uuid:randomUUID,now:()=>1,configure:async()=>[],
+  secretEnv:async()=>({OPENAI_API_KEY:"stored-openai",COMMAND_CODE_API_KEY:"stored-loses",CS_COMMUNICATOR_TOKEN:"stored-loses"}),
+  spawn:async(_s,cmd,{env}={})=>{seen=env!;command=cmd;return{code:0,out:"",err:""};}});
+ expect(result).toEqual({ok:true});
+ expect(seen.OPENAI_API_KEY).toBe("stored-openai");
+ expect(seen.COMMAND_CODE_API_KEY).toBe("provider-key");
+ expect(seen.CS_COMMUNICATOR_TOKEN).toStartWith("cscomm_");
+ expect(command).not.toContain("stored-openai");db.close();
+});
+test("a preset's launch environment outranks a stored secret of the same name", async () => {
+ const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let seen:Record<string,string>={};
+ const result=await startCommunicatingSession({screen:"cs-pre",name:"pre",projectPath:"/srv/demo",provider:"cmd:demo",remoteControl:0,mcp:async()=>({OPENCODE_CONFIG_CONTENT:"{}"}),command:()=>"demo"},{database:db,communicator:comm,hasHolder:async()=>false,uuid:randomUUID,now:()=>1,configure:async()=>[],
+  secretEnv:async()=>({OPENCODE_CONFIG_CONTENT:"stored-loses",OTHER_TOKEN:"kept"}),
+  spawn:async(_s,_cmd,{env}={})=>{seen=env!;return{code:0,out:"",err:""};}});
+ expect(result).toEqual({ok:true});
+ expect(seen.OPENCODE_CONFIG_CONTENT).toBe("{}");
+ expect(seen.OTHER_TOKEN).toBe("kept");db.close();
+});

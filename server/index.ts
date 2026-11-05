@@ -44,6 +44,8 @@ import { createStepUpGrants } from "./step-up";
 import { createCliLogins, handleCliLoginRoute } from "./cli-login";
 import { agentAccounts } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
+import { handleSecretsRoute } from "./secrets-route";
+import { secretStore } from "./secret-store";
 import { recordAccountLogin } from "./account-history";
 
 const PORT = config.port;
@@ -320,6 +322,14 @@ const server = Bun.serve({
       checkBrowserSession: auth.checkAuthSession, accounts: agentAccounts,
     });
     if (accountResponse) return accountResponse;
+
+    /* ----- Secrets for sessions: browser session only, values never returned ----- */
+
+    const secretsResponse = await handleSecretsRoute(req, {
+      cookieName: COOKIE_NAME, origin: auth.ORIGIN, checkBrowserSession: auth.checkAuthSession,
+      isAuthenticated: isAuthed, store: secretStore,
+    });
+    if (secretsResponse) return secretsResponse;
 
     const cliUpdatesResponse = await handleCliUpdatesRoute(req, {
       cookieName: COOKIE_NAME,

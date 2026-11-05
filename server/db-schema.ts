@@ -165,6 +165,31 @@ export function applyDatabaseSchema(database: Database): void {
   // Set when a Command was registered from an agent preset (server/agent-presets.ts).
   addColumn(database, "ALTER TABLE custom_commands ADD COLUMN preset TEXT");
 
+  // Secrets (see server/secret-store.ts): named values delivered to every managed
+  // session's environment. Values and source credentials are AES-GCM sealed; the
+  // store refuses to write without the token encryption key. `snapshot` is the last
+  // successful sync of an external source, sealed, used when the source is down.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS secrets (
+      name       TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS secret_sources (
+      id           INTEGER PRIMARY KEY,
+      kind         TEXT NOT NULL,
+      label        TEXT NOT NULL,
+      config       TEXT NOT NULL DEFAULT '{}',
+      credential   TEXT NOT NULL,
+      snapshot     TEXT,
+      names        TEXT NOT NULL DEFAULT '[]',
+      last_sync_at INTEGER,
+      last_error   TEXT,
+      created_at   INTEGER NOT NULL
+    );
+  `);
+
   // MCP connector OAuth (see server/oauth.ts). Clients register themselves; codes and
   // tokens are stored only as hashes, like auth_sessions and cli_tokens.
   database.exec(`

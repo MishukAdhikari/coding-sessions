@@ -253,6 +253,7 @@ Use [.env.example](.env.example) for non-secret configuration. Keep secrets out 
 | Native provider and GitHub logins | Provider-managed files in the service account's home |
 | Browser session, CLI bearer, and inbound OAuth code/access/refresh tokens (apps connecting to Coding Sessions) | Hashes in SQLite |
 | External MCP connector credentials (bearer tokens; outbound OAuth access/refresh tokens and client secrets) | AES-256-GCM ciphertext in SQLite; refused without the encryption key |
+| Secrets for sessions (Settings › Secrets) and secret-manager credentials (Bitwarden, Infisical, Vault/OpenBao) | AES-256-GCM ciphertext in SQLite; refused without the encryption key; delivered to every managed session as environment variables |
 
 ### Server settings in the app
 
