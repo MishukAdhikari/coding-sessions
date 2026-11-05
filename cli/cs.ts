@@ -7,10 +7,14 @@
  * Launch additionally rsyncs your working tree up over SSH. Agents talk to the
  * server through MCP instead — `cs mcp add` sets that up. See docs/cli.md.
  */
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { findSession, fmtDur, makeMouseStripper, MCP_NAME, mcpAddCommand, mcpListedLine, mcpRemoveCommand, prettyProject, sanitizeName, shq, type McpClient } from "./cs-lib";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
+  parseServerArgs, prettyProject, RUN, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
+  type ConfigFile, type McpClient, type ServerEntry,
+} from "./cs-lib";
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "cs");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -27,38 +31,72 @@ function csVersion(): string {
   }
 }
 
-interface Config {
-  api: string;       // https://sessions.example.com
-  token: string;     // CLI token minted in the app: Settings → CLI access
-  ssh: string;       // user@host — used for the Synced Launch upload and terminal commands
-  cfId?: string;     // Cloudflare Access service-token Client-Id (if the domain is behind CF Access)
-  cfSecret?: string; // Cloudflare Access service-token Client-Secret
-  sshApi?: boolean;  // route API calls over SSH to the server's localhost (bypasses Cloudflare)
-  origin?: string;   // server-local API URL used in SSH mode (default http://127.0.0.1:9121)
+/** The server a command talks to: a named entry from the config, or an ad-hoc one from CS_API. */
+interface Config extends ServerEntry {
+  name?: string;       // its name in the config; unset for an ad-hoc CS_API server
+  isDefault?: boolean;
 }
 
 /* ---------- config ---------- */
 
-function loadConfig(): Config {
-  let file: Partial<Config> = {};
-  if (existsSync(CONFIG_PATH)) {
-    try { file = JSON.parse(readFileSync(CONFIG_PATH, "utf8")); } catch {}
+// ~/.config/cs/config.json: { servers: { <name>: {api, token, ssh, …} }, default: <name> }.
+// An old flat file (one server) is moved over on first read, keeping a backup.
+function loadConfigFile(): ConfigFile {
+  if (!existsSync(CONFIG_PATH)) return { servers: {} };
+  let raw: unknown = {};
+  try { raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")); } catch { die(`${CONFIG_PATH} is not valid JSON — fix or remove it.`); }
+  const { config, migrated } = migrateConfig(raw);
+  if (migrated) {
+    const backup = `${CONFIG_PATH}.v1.bak`;
+    copyFileSync(CONFIG_PATH, backup);
+    chmodSync(backup, 0o600);
+    saveConfigFile(config);
+    console.error(paint(`cs: your server is now named "${config.default}" (cs server ls). Old config kept in ${backup}.`, "2"));
   }
-  return {
-    api: (process.env.CS_API || file.api || "").replace(/\/$/, ""),
-    token: process.env.CS_TOKEN || file.token || "",
-    ssh: process.env.CS_SSH || file.ssh || "",
-    cfId: process.env.CS_CF_ID || file.cfId || "",
-    cfSecret: process.env.CS_CF_SECRET || file.cfSecret || "",
-    sshApi: process.env.CS_SSH_API ? process.env.CS_SSH_API === "1" : (file.sshApi ?? false),
-    origin: process.env.CS_ORIGIN || file.origin || "http://127.0.0.1:9121",
-  };
+  return config;
 }
 
-function saveConfig(c: Config): void {
+function saveConfigFile(c: ConfigFile): void {
   mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(CONFIG_PATH, 0o600); // mode applies only to a new file; an older one may be wider
 }
+
+const DEFAULT_ORIGIN = "http://127.0.0.1:9121";
+
+/**
+ * Pick the server: --server=<name> / -S <name>, else CS_SERVER, else CS_API (an
+ * unnamed server, set up entirely from env), else the default. The CS_* overrides
+ * apply only to the default or ad-hoc server, so a named choice is exactly what
+ * `cs server ls` shows, and a default token never travels to a CS_API host.
+ */
+function resolveServer(file: ConfigFile, chosen: string | undefined): Config {
+  const env = process.env;
+  const name = chosen || env.CS_SERVER || undefined;
+  const finish = (entry: ServerEntry, extra: Partial<Config>): Config =>
+    ({ ...entry, api: (entry.api || "").replace(/\/$/, ""), origin: entry.origin || DEFAULT_ORIGIN, ...extra });
+  if (name) {
+    const entry = file.servers[name];
+    if (!entry) die(`no server named "${name}". See \`cs server ls\`, or add it: cs server add ${name} <url>`);
+    return finish(entry, { name, isDefault: name === file.default });
+  }
+  const api = env.CS_API?.replace(/\/$/, "");
+  const fromDefault = file.default ? file.servers[file.default] : undefined;
+  const match = api ? Object.entries(file.servers).find(([, e]) => e.api.replace(/\/$/, "") === api) : undefined;
+  const [baseName, base] = api ? (match ?? [undefined, undefined]) : [file.default, fromDefault];
+  const entry: ServerEntry = {
+    api: api || base?.api || "",
+    token: env.CS_TOKEN || base?.token || "",
+    ssh: env.CS_SSH || base?.ssh || "",
+    cfId: env.CS_CF_ID || base?.cfId || "",
+    cfSecret: env.CS_CF_SECRET || base?.cfSecret || "",
+    sshApi: env.CS_SSH_API ? env.CS_SSH_API === "1" : (base?.sshApi ?? false),
+    origin: env.CS_ORIGIN || base?.origin,
+  };
+  return finish(entry, { name: baseName, isDefault: !!baseName && baseName === file.default });
+}
+
+const serverLabel = (cfg: Config) => cfg.name ? `${cfg.name} (${cfg.api || cfg.ssh})` : cfg.api || "the server";
 
 /* ---------- tiny process helpers ---------- */
 
@@ -88,8 +126,10 @@ function die(msg: string): never {
 
 /* ---------- API ---------- */
 
-function handleStatus(status: number, data: any): any {
-  if (status === 401) throw new Error("token rejected — mint a fresh one in the app and run `cs login`.");
+function handleStatus(cfg: Config, status: number, data: any): any {
+  if (status === 401 && cfg.token) {
+    throw new Error(`token rejected by ${serverLabel(cfg)} — sign in again: cs server add ${cfg.name || "<name>"} ${cfg.api || "<url>"}`);
+  }
   if (status < 200 || status >= 300) throw new Error(data?.error || `HTTP ${status}`);
   return data;
 }
@@ -98,10 +138,10 @@ function handleStatus(status: number, data: any): any {
 // over the SSH you already have. Bypasses Cloudflare Access entirely — the API is
 // never exposed to the internet. The request body is piped via stdin, not the argv.
 async function sshApiRequest(cfg: Config, method: string, path: string, body: string | null): Promise<any> {
-  const url = (cfg.origin || "http://127.0.0.1:9121") + path;
+  const url = (cfg.origin || DEFAULT_ORIGIN) + path;
   const remote = [
     "curl", "-sS", "-X", method,
-    "-H", `authorization: Bearer ${cfg.token}`,
+    ...(cfg.token ? ["-H", `authorization: Bearer ${cfg.token}`] : []),
     "-H", "content-type: application/json",
     ...(body != null ? ["--data-binary", "@-"] : []),
     "-w", "\\n%{http_code}",
@@ -124,27 +164,32 @@ async function sshApiRequest(cfg: Config, method: string, path: string, body: st
   const status = Number(out.slice(nl + 1).trim()) || 0;
   let data: any = {};
   try { data = JSON.parse(out.slice(0, nl)); } catch {}
-  return handleStatus(status, data);
+  return handleStatus(cfg, status, data);
 }
 
 async function api(cfg: Config, path: string, init?: RequestInit): Promise<any> {
   // Precondition failures throw (not die) so callers like `doctor` can catch
   // and report them; the dispatch loop renders thrown errors the same way.
-  if (!cfg.token) throw new Error("no token configured — run `cs login` (mint one in the app's CLI access settings).");
+  if (!cfg.token) throw new Error(cfg.api || cfg.name ? `no token for ${serverLabel(cfg)} — run \`cs server add ${cfg.name || "<name>"} ${cfg.api || "<url>"}\`.` : "no server configured — run `cs server add <name> <url>`.");
+  return request(cfg, path, init);
+}
+
+/** One API call, with or without a token (the browser sign-in has none yet). */
+async function request(cfg: Config, path: string, init?: RequestInit & { timeoutMs?: number }): Promise<any> {
   const method = (init?.method || "GET").toUpperCase();
   const body = init?.body != null ? String(init.body) : null;
 
   // Transport A: over SSH (Cloudflare-proof).
   if (cfg.sshApi) {
-    if (!cfg.ssh) throw new Error("SSH API mode needs an SSH host — run `cs login`.");
+    if (!cfg.ssh) throw new Error(`SSH API mode needs an SSH host for ${serverLabel(cfg)}.`);
     return sshApiRequest(cfg, method, path, body);
   }
 
   // Transport B: direct HTTPS (+ Cloudflare Access service token if configured).
-  if (!cfg.api) throw new Error("no server configured — run `cs login`.");
+  if (!cfg.api) throw new Error("no server configured — run `cs server add <name> <url>`.");
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    authorization: `Bearer ${cfg.token}`,
+    ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}),
     ...((init?.headers as Record<string, string>) ?? {}),
   };
   if (cfg.cfId && cfg.cfSecret) {
@@ -153,17 +198,17 @@ async function api(cfg: Config, path: string, init?: RequestInit): Promise<any> 
   }
   let res: Response;
   try {
-    res = await fetch(cfg.api + path, { ...init, headers });
+    res = await fetch(cfg.api + path, { ...init, headers, signal: init?.timeoutMs ? AbortSignal.timeout(init.timeoutMs) : init?.signal });
   } catch (e) {
     throw new Error(`can't reach ${cfg.api} (${(e as Error).message})`);
   }
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("application/json")) {
     throw new Error(`the server returned a non-JSON page (HTTP ${res.status}) — the domain is likely behind Cloudflare Access.\n` +
-        `  Fix: \`cs login\` and enable "route API over SSH", or add a CF Access service token. See README.`);
+        `  Fix: \`cs login\` and enable "route API over SSH", or add a CF Access service token. See docs/cli.md.`);
   }
   const data = await res.json().catch(() => ({}));
-  return handleStatus(res.status, data);
+  return handleStatus(cfg, res.status, data);
 }
 
 /* ---------- helpers ---------- */
@@ -303,7 +348,7 @@ async function cmdOpen(cfg: Config, nameArg: string | undefined): Promise<void> 
 // Interactive shell on the server. With a name, drops you into that session's
 // workspace directory; without one, a plain login shell on the box.
 async function cmdSsh(cfg: Config, nameArg: string | undefined): Promise<void> {
-  if (!cfg.ssh) die("no SSH host configured. Run `cs login`.");
+  if (!cfg.ssh) die("no SSH host configured. Add one with `cs login`.");
   let dir: string | null = null;
   if (nameArg) {
     const { sessions } = await api(cfg, "/api/sessions");
@@ -359,7 +404,7 @@ async function syncWorkspace(cfg: Config, name: string, repo: string, branch: st
   }
 
   if (st.state === "none") {
-    if (!cfg.ssh) die("no SSH host configured for the upload. Run `cs login`.");
+    if (!cfg.ssh) die("no SSH host configured for the upload. Add one with `cs login`.");
     process.stdout.write("Preparing workspace on the server… ");
     const prep = await api(cfg, "/api/synced/prepare", { method: "POST", body: JSON.stringify({ name, repo, branch }) });
     console.log("done.");
@@ -395,7 +440,7 @@ async function syncWorkspace(cfg: Config, name: string, repo: string, branch: st
 // Otherwise a matching app session's workspace is used, or pass --dir, or claude
 // starts in your server login home.
 async function cmdTerm(cfg: Config, args: string[]): Promise<void> {
-  if (!cfg.ssh) die("no SSH host configured. Run `cs login`.");
+  if (!cfg.ssh) die("no SSH host configured. Add one with `cs login`.");
 
   // Everything after `--` is forwarded verbatim to the remote `claude`.
   const dd = args.indexOf("--");
@@ -463,7 +508,7 @@ async function attachFiltered(remote: string[]): Promise<number> {
 // `screen -x`. This attaches to an existing session; it does NOT start a new
 // claude (that is what `cs term` / `--server --attach` are for).
 async function cmdMirror(cfg: Config, nameArg: string | undefined): Promise<void> {
-  if (!cfg.ssh) die("no SSH host configured. Run `cs login`.");
+  if (!cfg.ssh) die("no SSH host configured. Add one with `cs login`.");
   const { sessions } = await api(cfg, "/api/sessions");
   const running = (sessions as any[]).filter((s) => s.status === "running");
   if (!running.length) die("no sessions running on the server. Start one with `cs --server` or `cs term`.");
@@ -497,9 +542,10 @@ async function cmdDoctor(cfg: Config): Promise<void> {
   bin("claude", "install Claude Code (the `claude` CLI)");
   bin("rsync", "install rsync (ships with macOS + Xcode command-line tools)");
 
+  const which = `server ${serverLabel(cfg)}`;
   checks.push(cfg.token && cfg.ssh && cfg.api
-    ? { label: "config", ok: true }
-    : { label: "config", ok: false, hint: `run \`cs login\` — token/ssh/api missing from ${CONFIG_PATH}` });
+    ? { label: which, ok: true }
+    : { label: which, ok: false, hint: `run \`cs login\` — token/ssh/api missing from ${CONFIG_PATH}` });
 
   if (cfg.ssh) {
     const r = capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", cfg.ssh, "true"]);
@@ -532,43 +578,199 @@ async function cmdDoctor(cfg: Config): Promise<void> {
   process.exit(failed ? 1 : 0);
 }
 
-async function cmdLogin(): Promise<void> {
-  const cur = loadConfig();
-  console.log("Configure cs — press Enter to keep the shown value.\n");
-  const apiUrl = (prompt(`Server URL, e.g. https://sessions.example.com [${cur.api || "required"}]:`) || cur.api || "").replace(/\/$/, "");
-  if (!/^https?:\/\/[^/\s]+$/.test(apiUrl)) die("the server URL must look like https://sessions.example.com");
-  const token = prompt(`CLI token [${cur.token ? "keep existing" : "required"}]:`) || cur.token;
-  const ssh = prompt(`SSH host for uploads and terminals (user@host) [${cur.ssh || "optional"}]:`) || cur.ssh || "";
-  const sshApiAns = prompt(`Route API over SSH to bypass Cloudflare Access? [${cur.sshApi ? "Y/n" : "y/N"}]:`);
-  const sshApi = sshApiAns ? /^y/i.test(sshApiAns) : (cur.sshApi ?? false);
-  let cfId = cur.cfId || "", cfSecret = cur.cfSecret || "";
-  if (!sshApi) {
-    console.log("\nCloudflare Access (only if the domain is behind Zero Trust — leave blank otherwise):");
-    cfId = prompt(`  CF Access service-token Client-Id [${cur.cfId ? "keep existing" : "none"}]:`) || cfId;
-    cfSecret = prompt(`  CF Access service-token Client-Secret [${cur.cfSecret ? "keep existing" : "none"}]:`) || cfSecret;
-  }
-  if (!token) die("a token is required — mint one in the app: Settings → CLI access.");
-  saveConfig({ api: apiUrl, token, ssh, cfId, cfSecret, sshApi, origin: cur.origin });
-  console.log(`\nSaved to ${CONFIG_PATH} (chmod 600).${sshApi ? "  API will tunnel over SSH." : ""}`);
+/* ---------- servers: add, list, choose ---------- */
 
-  // Preflight: verify the token actually works before you rely on it.
-  process.stdout.write("Verifying token… ");
+// Ask the signed-in app for a token: cs shows a short code and a link, you press
+// Allow in the browser, and cs collects the token. Works over SSH too, since the
+// browser can be on any device that is signed in to the app.
+async function browserSignIn(target: Config): Promise<string> {
+  const label = hostname().replace(/\.local$/, "") || "this computer";
+  const started = await request(target, "/api/cli-login/start", { method: "POST", body: JSON.stringify({ label }) });
+  console.log(`\nAllow ${paint(`cs on ${label}`, "1")} in the app. Open:\n\n  ${started.verify_url}\n`);
+  console.log(`and check it shows the code ${paint(started.user_code, "1")}. Waiting… (Ctrl-C to cancel)`);
+  if (!process.env.SSH_CONNECTION) {
+    capture([process.platform === "darwin" ? "open" : "xdg-open", started.verify_url]);
+  }
+  const deadline = Date.now() + (Number(started.expires_in) || 600) * 1000;
+  const every = Math.max(1, Number(started.interval) || 2) * 1000;
+  while (Date.now() < deadline) {
+    await Bun.sleep(every);
+    const got = await request(target, "/api/cli-login/poll", { method: "POST", body: JSON.stringify({ code: started.code }) });
+    if (got.status === "approved" && typeof got.token === "string") return got.token;
+  }
+  throw new Error("the sign-in expired after 10 minutes. Run the command again.");
+}
+
+function normalizeUrl(raw: string): string {
+  const url = raw.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\/[^/\s]+$/.test(url)) die("the server URL must look like https://sessions.example.com");
+  return url;
+}
+
+// Flags shared by `cs server add` and its value-taking options.
+function flagValue(args: string[], flag: string): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag) return args[i + 1];
+    if (args[i]!.startsWith(flag + "=")) return args[i]!.slice(flag.length + 1);
+  }
+  return undefined;
+}
+
+async function verifyServer(cfg: Config): Promise<string> {
   try {
-    const { sessions } = await api(loadConfig(), "/api/sessions");
+    const { sessions } = await api(cfg, "/api/sessions", { timeoutMs: 8000 } as RequestInit);
     const n = (sessions as any[]).filter((s) => s.status === "running").length;
-    console.log(`ok — ${n} session${n === 1 ? "" : "s"} running.`);
+    return paint(`ok, ${n} session${n === 1 ? "" : "s"} running`, "32");
   } catch (e) {
-    console.log(`could not verify: ${(e as Error).message}`);
+    const msg = (e as Error).message;
+    return paint(/token rejected/.test(msg) ? "token rejected" : /can't reach|ssh to|non-JSON|timed out|abort/i.test(msg) ? "unreachable" : msg, "31");
   }
 }
 
-async function cmdRun(cfg: Config, args: string[]): Promise<void> {
+// A rejected token is never saved; an unreachable server is (it may just be offline).
+async function saveServer(name: string, entry: ServerEntry, makeDefault: boolean): Promise<void> {
+  const state = await verifyServer({ ...entry, name, origin: entry.origin || DEFAULT_ORIGIN });
+  if (state.includes("token rejected")) die(`${entry.api} rejected that token; nothing was saved.`);
+  const file = loadConfigFile();
+  file.servers[name] = entry;
+  if (makeDefault || !file.default || !file.servers[file.default]) file.default = name;
+  saveConfigFile(file);
+  console.log(`Saved "${name}"${file.default === name ? " as the default server" : ""} to ${CONFIG_PATH} (chmod 600).`);
+  console.log(`Checking… ${state}`);
+}
+
+async function cmdServer(args: string[]): Promise<void> {
+  const [action, ...rest] = args;
+  const words = rest.filter((a, i) => !a.startsWith("-") && !["--token", "--ssh", "--origin"].includes(rest[i - 1] ?? ""));
+  const file = loadConfigFile();
+
+  if (action === "add") {
+    const [name, rawUrl] = words;
+    if (!name || !rawUrl) die("usage: cs server add <name> <url> [--token <t>|-] [--ssh user@host] [--ssh-api] [--default]");
+    if (!isServerName(name)) die("a server name is lower-case letters, digits, - and _, like lab or personal");
+    const api = normalizeUrl(rawUrl);
+    const prev = file.servers[name];
+    const entry: ServerEntry = {
+      ...prev, api,
+      token: "",
+      ssh: flagValue(rest, "--ssh") ?? prev?.ssh ?? "",
+    };
+    if (rest.includes("--ssh-api")) entry.sshApi = true;
+    if (rest.includes("--no-ssh-api")) delete entry.sshApi;
+    const origin = flagValue(rest, "--origin");
+    if (origin) entry.origin = origin;
+    let token = flagValue(rest, "--token");
+    if (token === "-") token = (await new Response(Bun.stdin.stream()).text()).trim();
+    if (rest.includes("--token") && !token) die("--token needs a value (or - to read it from stdin)");
+    entry.token = token || await browserSignIn({ ...entry, token: "", name, origin: entry.origin || DEFAULT_ORIGIN });
+    if (!token) console.log("Signed in.");
+    await saveServer(name, entry, rest.includes("--default"));
+    if (!entry.ssh) console.log(paint(`No SSH host yet; uploads, terminals and mirroring need one: cs server add ${name} ${api} --ssh user@host`, "2"));
+    return;
+  }
+
+  if (action === "ls" || action === "list" || action === undefined) {
+    const names = Object.keys(file.servers);
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(names.map((n) => ({ name: n, api: file.servers[n]!.api, ssh: file.servers[n]!.ssh || null, default: n === file.default })), null, 2));
+      return;
+    }
+    if (!names.length) { console.log("No servers yet. Add one: cs server add <name> https://sessions.example.com"); return; }
+    const states = await Promise.all(names.map((n) =>
+      verifyServer({ ...file.servers[n]!, name: n, origin: file.servers[n]!.origin || DEFAULT_ORIGIN })));
+    const width = Math.max(...names.map((n) => n.length));
+    names.forEach((n, i) => {
+      const mark = n === file.default ? paint("*", "32") : " ";
+      console.log(`${mark} ${n.padEnd(width)}  ${file.servers[n]!.api}  ${states[i]}`);
+    });
+    if (process.env.CS_SERVER) console.log(paint(`\nCS_SERVER=${process.env.CS_SERVER} picks the server for this shell.`, "2"));
+    return;
+  }
+
+  if (action === "use") {
+    const [name] = words;
+    if (!name || !file.servers[name]) die(`usage: cs server use <name> — one of: ${Object.keys(file.servers).join(", ") || "(none yet)"}`);
+    file.default = name;
+    saveConfigFile(file);
+    console.log(`"${name}" is now the default server.`);
+    return;
+  }
+
+  if (action === "rm" || action === "remove") {
+    const [name] = words;
+    if (!name || !file.servers[name]) die(`no server named "${name ?? ""}". See \`cs server ls\`.`);
+    const api = file.servers[name]!.api;
+    delete file.servers[name];
+    if (file.default === name) file.default = Object.keys(file.servers)[0];
+    saveConfigFile(file);
+    console.log(`Removed "${name}".${file.default ? ` The default is "${file.default}".` : ""}`);
+    console.log(paint(`Its token still works until you revoke it in the app: ${api} → Settings → CLI access.`, "2"));
+    return;
+  }
+
+  if (action === "rename") {
+    const [from, to] = words;
+    if (!from || !to || !file.servers[from]) die("usage: cs server rename <old> <new>");
+    if (!isServerName(to)) die("a server name is lower-case letters, digits, - and _, like lab or personal");
+    if (file.servers[to]) die(`there is already a server named "${to}".`);
+    file.servers[to] = file.servers[from]!;
+    delete file.servers[from];
+    if (file.default === from) file.default = to;
+    saveConfigFile(file);
+    console.log(`Renamed "${from}" to "${to}".`);
+    return;
+  }
+
+  console.log(`cs server — the Coding Sessions servers this machine uses
+
+  cs server add <name> <url>      sign in through the browser and save it
+      [--token <t>|-]               use a CLI token instead (scripts, CI; - reads stdin)
+      [--ssh user@host]             SSH host for uploads, terminals and mirroring
+      [--ssh-api] [--default]       route the API over SSH; make it the default
+  cs server ls [--json]           list them, * marks the default
+  cs server use <name>            make it the default
+  cs server rename <old> <new>
+  cs server rm <name>
+
+Pick one per command with --server=<name> (or -S <name>), or per shell with CS_SERVER.`);
+}
+
+// The interactive way to add or update a server; kept for people used to it.
+async function cmdLogin(chosen: string | undefined): Promise<void> {
+  const file = loadConfigFile();
+  const curName = chosen || process.env.CS_SERVER || file.default;
+  const cur: Partial<ServerEntry> = (curName && file.servers[curName]) || {};
+  console.log("Add or update a server — press Enter to keep the shown value.\n");
+  const apiUrl = normalizeUrl(prompt(`Server URL, e.g. https://sessions.example.com [${cur.api || "required"}]:`) || cur.api || "");
+  const suggested = chosen ? chosen : curName && cur.api === apiUrl ? curName
+    : Object.entries(file.servers).find(([, e]) => e.api === apiUrl)?.[0] ?? serverNameFromUrl(apiUrl, Object.keys(file.servers));
+  const name = (prompt(`Name for this server [${suggested}]:`) || suggested).trim();
+  if (!isServerName(name)) die("a server name is lower-case letters, digits, - and _, like lab or personal");
+  const prev: Partial<ServerEntry> = file.servers[name] || {};
+  const tokenAns = prompt(`CLI token [${prev.token ? "keep existing" : "leave blank to sign in through the browser"}]:`) || "";
+  const ssh = prompt(`SSH host for uploads and terminals (user@host) [${prev.ssh || "optional"}]:`) || prev.ssh || "";
+  const sshApiAns = prompt(`Route API over SSH to bypass Cloudflare Access? [${prev.sshApi ? "Y/n" : "y/N"}]:`);
+  const sshApi = sshApiAns ? /^y/i.test(sshApiAns) : (prev.sshApi ?? false);
+  let cfId = prev.cfId || "", cfSecret = prev.cfSecret || "";
+  if (!sshApi) {
+    console.log("\nCloudflare Access (only if the domain is behind Zero Trust — leave blank otherwise):");
+    cfId = prompt(`  CF Access service-token Client-Id [${prev.cfId ? "keep existing" : "none"}]:`) || cfId;
+    cfSecret = prompt(`  CF Access service-token Client-Secret [${prev.cfSecret ? "keep existing" : "none"}]:`) || cfSecret;
+  }
+  const entry: ServerEntry = { api: apiUrl, token: "", ssh, sshApi, cfId, cfSecret, ...(prev.origin ? { origin: prev.origin } : {}) };
+  entry.token = tokenAns || (prev.token && prev.api === apiUrl ? prev.token : "")
+    || await browserSignIn({ ...entry, name, origin: entry.origin || DEFAULT_ORIGIN });
+  await saveServer(name, entry, false);
+}
+
+async function cmdRun(getCfg: () => Config, args: string[]): Promise<void> {
   // No --server: forward every arg to a local `claude` verbatim, so all of
   // claude's own flags work through cs — e.g. `cs -c`/`cs --continue`,
   // `cs -r`/`cs --resume`, `cs -p "quick q"`, `cs --model opus`.
   if (!args.includes("--server") && !args.includes("-s")) {
     process.exit(run(["claude", ...args]));
   }
+  const cfg = getCfg();
 
   // --server: parse cs's own flags; the remaining words are the prompt.
   let name: string | null = null, repoArg: string | null = null, branchArg: string | null = null;
@@ -620,7 +822,7 @@ async function cmdRun(cfg: Config, args: string[]): Promise<void> {
     // changes, unpushed commits, or a branch not yet on origin.
     const diff = localDivergence(branch);
     if (diff) {
-      if (!cfg.ssh) die("no SSH host configured for the upload. Run `cs login`.");
+      if (!cfg.ssh) die("no SSH host configured for the upload. Add one with `cs login`.");
       console.log(`Syncing local changes up (${diff}; gitignored paths skipped)…`);
       if (rsyncWorkTreeUp(cfg, prep.workspacePath) !== 0) {
         die("rsync failed — check your SSH access to the server.");
@@ -664,47 +866,70 @@ async function cmdUpgrade(): Promise<void> {
  * API. `cs mcp add` registers the server's /mcp endpoint with an agent so it can
  * list, launch, message and read sessions itself.
  */
-async function cmdMcp(cfg: Config, args: string[]): Promise<void> {
+async function cmdMcp(cfg: () => Config, args: string[]): Promise<void> {
   const [action, clientArg] = args;
   const withToken = args.includes("--token");
-  const client = clientArg as McpClient | undefined;
+  const all = args.includes("--all");
+  const client = clientArg && !clientArg.startsWith("-") ? clientArg as McpClient : undefined;
   const clients: McpClient[] = client ? [client] : ["claude", "codex"];
   if (client && client !== "claude" && client !== "codex") die("choose claude or codex, e.g. `cs mcp add claude`");
   const installed = (bin: string) => capture(["bash", "-lc", `command -v ${bin}`]).code === 0;
+  // One MCP connection per server: `coding-sessions` for the default, `coding-sessions-<name>` for the rest.
+  const file = loadConfigFile();
+  const targets = (): Config[] => all
+    ? Object.keys(file.servers).map((n) => resolveServer(file, n))
+    : [cfg()];
 
   if (action === "add") {
-    if (!cfg.api) die("no server configured — run `cs login` first.");
-    if (withToken && !cfg.token) die("--token needs a CLI token — run `cs login` first.");
-    for (const c of clients) {
-      if (!installed(c)) { if (client) die(`\`${c}\` is not installed here.`); continue; }
-      const cmd = mcpAddCommand(c, cfg.api, { withToken: withToken && c === "claude" ? cfg.token : undefined });
-      console.log(paint(`$ ${cmd.map((a) => a.startsWith("Authorization:") ? "'Authorization: Bearer •••'" : a).join(" ")}`, "2"));
-      if (run(cmd) !== 0) die(`could not add the MCP server to ${c}.`);
-      console.log(withToken
-        ? c === "codex" ? `Added to Codex. Export your token before starting Codex:  export CS_TOKEN=…` : "Added to Claude Code with your CLI token."
-        : c === "claude" ? "Added. In Claude Code run /mcp → coding-sessions → Authenticate once." : "Added. Codex opens a browser to sign in the first time it connects.");
+    const list = targets();
+    if (!list.length) die("no servers yet — run `cs server add <name> <url>` first.");
+    for (const server of list) {
+      if (!server.api) die("no server configured — run `cs server add <name> <url>` first.");
+      if (withToken && !server.token) die(`--token needs a CLI token for ${serverLabel(server)} — run \`cs server add\` first.`);
+      const name = mcpNameFor(server.name, server.isDefault ?? !server.name);
+      const tokenEnv = tokenEnvFor(server.name, server.isDefault ?? !server.name);
+      for (const c of clients) {
+        if (!installed(c)) { if (client) die(`\`${c}\` is not installed here.`); continue; }
+        const cmd = mcpAddCommand(c, server.api, { name, tokenEnv, withToken: withToken ? server.token : undefined });
+        console.log(paint(`$ ${cmd.map((a) => a.startsWith("Authorization:") ? "'Authorization: Bearer •••'" : a).join(" ")}`, "2"));
+        if (run(cmd) !== 0) die(`could not add the MCP server to ${c}.`);
+        console.log(withToken
+          ? c === "codex" ? `Added ${name} to Codex. Export the token before starting Codex:  export ${tokenEnv}=…` : `Added ${name} to Claude Code with your CLI token.`
+          : c === "claude" ? `Added. In Claude Code run /mcp → ${name} → Authenticate once.` : `Added ${name}. Codex opens a browser to sign in the first time it connects.`);
+      }
     }
     return;
   }
   if (action === "remove") {
-    const name = args.find((a, i) => i > 1 && !a.startsWith("-")) ?? MCP_NAME;
-    for (const c of clients) if (installed(c)) run(mcpRemoveCommand(c, name));
+    const explicit = args.find((a, i) => i > 1 && !a.startsWith("-"));
+    const names = explicit ? [explicit] : targets().map((t) => mcpNameFor(t.name, t.isDefault ?? !t.name));
+    for (const c of clients) if (installed(c)) for (const name of names) run(mcpRemoveCommand(c, name));
     return;
   }
   if (action === "status") {
+    // Every saved server, so a second one's connection shows up next to the default's.
+    const names = Object.keys(file.servers).length
+      ? Object.keys(file.servers).map((n) => ({ server: n, mcp: mcpNameFor(n, n === file.default) }))
+      : [{ server: "", mcp: mcpNameFor(undefined, true) }];
     for (const c of clients) {
       if (!installed(c)) { console.log(`${c}: not installed`); continue; }
       const listed = capture([c, "mcp", "list"]).out;
-      const line = mcpListedLine(listed);
-      console.log(`${c}: ${line ?? "not set up — run `cs mcp add " + c + "`"}`);
+      for (const { server, mcp } of names) {
+        const line = mcpListedLine(listed, mcp);
+        const hint = server && server !== file.default ? `cs mcp add ${c} --server=${server}` : `cs mcp add ${c}`;
+        console.log(`${c}: ${line ?? `${mcp} not set up — run \`${hint}\``}`);
+      }
     }
     return;
   }
+  const shown = (() => { try { return cfg().api; } catch { return ""; } })();
   console.log(`cs mcp — let Claude Code or Codex drive your sessions through MCP
 
-  cs mcp add [claude|codex]          register ${cfg.api ? cfg.api + "/mcp" : "<server>/mcp"} (OAuth sign-in)
+  cs mcp add [claude|codex]          register ${shown ? shown + "/mcp" : "<server>/mcp"} (OAuth sign-in)
   cs mcp add [claude|codex] --token  use your CLI token instead (no browser needed;
                                        Codex reads it from $CS_TOKEN)
+  cs mcp add --server=<name>         another saved server, as coding-sessions-<name>
+  cs mcp add --all                   every saved server
   cs mcp status                      show whether each agent has it
   cs mcp remove [claude|codex] [name]
 
@@ -766,6 +991,7 @@ USAGE
   cs --server --attach "..."     ↑ then attach this terminal to it natively (zmx);
                                    rerun to reattach — it's also in the app/phone
   cs --server --auto …           start claude in auto mode
+  cs --server=<name> "..."       run on another saved server (also -S <name>)
 
   cs list [--json]               list sessions running on the server
   cs end <name> [-y]             end a running session (-y skips the confirm)
@@ -780,36 +1006,41 @@ USAGE
                                    claude codex command-code gemini kimi qwen opencode
   cs doctor                      check bun/claude/config/ssh/token/rsync setup
   cs pull                        git pull the current branch
-  cs login                       configure server URL, token, and SSH host
+  cs server add <name> <url>     add a server; signs in through the browser
+  cs server ls | use | rm | rename   list servers, set the default, …
+  cs login                       add or update a server interactively
   cs upgrade                     git-pull this checkout to the latest
   cs --version                   print the installed version
 
-CONFIG   ${CONFIG_PATH}  (or env CS_API / CS_TOKEN / CS_SSH)
-  Mint a token in the app:  Settings → CLI access → Generate token.`);
+Every server command takes --server=<name> or -S <name> (cs term: --server=<name>
+only, its -S is --sync); else CS_SERVER, else the default server.
+
+CONFIG   ${CONFIG_PATH}  (or env CS_SERVER, or CS_API / CS_TOKEN / CS_SSH)`);
 }
 
-const argv = process.argv.slice(2);
-const sub = argv[0];
-const cfg = loadConfig();
+const { sub, args, server: chosenServer } = parseServerArgs(process.argv.slice(2));
+let resolved: Config | null = null;
+const cfg = (): Config => (resolved ??= resolveServer(loadConfigFile(), chosenServer));
 
 try {
   switch (sub) {
-    case "list": await cmdList(cfg, argv.slice(1)); break;
-    case "end": await cmdEnd(cfg, argv.slice(1)); break;
-    case "open": await cmdOpen(cfg, argv[1]); break;
-    case "ssh": await cmdSsh(cfg, argv[1]); break;
-    case "term": case "attach": await cmdTerm(cfg, argv.slice(1)); break;
-    case "mirror": await cmdMirror(cfg, argv[1]); break;
+    case "list": await cmdList(cfg(), args); break;
+    case "end": await cmdEnd(cfg(), args); break;
+    case "open": await cmdOpen(cfg(), args[0]); break;
+    case "ssh": await cmdSsh(cfg(), args[0]); break;
+    case "term": case "attach": await cmdTerm(cfg(), args); break;
+    case "mirror": await cmdMirror(cfg(), args[0]); break;
     case "pull": process.exit(run(["git", "pull"])); break;
-    case "login": await cmdLogin(); break;
+    case "server": await cmdServer(args); break;
+    case "login": await cmdLogin(chosenServer); break;
     case "upgrade": await cmdUpgrade(); break;
-    case "doctor": await cmdDoctor(cfg); break;
-    case "mcp": await cmdMcp(cfg, argv.slice(1)); break;
-    case "install": await cmdInstall(cfg, argv.slice(1)); break;
+    case "doctor": await cmdDoctor(cfg()); break;
+    case "mcp": await cmdMcp(cfg, args); break;
+    case "install": await cmdInstall(cfg(), args); break;
     case "version": case "--version": case "-V": console.log(`cs v${csVersion()}`); break;
     case undefined: process.exit(run(["claude"])); break; // bare `cs` → local claude
     case "help": case "--help": case "-h": printHelp(); break;
-    default: await cmdRun(cfg, argv);
+    case RUN: await cmdRun(cfg, args); break;
   }
 } catch (e) {
   die((e as Error).message);
