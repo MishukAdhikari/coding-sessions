@@ -10,7 +10,7 @@ Usage: sudo ./deploy/install-ubuntu --instance NAME --origin https://HOST --port
        [--source /path/to/reviewed/checkout] [--daily-updates] [--codex-hooks]
        [--install-nginx] [--no-start] [--check]
 
-Ubuntu 24.04/26.04. Creates a dedicated cs-NAME user; existing unmanaged users,
+Ubuntu 22.04/24.04/26.04, Debian 12/13. Creates a dedicated cs-NAME user; existing unmanaged users,
 units, state or Codex policies are never taken over. --check validates inputs and
 reports paths without writes. --no-start stages units for offline validation.
 Provider CLIs and authentication are separate operator steps. No sudo grant is

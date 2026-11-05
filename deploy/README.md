@@ -1,10 +1,19 @@
-# Ubuntu installer operations
+# Manual install
 
-`install-ubuntu` accepts a reviewed local checkout. It supports Ubuntu 24.04 and 26.04 on amd64/arm64, creates an isolated account, copies root-owned application code, and installs systemd templates. It does not authenticate providers, import credentials, grant sudo, or join Docker groups.
+Most people should use the [one-command install](../docs/install.md), which runs this same installer for you. Use `install-ubuntu` directly when you want to review all of the source first and choose every path yourself.
+
+`install-ubuntu` accepts a reviewed local checkout. It supports Ubuntu 22.04, 24.04 and 26.04 and Debian 12 and 13 on amd64/arm64, creates an isolated account, copies root-owned application code, and installs systemd templates. It does not authenticate providers, import credentials, grant sudo, or join Docker groups.
 
 ## Install
 
-From the reviewed checkout, on Ubuntu amd64:
+You need:
+
+- a hostname whose DNS points to the server, and HTTPS termination with WebSocket support (the installer can add an nginx site for certbot);
+- a reviewed checkout, and either a reviewed Linux Bun binary or an exact Bun release with its independently verified archive SHA-256.
+
+Do not point this installer at a personal service account or an unmanaged production directory. Inventory paths, credentials, approval settings, detached sessions and backup recovery first. Explicit `unrestricted` permission mode and `inherit` environment mode exist for deliberate legacy compatibility; they are not the new-install defaults.
+
+From the reviewed checkout, on amd64:
 
 ```sh
 sudo ./deploy/install-ubuntu \
@@ -22,7 +31,7 @@ For arm64 use `a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b`
 Optional flags:
 
 - `--daily-updates`: enable the installed-provider update timer at 00:00 UTC. Pausing/resuming remains an administrator operation.
-- `--codex-hooks`: provision the fixed root-owned managed-hook files. Existing different `/etc/codex/requirements.toml` causes a refusal; merge administrator policy separately before retrying. No approval or project-trust policy is changed.
+- `--codex-hooks`: provision the fixed root-owned managed-hook files. Managed Codex sessions need Codex 0.166.0 or newer. Existing different `/etc/codex/requirements.toml` causes a refusal; merge administrator policy separately before retrying. No approval or project-trust policy is changed.
 - `--install-nginx`: install a new per-instance HTTP proxy site. Existing site files are refused rather than overwritten. Complete TLS with `sudo certbot --nginx -d sessions.example.com` before browser use. Use an existing HTTPS proxy instead when preferred.
 - `--source /path/to/checkout`: use a different reviewed source checkout.
 
@@ -38,13 +47,15 @@ The app binds loopback. A proxy must forward WebSocket Upgrade/Connection header
 | `/etc/coding-sessions/credentials/personal/admin-password` | Root0600 generated bootstrap password, delivered with systemd LoadCredential. |
 | `/etc/coding-sessions/credentials/personal/token-encryption-key` | Root0600 base64 32-byte encryption key, delivered with systemd LoadCredential. Preserve this alongside database backups. |
 
-The administrator can read the bootstrap password privately with `sudo cat /etc/coding-sessions/credentials/personal/admin-password`. Do not paste it into logs or support reports. No credential contents are printed by the installer. The service unit supplies these files through `CREDENTIALS_DIRECTORY`; it does not place them in the environment file.
+For `personal`, the service is `coding-sessions@personal` and the account is `cs-personal`.
+
+To sign in the first time, open your HTTPS origin, sign in with the bootstrap password and register a passkey. The administrator can read the bootstrap password privately with `sudo cat /etc/coding-sessions/credentials/personal/admin-password`. Do not paste it into logs or support reports. No credential contents are printed by the installer. The service unit supplies these files through `CREDENTIALS_DIRECTORY`; it does not place them in the environment file.
 
 Rerunning the installer preserves existing credentials, state, screen configuration and environment settings. It refuses unmanaged accounts or paths, changed origin/port, extra service-account groups, instance overrides and differing shared unit templates. Such conflicts need an administrator review rather than silent takeover. Each run stages a new release and switches `current`; old releases remain for rollback.
 
 ## Provider setup
 
-Install a supported Node.js release **22 or newer** and npm on the service PATH before selecting npm providers. Ubuntu 24.04's default Node 18 package is insufficient for Command Code. [Node downloads and signed-checksum instructions](https://nodejs.org/en/download)
+Claude Code uses Anthropic's own installer. Every other agent needs Node.js **22 or newer** and npm on the service PATH (Kimi Code needs 22.19+). The distributions' own `nodejs` packages are too old, so install Node.js 22 from NodeSource or nvm. [Node downloads and signed-checksum instructions](https://nodejs.org/en/download)
 
 Then install selected CLIs as the instance user:
 
@@ -74,7 +85,7 @@ sudo systemctl disable --now coding-sessions-update@personal.timer
 sudo systemctl start coding-sessions-update@personal.service
 ```
 
-There is no destructive uninstall command. Disabling the service/timer leaves credentials, data and workspaces intact; remove those only after a separate backup and explicit operator decision.
+Instances set up with the one-command install are removed with `sudo coding-sessions uninstall [--purge]`. For a manual install there is no uninstall command: end its sessions, back up its state and credentials, disable its service and both timers (`coding-sessions-update@NAME.timer`, `coding-sessions-app-update@NAME.timer`), and remove its proxy route. Disabling the service/timer leaves credentials, data and workspaces intact; remove those only after a separate backup and explicit operator decision.
 
 ## Validation
 

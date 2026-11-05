@@ -167,7 +167,7 @@ Install only the agents you want; none is required. Details for the presets are 
 - [ttyd](https://github.com/tsl0922/ttyd) serves the web terminal, and GNU screen keeps sessions alive. git, the GitHub CLI (`gh`), rsync and OpenSSH handle repositories and workspaces.
 - JavaScript libraries: SimpleWebAuthn (passkeys), jose, ipaddr.js and Playwright.
 - Optional, only if you turn them on:
-  - [Caddy](https://caddyserver.com) for HTTPS in Docker, or nginx with certbot from the Ubuntu installer. Both get certificates from Let's Encrypt.
+  - [Caddy](https://caddyserver.com) for HTTPS, from the server installer or in Docker. The manual installer can set up nginx with certbot instead. Both get certificates from Let's Encrypt.
   - Playwright with Chromium for the claude.ai browser, which signs in to claude.ai to manage chats.
 
 **Connections the app makes itself:**
@@ -181,7 +181,7 @@ There is no telemetry or analytics, and the web app loads no scripts or fonts fr
 
 ## Install on a server
 
-On Ubuntu (22.04, 24.04, 26.04) or Debian (12, 13), with a domain pointing at the server:
+On Ubuntu (22.04, 24.04, 26.04) or Debian (12, 13), with a domain pointing at the server and ports 80 and 443 open:
 
 ```bash
 curl -fsSLO https://github.com/MishukAdhikari/coding-sessions/releases/latest/download/install.sh
@@ -189,36 +189,20 @@ curl -fsSLO https://github.com/MishukAdhikari/coding-sessions/releases/latest/do
 sha256sum -c install.sh.sha256 && sudo bash install.sh
 ```
 
-The installer asks for the domain, an email for the HTTPS certificate, which coding agents you want, and a few yes/no choices. It checks DNS and ports, shows its plan, and asks before changing anything. Then it sets up everything coding agents need to run smoothly: HTTPS through Caddy, the runtimes, the agents you picked, Playwright's browser, server limits and daily updates. It finishes with a **one-time sign-in link**: open it and add a passkey.
+The installer asks for:
 
-Afterwards, the `coding-sessions` command runs the server: `sudo coding-sessions doctor`, `agents install`, `update`, `setup-link` and more. Details, every option and troubleshooting: [docs/install.md](docs/install.md). You can also ask an AI agent in this repository to "install Coding Sessions on my server"; its install skill walks you through the same choices before running anything.
+1. the domain;
+2. an email for the HTTPS certificate;
+3. which coding agents to install, if any;
+4. whether to install the browser for claude.ai;
+5. whether to update agents daily;
+6. on small servers, whether to add swap.
 
-### Manual install
+It checks DNS and ports, shows its plan, and asks before changing anything. It then sets up HTTPS with Caddy, the runtimes, your agents, the browser, server limits and the update timers. It ends with a **one-time sign-in link**.
 
-Prerequisites:
+You can also ask an AI agent in this repository to "install Coding Sessions on my server". Its install skill asks you the same questions before running anything. Every option, what setup changes and troubleshooting are in [docs/install.md](docs/install.md).
 
-- Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13, amd64 or arm64, with systemd and administrative access.
-- A hostname whose DNS points to the server, and HTTPS termination with WebSocket support.
-- A reviewed checkout and a reviewed Linux Bun binary. Alternatively, supply an exact Bun release and its independently verified archive SHA-256.
-- Agent CLIs and accounts, installed separately under the dedicated service account. The installer installs no agents. Claude Code uses Anthropic's own installer. Every other agent (Codex, Command Code, Gemini CLI, Qwen Code, opencode) needs Node.js 22+ and npm, and Kimi Code needs 22.19+. Ubuntu's own `nodejs` package is too old, so install Node.js 22 from NodeSource or nvm.
-
-Clone and review the source, then substitute your hostname and Bun path:
-
-```bash
-git clone https://github.com/MishukAdhikari/coding-sessions.git
-cd coding-sessions
-sudo ./deploy/install-ubuntu \
-  --instance personal \
-  --origin https://sessions.example.com \
-  --port 9121 \
-  --bun /absolute/path/to/reviewed/bun \
-  --install-nginx
-sudo certbot --nginx -d sessions.example.com
-```
-
-`--check` validates inputs and reports target paths without installing. `--no-start` stages installation without starting services. `--install-nginx` is optional if you already manage a reverse proxy. Do not expose the application port directly; complete HTTPS before browser use. See [Installer operations](deploy/README.md) for all flags, provider installation, and host compatibility checks.
-
-For `personal`, the service is `coding-sessions@personal`, the account is `cs-personal`, and its home is `/var/lib/coding-sessions/personal`. Configuration lives in `/etc/coding-sessions/personal.env`; application releases live under `/opt/coding-sessions/personal`.
+Want to choose every path yourself, or read all of the source first? See [Manual install](deploy/README.md).
 
 ## Docker
 
@@ -230,39 +214,31 @@ docker compose --profile https up -d
 docker compose exec app cat /home/cs/data/bootstrap-password
 ```
 
-See [Running with Docker](docs/docker.md) for installing agents, updates and settings.
+Open your domain, sign in with that password and add a passkey. [Running with Docker](docs/docker.md) covers installing agents, updates and settings.
 
-## First sign-in
+## After installing
 
-With the guided installer, open the one-time link it printed and add a passkey. Run `sudo coding-sessions setup-link` any time for a new link.
+1. **Sign in.** Open the one-time link and add a passkey. The link works once and expires after 30 minutes. For a new one, run `sudo coding-sessions setup-link` on the server.
+2. **Add agents.** **Settings → Agent authentication** lists every supported agent, with an **Install** button and its sign-in. Signing in to an agent applies to the whole server. Agents and presets are described in [docs/agents.md](docs/agents.md).
+3. **Start a session.** Pick a repository and an agent. If Codex stops at **Folder trust required**, open the terminal and review the folder yourself; the app never accepts trust for you.
+4. **Optional: work from your own terminal.** Install the [`cs` command-line client](docs/cli.md) and run `cs server add personal https://sessions.example.com`. It signs in through your browser, with no token to copy. Then:
+   - `cs --server "<prompt>"` hands your current branch to a session on the server;
+   - `cs install gemini kimi` installs agents;
+   - `cs mcp add` connects Claude Code or Codex to the server.
 
-After a manual install, retrieve the installer-generated administrator password in your private SSH terminal:
+   For [several servers](docs/cli.md#several-servers), give each one a name and pick it with `--server=<name>`.
+5. **Optional: connect Claude or Codex.** Open **Connect Claude or Codex** in the app and approve only connections you started yourself. [MCP setup](docs/mcp.md) covers OAuth and proxies. To let agents use tools from other MCP servers you choose, see [external MCP connectors](docs/connectors.md).
 
-```bash
-sudo cat /etc/coding-sessions/credentials/personal/admin-password
+On the server, the `coding-sessions` command handles the rest:
+
+```text
+sudo coding-sessions doctor              check everything; each problem comes with its fix
+sudo coding-sessions status              URL, versions, services, updates
+sudo coding-sessions agents install gemini kimi
+sudo coding-sessions update [--agents]   update the app now (and the agents)
+sudo coding-sessions setup               run setup again: repair, or change agents, browser, updates
+sudo coding-sessions uninstall           remove it; add --purge to delete the data too
 ```
-
-Do not paste it into issues, chats, or logs. Open your HTTPS origin, sign in, and register a passkey. The password file initializes the password hash; editing it later is not an automatic password-reset mechanism.
-
-Install and authenticate agents as `cs-personal`, never as root. Once Node.js 22+ and npm are available, the optional helper installs selected CLIs:
-
-```bash
-sudo -u cs-personal -H /opt/coding-sessions/personal/current/deploy/install-provider-clis codex claude command-code
-```
-
-You can also install agents without SSH: **Settings → Agent authentication** lists every supported agent with an **Install** button, and `cs install gemini kimi` does the same from your laptop. The same helper installs the agent presets (`gemini kimi qwen opencode`); see [docs/agents.md](docs/agents.md). Name only the agents you want. Each one checks its Node.js minimum first and prints its version once installed.
-
-Agents update automatically only if you installed with `--daily-updates`, or later run `sudo systemctl enable --now coding-sessions-update@personal.timer`. That timer runs daily at 00:00 UTC and updates the installed agents, presets included. Running sessions keep their version; new sessions use the updated one.
-
-Use **Agent authentication** in the app for supported sign-in/account actions. Account changes apply to the whole instance. Existing logins may have an unknown login date, and providers do not all expose email addresses.
-
-Fresh Codex workspaces may pause at folder trust. The app shows **Folder trust required** while startup is pending; open the terminal to review the folder yourself. It does not accept trust on your behalf or report readiness before the managed hook arrives.
-
-Managed Codex sessions require Codex 0.166.0 or newer and additionally need the root-owned hook policy installed with `--codex-hooks`. Existing Codex policies are not silently replaced. Review the installer guide before enabling this host-wide policy.
-
-To work from your own terminal, install the [`cs` command-line client](docs/cli.md) and run `cs server add personal https://sessions.example.com`: it signs in through your browser, no token to copy. `cs --server "<prompt>"` then hands your current branch to a server session, and `cs mcp add` connects Claude Code or Codex in one step. Several servers each get a name; pick one with `--server=<name>` ([several servers](docs/cli.md#several-servers)).
-
-For MCP, open **Connect Claude or Codex** and follow the connection instructions. Approve only connections you initiated. See [MCP setup](docs/mcp.md) for OAuth and reverse-proxy details. To let agents use tools from remote MCP servers you choose, see [external MCP connectors](docs/connectors.md).
 
 ## Configuration and secrets
 
@@ -305,42 +281,26 @@ Turn on **Settings → App updates → Update automatically every 24 hours**. On
 2. switches to it and restarts the web service — running agent sessions keep running;
 3. checks that it answers within 20 seconds, and if not, switches back to the previous release.
 
-The last result and the running version show in the same panel. It is off by default. The toggle only writes a flag in the instance's own data folder; the update itself is done by a root timer (`coding-sessions-app-update@NAME.timer`) that the installer adds, so the web service never gets admin rights. A release that changes the system units is not installed automatically — the panel says so, and you rerun the installer for it.
+It is off by default, and the same panel shows the last result and the running version. The toggle only writes a flag in the instance's own data folder. The update itself is done by a root timer that the installer adds, so the web service never gets admin rights. A release that changes the system units is not installed automatically; the panel says so, and you run setup again for it.
 
-To follow the `main` branch instead of tagged releases, choose it in **Settings → Server settings → App update channel**, or set `CS_APP_UPDATE_CHANNEL=main` in `/etc/coding-sessions/NAME.env`. The choice in Settings wins; the app writes it to `data/app-update-channel`, which the root updater reads only as the word `releases` or `main`. To update from your own fork or a mirror, set `CS_APP_UPDATE_REPO` there to its https URL or to a root-owned local path. To update right away as an administrator:
+To follow the `main` branch instead of tagged releases, choose it in **Settings → Server settings → App update channel**, or set `CS_APP_UPDATE_CHANNEL=main` in `/etc/coding-sessions/NAME.env`. The choice in Settings wins. The app writes it to `data/app-update-channel`, which the root updater reads only as the word `releases` or `main`. To update from your own fork or a mirror, set `CS_APP_UPDATE_REPO` in the same file to its https URL or to a root-owned local path.
 
-```bash
-sudo /opt/coding-sessions/personal/current/deploy/update-app personal --now
-```
+This works on every server set up with the installer: Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13, on amd64 or arm64, with outbound HTTPS to `github.com`. Any VPS, cloud VM, bare-metal or home server running those releases works. Docker updates by pulling a new image instead ([Docker](docs/docker.md)). Hand-built installs show **Not set up** in Settings.
 
-### Which servers support it
-
-Automatic app updates work on any server installed with `deploy/install-ubuntu`:
-
-- **Operating system:** Ubuntu Server 24.04 or 26.04 with systemd.
-- **CPU:** amd64 (x86-64) or arm64.
-- **Network:** outbound HTTPS to `github.com`.
-- **Providers:** any VPS or cloud VM that runs those Ubuntu images — for example Hetzner Cloud, DigitalOcean, Vultr, Linode/Akamai, OVHcloud, AWS EC2 or Lightsail, Google Compute Engine, Azure VMs and Oracle Cloud (including Ampere arm64). Bare-metal and home servers on the same Ubuntu releases work too.
-
-Not supported by the in-app switch: other distributions, containers (Docker updates by pulling a new image — see [Docker](docs/docker.md)), LXC without systemd, shared hosting, and hand-built installs that were not made with the installer — those show **Not set up** in Settings. Rerun the installer on an existing installer-managed instance to add the updater.
-
-### Manual app updates
-
-Review a new checkout and rerun the installer for the same instance and settings, omitting `--install-nginx` if its site already exists. Keep backups and the previous release until health checks pass. The installer preserves managed configuration and credentials and refuses to take over unmanaged paths; a changed shared unit requires separate review.
-
-Provider CLI updates are separate. Opt in with `--daily-updates`, or manage the daily timer as an administrator:
+### Updating by hand
 
 ```bash
-sudo systemctl enable --now coding-sessions-update@personal.timer
-sudo systemctl start coding-sessions-update@personal.service
-sudo systemctl disable --now coding-sessions-update@personal.timer
+sudo coding-sessions update            # the app, right away
+sudo coding-sessions update --agents   # the app and the installed agents
 ```
 
-The default schedule is daily at 00:00 UTC. The UI can show update status, but new isolated installs leave privileged timer control to administrators. This timer does not update the application (see above) or the operating system.
+Agents update daily at 00:00 UTC if you said yes to daily updates during setup. To change that, run `sudo coding-sessions setup` again. Running sessions keep their agent version; new sessions use the updated one. Neither timer updates the operating system.
 
-To retire an instance, first end its sessions and back up its state and credentials. Disable its update timers (`coding-sessions-update@NAME.timer` and `coding-sessions-app-update@NAME.timer`) and application service, then remove its reverse-proxy route. There is no automatic destructive uninstall: review and remove only that instance's release, state, credential, configuration, and ownership-marker paths, and its `cs-NAME` account. Shared template units may serve other instances. Stopping the web service alone does not guarantee detached agents have exited.
+### Removing it
 
-**Existing deployments:** do not point this installer at a personal service account or an unmanaged production directory. Inventory paths, credentials, approval settings, detached sessions, and backup recovery first. Explicit `unrestricted` permission mode and `inherit` environment mode exist for deliberate legacy compatibility; they are not the new-install defaults.
+`sudo coding-sessions uninstall` stops the app and every agent session, and removes the app and its HTTPS site. Your data stays in `/var/lib/coding-sessions/NAME` and `/etc/coding-sessions`. Add `--purge` to delete the data, agent logins and workspaces too. Both ask you to type the instance name first.
+
+Manual installs update, roll back and retire as described in [deploy/README.md](deploy/README.md).
 
 ## Development and security reports
 
