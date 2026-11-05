@@ -34,6 +34,7 @@ import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
 import { cliUpdates } from "./cli-updates";
 import { consumeSetupToken } from "./setup-token";
+import { INSTALLABLE_AGENTS, createAgentInstaller } from "./agent-installs";
 import { handleCliUpdatesRoute } from "./cli-updates-route";
 import { appUpdatePaths, createAppUpdates } from "./app-updates";
 import { handleAppUpdatesRoute } from "./app-updates-route";
@@ -49,6 +50,7 @@ const COOKIE_SECURE = config.cookieSecure;
 const appUpdates = createAppUpdates(appUpdatePaths(config.dataDir), () => serverSettings.get("updateChannel"));
 useMouseSetting(serverSettings.mouseEnabled);
 const stepUpGrants = createStepUpGrants();
+const agentInstaller = createAgentInstaller({ onFinished: () => { void cliUpdates.versions(true); } });
 const COOKIE_NAME = "xs_auth";
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 
@@ -408,6 +410,24 @@ const server = Bun.serve({
     if (path === "/api/commands" && method === "GET") {
       if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
       return json({ commands: listCommands() });
+    }
+
+    // Install agents on this server. A CLI token may do this too: it can already start
+    // sessions that run anything as this account, so installing a known agent adds nothing.
+    if (path === "/api/agent-installs" && method === "GET") {
+      if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
+      const versions = await cliUpdates.versions(url.searchParams.get("fresh") === "1");
+      return json({
+        agents: INSTALLABLE_AGENTS.map(agent => ({ ...agent, version: versions[agent.id] ?? null })),
+        job: agentInstaller.status(),
+      });
+    }
+
+    if (path === "/api/agent-installs" && method === "POST") {
+      if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
+      const body = await req.json().catch(() => ({})) as { agents?: unknown };
+      const result = agentInstaller.start(body.agents);
+      return result.ok ? json({ job: result.job }, 202) : json({ error: result.error }, result.status);
     }
 
     if (path === "/api/commands/presets" && method === "GET") {

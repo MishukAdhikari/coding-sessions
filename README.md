@@ -250,7 +250,7 @@ Install and authenticate agents as `cs-personal`, never as root. Once Node.js 22
 sudo -u cs-personal -H /opt/coding-sessions/personal/current/deploy/install-provider-clis codex claude command-code
 ```
 
-The same helper installs the agent presets (`gemini kimi qwen opencode`); see [docs/agents.md](docs/agents.md). Name only the agents you want. Each one checks its Node.js minimum first and prints its version once installed.
+You can also install agents without SSH: **Settings → Agent authentication** lists every supported agent with an **Install** button, and `cs install gemini kimi` does the same from your laptop. The same helper installs the agent presets (`gemini kimi qwen opencode`); see [docs/agents.md](docs/agents.md). Name only the agents you want. Each one checks its Node.js minimum first and prints its version once installed.
 
 Agents update automatically only if you installed with `--daily-updates`, or later run `sudo systemctl enable --now coding-sessions-update@personal.timer`. That timer runs daily at 00:00 UTC and updates the installed agents, presets included. Running sessions keep their version; new sessions use the updated one.
 
