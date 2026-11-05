@@ -463,6 +463,8 @@ cmd_setup() {
   fi
   say ""
   say "  Next: Settings → Agent authentication to sign in to your agents."
+  local cs_name=${DOMAIN%%.*}
+  say "  On your laptop, add this server to the cs CLI: cs server add ${cs_name:0:24} https://$DOMAIN"
   say "  Check anything later with: sudo coding-sessions doctor"
 }
 
