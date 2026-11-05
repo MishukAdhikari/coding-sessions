@@ -232,12 +232,12 @@ Open your domain, sign in with that password and add a passkey. [Running with Do
 On the server, the `coding-sessions` command handles the rest:
 
 ```text
-sudo coding-sessions doctor              check everything; each problem comes with its fix
+sudo coding-sessions doctor              check everything, with fixes
 sudo coding-sessions status              URL, versions, services, updates
 sudo coding-sessions agents install gemini kimi
-sudo coding-sessions update [--agents]   update the app now (and the agents)
-sudo coding-sessions setup               run setup again: repair, or change agents, browser, updates
-sudo coding-sessions uninstall           remove it; add --purge to delete the data too
+sudo coding-sessions update [--agents]   update the app (and agents)
+sudo coding-sessions setup               repair, or change your choices
+sudo coding-sessions uninstall           remove; --purge deletes data too
 ```
 
 ## Configuration and secrets
