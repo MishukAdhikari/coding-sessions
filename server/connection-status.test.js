@@ -36,6 +36,15 @@ test("agent totals count confirmed sign-ins and keep unknown checks visible", ()
   expect(describe.agents({ accounts: [{ installed: false, loggedIn: null }] }).label).toBe("0 connected");
 });
 
+test("secrets count distinct names from the app and its managers, and flag a manager that failed to sync", () => {
+  const { describe } = harness();
+  expect(describe.secrets({ secrets: [], sources: [] })).toMatchObject({ tone: "neutral", label: "None" });
+  const sources = [{ names: ["A_KEY", "SHARED"], lastError: null }];
+  expect(describe.secrets({ secrets: [{ name: "SHARED" }, { name: "OWN" }], sources })).toMatchObject({ tone: "positive", label: "3 available" });
+  expect(describe.secrets({ secrets: [], sources: [{ ...sources[0], lastError: "The source could not be reached." }] })).toMatchObject({ tone: "warning", label: "Needs attention" });
+  expect(() => describe.secrets({})).toThrow();
+});
+
 test("command and project totals describe registrations rather than live connections", () => {
   const { describe } = harness();
   expect(describe.commands({ commands: [] }).label).toBe("0 commands");

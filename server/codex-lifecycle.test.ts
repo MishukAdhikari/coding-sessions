@@ -228,6 +228,26 @@ test("launch ownership exists before screen starts and advances only to awaiting
   database.close();
 });
 
+test("Codex receives stored secrets in its environment, never argv, under the session plumbing", async () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  let seen: { command: string[]; env: Record<string, string> } | null = null;
+  const runtime: ManagedCodexRuntime = {
+    database,
+    dbPath: "/var/lib/coding-sessions/app.db",
+    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.166.0" }),
+    secretEnv: async () => ({ OPENAI_API_KEY: "stored-openai", CS_COMMUNICATOR_TOKEN: "stored-loses" }),
+    execute: async (command, env) => { seen = { command, env: env ?? {} }; return { code: 0, out: "", err: "" }; },
+    uuid: () => launchId,
+    now: () => 2,
+  };
+  expect(await startManagedCodex({ screen: "cs-demo", name: "demo", projectPath: "/srv/demo" }, runtime)).toEqual({ ok: true });
+  expect(seen!.env.OPENAI_API_KEY).toBe("stored-openai");
+  expect(seen!.env.CS_COMMUNICATOR_TOKEN).toStartWith("cscomm_");
+  expect(seen!.command.join(" ")).not.toContain("stored-openai");
+  database.close();
+});
+
 test("a failed Codex resume keeps its archive and records a sanitized retryable launch error", async () => {
   const database = new Database(":memory:");
   applyDatabaseSchema(database);

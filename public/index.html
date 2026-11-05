@@ -12,7 +12,7 @@
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=45">
+<link rel="stylesheet" href="/app.css?v=46">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -249,6 +249,7 @@ Appearance</label><span class="appearance-select"><select id="theme-preference">
   <circle cx="18" cy="18" r="3" />
 </svg>
 Agent authentication…</span><span id="connection-agents" class="connection-status" role="status">Checking…</span><span id="connection-agents-detail" class="connection-detail"></span></button>
+    <button id="btn-secrets" class="row-btn connection-row"><span>Secrets…</span><span id="connection-secrets" class="connection-status" role="status">Checking…</span><span id="connection-secrets-detail" class="connection-detail"></span></button>
     <button id="btn-commands" class="row-btn connection-row"><span>Commands…</span><span id="connection-commands" class="connection-status" role="status">Checking…</span><span id="connection-commands-detail" class="connection-detail"></span></button>
     <button id="btn-projects" class="row-btn connection-row"><span>Projects…</span><span id="connection-projects" class="connection-status" role="status">Checking…</span><span id="connection-projects-detail" class="connection-detail"></span></button>
     <div class="menu-group">
@@ -531,6 +532,53 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
+<div id="sheet-secrets" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-secrets-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="sheet-secrets-heading">Secrets</h2>
+  <p class="sheet-body">API tokens and keys every new session receives as environment variables. Values are encrypted on the server and never shown again. Running sessions keep the values they started with.</p>
+  <h3 class="label">Stored here</h3>
+  <div id="secret-list"></div>
+  <form id="form-secret" class="proj-form">
+    <input id="input-secret-name" class="field" type="text" placeholder="Name, e.g. OPENAI_API_KEY" maxlength="64" autocapitalize="characters" autocorrect="off" spellcheck="false" required>
+    <input id="input-secret-value" class="field" type="password" placeholder="Value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <button class="btn btn-primary btn-big" type="submit">Save secret</button>
+  </form>
+  <h3 class="label">From a secret manager</h3>
+  <p class="hint secret-source-hint">Connect a vault and its secrets join every new session. Rotated values are picked up within five minutes; if the manager is unreachable, the last values fetched are used. A secret stored here wins over one with the same name from a manager.</p>
+  <div id="secret-source-list"></div>
+  <form id="form-secret-source" class="proj-form">
+    <select id="select-secret-source" class="field" aria-label="Secret manager">
+      <option value="bitwarden">Bitwarden Secrets Manager</option>
+      <option value="infisical">Infisical</option>
+      <option value="vault">HashiCorp Vault / OpenBao</option>
+    </select>
+    <input id="input-source-label" class="field" type="text" placeholder="Name (optional)" maxlength="40">
+    <div class="secret-fields" data-kind="bitwarden">
+      <input name="projectId" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Project id (optional; all projects the token can read)">
+      <input name="serverUrl" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Server URL (optional; EU or self-hosted)">
+      <p class="hint">Needs the <code>bws</code> CLI on the server. Use a machine account access token.</p>
+    </div>
+    <div class="secret-fields" data-kind="infisical" hidden>
+      <input name="siteUrl" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Site URL (default https://app.infisical.com)">
+      <input name="clientId" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Machine identity client id">
+      <input name="projectId" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Project id">
+      <input name="environment" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Environment slug (default prod)">
+      <input name="secretPath" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Secret path (default /)">
+      <p class="hint">Uses Universal Auth. Paste the identity's client secret below.</p>
+    </div>
+    <div class="secret-fields" data-kind="vault" hidden>
+      <input name="address" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Address, e.g. https://vault.example.com">
+      <input name="mount" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="KV v2 mount (default secret)">
+      <input name="path" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Secret path, e.g. apps/sessions">
+      <input name="namespace" class="field" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Namespace (optional, Vault Enterprise / HCP)">
+      <p class="hint">Reads one KV v2 secret; each key becomes a variable. Use a token whose policy can only read that path.</p>
+    </div>
+    <input id="input-source-credential" class="field" type="password" placeholder="Access token" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <button id="btn-source-add" class="btn btn-primary btn-big" type="submit">Connect and test</button>
+  </form>
+  <button class="btn btn-ghost btn-big" data-close>Close</button>
+</div>
+
 <div id="sheet-command-token" class="sheet" role="dialog" aria-modal="true" aria-labelledby="command-token-title" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 id="command-token-title" class="sheet-title">Agent token</h2>
@@ -729,8 +777,9 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/agent-auth.js?v=12"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=2"></script>
-<script src="/connection-status.js?v=4"></script>
+<script src="/connection-status.js?v=5"></script>
 <script src="/connectors.js?v=6"></script>
-<script src="/app.js?v=58"></script>
+<script src="/secrets.js?v=1"></script>
+<script src="/app.js?v=59"></script>
 </body>
 </html>

@@ -2011,6 +2011,9 @@
   const connectorsUI = window.createConnectorsUI({ $, api, openSheet, showToast, agoStr, escapeHtml });
   $("btn-connectors").addEventListener("click", () => connectorsUI.open());
 
+  const secretsUI = window.createSecretsUI({ $, api, openSheet, showToast, agoStr, escapeHtml });
+  $("btn-secrets").addEventListener("click", () => secretsUI.open());
+
   $("btn-cli-access").addEventListener("click", () => {
     $("cli-token-new").hidden = true;
     $("input-cli-label").value = "";
