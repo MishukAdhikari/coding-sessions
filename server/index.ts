@@ -45,6 +45,7 @@ import { createCliLogins, handleCliLoginRoute } from "./cli-login";
 import { agentAccounts } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 import { recordAccountLogin } from "./account-history";
+import { countActivity, createActivitySignal, handleActivityRequest } from "./activity-signal";
 
 const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
@@ -170,6 +171,10 @@ const mcpDeps: McpDeps = {
 };
 
 /* ---------- server ---------- */
+
+const activitySignal = createActivitySignal({
+  sample: async () => countActivity(await listSessions(), terminal.openClients()),
+});
 
 const server = Bun.serve({
   hostname: config.listenHost,
@@ -788,11 +793,18 @@ const server = Bun.serve({
     },
     close(ws) {
       const d = ws.data as any;
-      if (d?.term?.id) terminal.markClose(d.term.id);
+      if (d?.term?.id) { terminal.markClose(d.term.id); activitySignal.touch(); }
       try { d?.uws?.close(); } catch {}
     },
   },
 });
+
+if (config.activityPort !== null) {
+  Bun.serve({ hostname: "127.0.0.1", port: config.activityPort, fetch: req => handleActivityRequest(req, activitySignal) });
+  // Sample every minute too, so activity between two polls is not missed.
+  setInterval(() => { void activitySignal.refresh(); }, 60_000).unref?.();
+  console.log(`activity signal on http://127.0.0.1:${config.activityPort}/activity`);
+}
 
 console.log(`coding-sessions listening on http://${config.listenHost.includes(":") ? `[${config.listenHost}]` : config.listenHost}:${server.port} (rpID: ${auth.RP_ID})`);
 

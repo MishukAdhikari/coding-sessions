@@ -123,6 +123,13 @@ async function liveScreens(): Promise<Set<string>> {
   return new Set((await mux.listAll()).map((s) => s.name));
 }
 
+/** Live browser connections across every terminal bridge. */
+export function openClients(): number {
+  let total = 0;
+  for (const t of terms.values()) if (t.proc.exitCode === null) total += t.clients;
+  return total;
+}
+
 export function get(id: string): Term | undefined {
   return terms.get(id);
 }
