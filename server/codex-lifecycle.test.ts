@@ -312,6 +312,29 @@ test("archiving Codex captures the hook-confirmed exact UUID and final model bef
   database.close();
 });
 
+test("the archive records whether the user ended a session or its screen vanished", () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  applyDatabaseSchema(database);
+  const insert = database.query(
+    "INSERT INTO launches (screen, name, project_path, created_at, provider, phase) VALUES (?, ?, '/srv/demo', 10, 'claude', 'ready')",
+  );
+  const launch = (screen: string) => database.query(
+    "SELECT screen, name, project_path, created_at, claude_url, resume_id, remote_control, provider, launch_id, phase, error_message, resume_archive_id " +
+    "FROM launches WHERE screen = ?",
+  ).get(screen) as LaunchRow;
+  insert.run("cs-gone", "gone");
+  insert.run("cs-ended", "ended");
+
+  expect(archiveManagedLaunch(database, launch("cs-gone"), 30)).toBe(true);
+  expect(archiveManagedLaunch(database, launch("cs-ended"), 40, null, "ended")).toBe(true);
+  expect(database.query("SELECT name, end_reason, boot_resume_at FROM archive ORDER BY id").all()).toEqual([
+    { name: "gone", end_reason: "vanished", boot_resume_at: null },
+    { name: "ended", end_reason: "ended", boot_resume_at: null },
+  ]);
+  database.close();
+});
+
 test("archiving a managed launch rolls back its deletion when history persistence fails", () => {
   const database = new Database(":memory:");
   applyDatabaseSchema(database);
