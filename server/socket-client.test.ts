@@ -46,6 +46,21 @@ test("params can come from stdin and must be a JSON object", async () => {
   server.stop();
 });
 
+test("a request larger than the socket buffer is sent whole", async () => {
+  let got = "";
+  const server = startControlSocket({ path: socketPath(), deps: { ...deps, sendText: async (_id: string, text: string) => { got = text; return { ok: true, value: true }; } } as McpDeps, log: () => {} });
+  const text = "x".repeat(600 * 1024);
+  expect(await socketRequest(server.path, "send_message", { session_id: "m:cs-x", text })).toMatchObject({ result: { sent: true } });
+  expect(got.length).toBe(text.length);
+  server.stop();
+});
+
+test("gives up when no answer arrives in time", async () => {
+  const server = startControlSocket({ path: socketPath(), deps: { ...deps, listRepos: () => new Promise(() => {}) } as McpDeps, log: () => {} });
+  await expect(socketRequest(server.path, "list_repos", {}, 50)).rejects.toThrow("no answer");
+  server.stop();
+});
+
 test("a missing socket says how to turn it on", async () => {
   await expect(socketRequest(socketPath(), "ping")).rejects.toThrow("CS_SOCKET");
 });

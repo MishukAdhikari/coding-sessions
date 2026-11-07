@@ -35,7 +35,7 @@ Each request gets one line back, with the same `id`:
 | Method | What it does |
 | --- | --- |
 | `ping` | Answers `{"pong": true}`. |
-| `methods` | Every method with its description and the JSON Schema of its params. |
+| `methods` | Every method with its description, the JSON Schema of its params and the MCP hints (`readOnlyHint`, `destructiveHint`), plus `instructions`: the usage notes `/mcp` gives at `initialize`. |
 | every [MCP tool](mcp.md#tools) | `list_sessions`, `read_session`, `send_message`, `press_keys`, `wait_for_session`, `list_projects`, `list_repos`, `launch_session`, `resume_session`, `end_session`, `agent_accounts`, `agent_auth`, with the same params as the MCP tool. |
 
 The methods run the same code as `/mcp`, with the same checks and limits: `wait_for_session` waits at most 90 seconds per call, and the result is the tool's structured result. A tool's own refusal is `tool_error`.
@@ -48,6 +48,8 @@ The methods run the same code as `/mcp`, with the same checks and limits: `wait_
 | `tool_error` | The tool refused; `message` says why. |
 | `busy` | More than 8 requests in flight on this connection, 64 on the socket, or 32 open connections. Retry after an answer. |
 | `too_large` | A line over 1 MiB. The server answers once and closes that connection. |
+
+A client that keeps sending without reading its answers is disconnected once 8 MiB of answers are waiting for it.
 | `internal` | The tool failed unexpectedly. |
 
 The service log gets one line per call, such as `control socket: send_message ok 12ms`. It never records params or results.

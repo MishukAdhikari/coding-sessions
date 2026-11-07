@@ -11,7 +11,7 @@
  */
 import { chmodSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
-import { callTool, TOOLS, type McpDeps } from "./mcp";
+import { callTool, INSTRUCTIONS, TOOLS, type McpDeps } from "./mcp";
 
 export type SocketErrorCode = "parse_error" | "invalid_request" | "unknown_method" | "tool_error" | "too_large" | "busy" | "internal";
 export interface SocketRequest { id: unknown; method: string; params: Record<string, unknown> }
@@ -24,8 +24,9 @@ export interface SocketLimits {
   perConnection: number; // requests in flight on one connection
   total: number;         // requests in flight on the whole socket
   connections: number;   // open connections
+  maxQueuedBytes: number; // answers waiting for a client that does not read
 }
-export const DEFAULT_LIMITS: SocketLimits = { maxLineBytes: 1024 * 1024, perConnection: 8, total: 64, connections: 32 };
+export const DEFAULT_LIMITS: SocketLimits = { maxLineBytes: 1024 * 1024, perConnection: 8, total: 64, connections: 32, maxQueuedBytes: 8 * 1024 * 1024 };
 
 const fail = (id: unknown, code: SocketErrorCode, message: string): SocketReply => ({ id, error: { code, message } });
 const TOOL_NAMES = new Set<string>(TOOLS.map((t) => t.name));
@@ -46,19 +47,19 @@ export function parseRequest(line: string): { ok: true; request: SocketRequest }
   return { ok: true, request: { id, method, params: params as Record<string, unknown> } };
 }
 
-/** What "methods" returns: the two socket methods, then every MCP tool with its schema. */
+/** What "methods" returns: the two socket methods, then every MCP tool with its schema and hints. */
 export function socketMethods() {
   return [
-    { name: "ping", title: "Ping", description: "Check the server answers.", params: { type: "object", properties: {} } },
-    { name: "methods", title: "List methods", description: "Every method this socket takes, with its params.", params: { type: "object", properties: {} } },
-    ...TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description, params: t.inputSchema })),
+    { name: "ping", title: "Ping", description: "Check the server answers.", params: { type: "object", properties: {} }, annotations: { readOnlyHint: true } },
+    { name: "methods", title: "List methods", description: "Every method this socket takes, with its params and hints, and how to use them.", params: { type: "object", properties: {} }, annotations: { readOnlyHint: true } },
+    ...TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description, params: t.inputSchema, annotations: t.annotations })),
   ];
 }
 
 export async function handleRequest(deps: McpDeps, request: SocketRequest): Promise<SocketReply> {
   const { id, method, params } = request;
   if (method === "ping") return { id, result: { pong: true } };
-  if (method === "methods") return { id, result: { methods: socketMethods() } };
+  if (method === "methods") return { id, result: { methods: socketMethods(), instructions: INSTRUCTIONS } };
   if (!TOOL_NAMES.has(method)) return fail(id, "unknown_method", `Unknown method ${JSON.stringify(method)}. "methods" lists them.`);
   try {
     const out = await callTool(deps, method, params);
@@ -148,18 +149,24 @@ export function startControlSocket(opts: {
   const send = (socket: Bun.Socket<undefined>, c: Connection, reply: SocketReply) => {
     if (c.closed) return;
     const line = Buffer.from(JSON.stringify(reply) + "\n");
+    if (c.out.length + line.length > limits.maxQueuedBytes) {
+      // The client keeps asking without reading the answers; drop it rather than buffer forever.
+      c.closed = true;
+      socket.terminate();
+      return;
+    }
     c.out = c.out.length ? Buffer.concat([c.out, line]) : line;
     flush(socket, c);
   };
 
   async function run(socket: Bun.Socket<undefined>, c: Connection, request: SocketRequest) {
-    const started = Date.now();
+    const started = opts.deps.now();
     const reply = await handleRequest(opts.deps, request);
     c.inFlight--;
     inFlight--;
     // Method and outcome only: params and results can hold prompts, screens and codes.
     const method = request.method === "ping" || request.method === "methods" || TOOL_NAMES.has(request.method) ? request.method : "(unknown)";
-    log(`control socket: ${method} ${"error" in reply ? reply.error.code : "ok"} ${Date.now() - started}ms`);
+    log(`control socket: ${method} ${"error" in reply ? reply.error.code : "ok"} ${opts.deps.now() - started}ms`);
     send(socket, c, reply);
   }
 

@@ -231,6 +231,42 @@ test.skipIf(!Bun.semver.satisfies(Bun.version, ">=1.4.4"))("a client that sends 
   server.stop();
 });
 
+test("the in-flight limit for the whole socket applies across connections", async () => {
+  let release = () => {};
+  const gate = new Promise<void>((r) => { release = r; });
+  const server = startControlSocket({ path: join(tempDir(), "cs.sock"), deps: deps({ listRepos: async () => { await gate; return []; } }), log: () => {}, limits: { total: 2 } });
+  const a = await client(server.path);
+  const b = await client(server.path);
+  const third = await client(server.path);
+  a.socket.write('{"id":"a","method":"list_repos"}\n');
+  b.socket.write('{"id":"b","method":"list_repos"}\n');
+  await Bun.sleep(20);
+  third.socket.write('{"id":"c","method":"list_repos"}\n');
+  expect(await third.next()).toEqual([{ id: "c", error: { code: "busy", message: expect.any(String) } }]);
+  release();
+  expect((await a.next())[0].id).toBe("a");
+  expect((await b.next())[0].id).toBe("b");
+  for (const c of [a, b, third]) c.socket.end();
+  server.stop();
+});
+
+test("a client that never reads its answers is dropped once they pile up", async () => {
+  const server = startControlSocket({ path: join(tempDir(), "cs.sock"), deps: deps(), log: () => {}, limits: { maxQueuedBytes: 64 } });
+  const c = await client(server.path);
+  // Answers queue while the kernel buffer is full; a tiny cap makes the first overflow immediate.
+  c.socket.write('{"id":1,"method":"methods"}\n');
+  await c.next();
+  expect(c.isClosed()).toBe(true);
+  server.stop();
+});
+
+test("methods carries each tool's hints and the usage notes /mcp gives at initialize", async () => {
+  const reply = await handleRequest(deps(), { id: 1, method: "methods", params: {} }) as any;
+  expect(reply.result.methods.find((m: any) => m.name === "end_session").annotations.destructiveHint).toBe(true);
+  expect(reply.result.methods.find((m: any) => m.name === "list_sessions").annotations.readOnlyHint).toBe(true);
+  expect(reply.result.instructions).toContain("startup_waiting_for_trust");
+});
+
 test("connections over the limit are told so and closed", async () => {
   const server = startControlSocket({ path: join(tempDir(), "cs.sock"), deps: deps(), log: () => {}, limits: { connections: 1 } });
   const first = await client(server.path);

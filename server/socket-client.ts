@@ -43,6 +43,13 @@ export function socketRequest(path: string, method: string, params: Record<strin
     let buffer = "";
     let settled = false;
     let socket: Awaited<ReturnType<typeof Bun.connect>> | null = null;
+    // A large request may not fit the socket buffer in one write; drain sends the rest.
+    let pending = Buffer.from(JSON.stringify({ id, method, params }) + "\n");
+    const writeMore = (s: NonNullable<typeof socket>) => {
+      if (!pending.length) return;
+      const wrote = s.write(pending);
+      if (wrote > 0) pending = pending.subarray(wrote);
+    };
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -63,17 +70,18 @@ export function socketRequest(path: string, method: string, params: Record<strin
             buffer = buffer.slice(nl + 1);
             let answer: SocketAnswer;
             try { answer = JSON.parse(line); } catch { continue; }
-            // An answer for this request, or the server turning the connection away.
-            if (answer.id === id || (answer.id === null && answer.error)) return finish(() => resolve(answer));
+            const turnedAway = answer.id === null && !!answer.error; // e.g. too many connections
+            if (answer.id === id || turnedAway) return finish(() => resolve(answer));
           }
         },
+        drain(s) { if (!settled) writeMore(s); },
         close() { finish(() => reject(new Error(`${path} closed the connection without answering.`))); },
         error(_s, e) { finish(() => reject(e)); },
       },
     }).then((s) => {
       socket = s;
       if (settled) { s.end(); return; }
-      s.write(JSON.stringify({ id, method, params }) + "\n");
+      writeMore(s);
     }, (e: NodeJS.ErrnoException) => {
       const hint = e?.code === "ENOENT" || e?.code === "ECONNREFUSED"
         ? `no control socket at ${path}. Is the server running with CS_SOCKET=1 (or CS_SOCKET_PATH)?`
