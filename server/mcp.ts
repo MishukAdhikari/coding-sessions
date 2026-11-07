@@ -32,7 +32,8 @@ export interface McpDeps {
   hostStats(): unknown;
   listProjects(): Array<{ id: number; path: string; label: string }>;
   listRepos(): Promise<string[]>;
-  providers(): Array<{ id: SessionProvider; name: string; remoteControl: boolean; turnState: boolean }>;
+  /** `asking: false` — the agent reports working/finished but cannot show that it waits on a question. */
+  providers(): Array<{ id: SessionProvider; name: string; remoteControl: boolean; turnState: boolean; asking?: boolean }>;
   launch(opts: { name: string; provider: SessionProvider; projectId: number | null; repo: string | null; remoteControl: boolean }):
     Promise<{ ok: true; id: string } | { ok: false; error: string }>;
   end(id: string, deleteWorkspace: boolean): Promise<{ ok: boolean; error?: string }>;
@@ -163,7 +164,7 @@ export const TOOLS = [
   {
     name: "wait_for_session",
     title: "Wait for a session",
-    description: "Wait until the session's agent stops working — it finished its turn, asks a question, or ended — then return its state and screen. Returns early with timed_out: true; call again to keep waiting. For an agent without turn state, waits until its screen stops changing.",
+    description: "Wait until the session's agent stops working — it finished its turn, asks a question, or ended — then return its state and screen. Returns early with timed_out: true; call again to keep waiting. For an agent without turn state, or one working that cannot report a question, waits until its screen stops changing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -243,6 +244,12 @@ function turnStateFor(deps: McpDeps, provider: SessionProvider): boolean {
   return deps.providers().find((p) => p.id === provider)?.turnState ?? false;
 }
 
+/** Whether a "working" state can hide a question or approval prompt the agent never reports. */
+function questionsHidden(deps: McpDeps, provider: SessionProvider): boolean {
+  const entry = deps.providers().find((p) => p.id === provider);
+  return !!entry?.turnState && entry.asking === false;
+}
+
 async function findSession(deps: McpDeps, id: string): Promise<SessionInfo | undefined> {
   return (await deps.listSessions()).find((s) => s.id === id);
 }
@@ -251,7 +258,8 @@ async function findSession(deps: McpDeps, id: string): Promise<SessionInfo | und
  * Poll until the agent stops working. With turn state, "waiting"/"asking"/"ended"
  * ends the wait — ignored for the first few seconds, because right after a message
  * the transcript can still show the previous turn's end. Without turn state, three
- * identical screens in a row do.
+ * identical screens in a row do — and so they do for a "working" agent that cannot
+ * report a question, so an approval prompt does not hold the caller until timeout.
  */
 export async function waitForSession(deps: McpDeps, id: string, timeoutSec: number, lines: number) {
   const started = deps.now();
@@ -262,6 +270,7 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
   for (;;) {
     const s = await findSession(deps, id);
     const turnState = s ? turnStateFor(deps, s.provider) : false;
+    const hidden = s ? questionsHidden(deps, s.provider) : false;
     const state = sessionState(s, turnState);
     const screen = state === "ended" ? null : await deps.readScreen(id, lines);
     const text = screen?.ok ? screen.value : "";
@@ -270,7 +279,7 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
     const settled = deps.now() - started >= SETTLE_MS;
     const done = state === "ended"
       || (settled && (state === "waiting" || state === "asking"))
-      || (state === "running" && same >= 2);
+      || ((state === "running" || (hidden && state === "working")) && same >= 2);
     const timedOut = deps.now() >= deadline;
     if (done || timedOut) {
       return { session_id: id, state, timed_out: !done, waited_sec: Math.round((deps.now() - started) / 1000), screen: screen?.ok ? screen.value : null };

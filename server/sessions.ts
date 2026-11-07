@@ -24,6 +24,7 @@ import {
   buildCommandCodeInvocation,
   commandCodeEnv,
   commandCodeModel,
+  commandCodeTurnState,
   findCommandCodeSessionId,
   findCommandCodeTranscript,
   isCommandCodeProc,
@@ -72,6 +73,7 @@ export interface SessionInfo {
   startupInputReady?: boolean; // Live input evidence; SessionStart still owns conversation readiness.
   startupWaitingForTrust?: boolean; // A live pre-hook Codex TUI needs a folder-trust decision.
   turnComplete?: boolean; // Codex Stop, distinct from its initial SessionStart readiness
+  turnState?: boolean;     // A Command whose preset reads turn state (capabilities cover the built-ins)
   claudeUrl: string | null;
   remoteControl: boolean;  // launched with --remote-control → drivable from the Claude app
   resumeId: string | null; // local id for `claude --resume <id>` in a terminal
@@ -249,6 +251,21 @@ function commandCodeModelFor(pid: number, cwd: string | null, sessionId: string 
 }
 
 const waitingCache = new Map<number, { at: number; state: TurnState }>();
+
+/**
+ * What a Command Code session's last turn is doing, from its own transcript (see
+ * commandCodeTurnState). No transcript yet — a session nobody has spoken to — is
+ * "unknown". Cached ~4s per pid, like the Claude reader below.
+ */
+function commandCodeTurnStateFor(pid: number, cwd: string | null, sessionId: string | null): TurnState {
+  const cached = waitingCache.get(pid);
+  if (cached && Date.now() - cached.at < 4000) return cached.state;
+  const path = cwd && sessionId ? findCommandCodeTranscript(cwd, sessionId) : null;
+  const text = path ? readTranscriptTail(path) : null;
+  const state: TurnState = text ? commandCodeTurnState(text) : "unknown";
+  waitingCache.set(pid, { at: Date.now(), state });
+  return state;
+}
 
 /**
  * Classify what the session's last real turn is doing, by reading the transcript
@@ -968,9 +985,8 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
   // Command Code is managed-only like Codex, but hookless: persisted ownership picks
   // the screen, process ancestry proves the agent is live, and the conversation id is
-  // recovered from the meta file the agent writes for itself at startup. Without a
-  // hook there is no turn state to report, so the card carries liveness and CPU and
-  // never guesses at "working" or "needs you".
+  // recovered from the meta file the agent writes for itself at startup. Turn state
+  // comes from that conversation's transcript, never from CPU.
   const commandCodeLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider = 'command-code'`).all() as LaunchRow[];
   for (const launch of commandCodeLaunches) {
     const screenEntry = [...screens.entries()].find(([, name]) => name === launch.screen);
@@ -985,7 +1001,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       db.query("UPDATE launches SET resume_id = ? WHERE screen = ? AND provider = 'command-code'")
         .run(resumeId, launch.screen);
     }
-    const cpuHigh = proc.pcpu >= ACTIVE_CPU_PCT;
+    const act = resolveActivity(proc.pcpu >= ACTIVE_CPU_PCT, commandCodeTurnStateFor(proc.pid, project, resumeId));
     sessions.push({
       id: `m:${launch.screen}`,
       kind: "managed",
@@ -1001,11 +1017,11 @@ export async function listSessions(): Promise<SessionInfo[]> {
       pid: proc.pid,
       uptimeSec: proc.etimes,
       cpu: proc.pcpu,
-      active: cpuHigh,
-      busy: cpuHigh,
-      waiting: false,
-      asking: false,
-      telemetryUnknown: false,
+      active: act.active,
+      busy: act.busy,
+      waiting: act.waiting,
+      asking: act.asking,
+      telemetryUnknown: act.telemetryUnknown,
       claudeUrl: null,
       remoteControl: false,
       resumeId,

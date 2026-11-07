@@ -68,14 +68,14 @@ test("capabilities describe the provider boundary from one matrix", () => {
     syncedLaunch: false,
     authentication: "device-auth",
   });
-  // Command Code reopens a conversation by id but publishes no hook, so it claims
-  // exact resume and declines semantic status. Both halves matter to the UI.
+  // Command Code reopens a conversation by id and its transcript shows whether a
+  // turn is running or finished, so it claims both. Both halves matter to the UI.
   expect(PROVIDER_CAPABILITIES["command-code"]).toMatchObject({
     displayName: "Command Code",
     managedLaunch: true,
     freshWorkspace: true,
     webTerminal: true,
-    semanticStatus: false,
+    semanticStatus: true,
     exactResume: true,
     remoteControl: false,
     nativeChatUrl: false,

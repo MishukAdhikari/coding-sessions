@@ -7,6 +7,7 @@ import {
   commandCodeEnv,
   commandCodeModel,
   commandCodeProjectDirName,
+  commandCodeTurnState,
   findCommandCodeSessionId,
   findCommandCodeTranscript,
   hasCommandCodeToken,
@@ -39,10 +40,10 @@ test("command-code parses as a built-in, never as a registered Command", () => {
   expect(providerDisplayName("command-code")).toBe("Command Code");
 });
 
-test("it claims exact resume and declines turn state, because that is what its CLI gives", () => {
+test("it claims exact resume and turn state read from its own transcript", () => {
   const capabilities = capabilitiesFor("command-code");
   expect(capabilities.exactResume).toBe(true);
-  expect(capabilities.semanticStatus).toBe(false);
+  expect(capabilities.semanticStatus).toBe(true);
   expect(capabilities.remoteControl).toBe(false);
   expect(capabilities.chatDeletion).toBe(false);
 });
@@ -308,4 +309,62 @@ test("version parsing survives the shapes a CLI actually prints", () => {
   expect(parseCommandCodeVersion("1.32.1")).toEqual([1, 32, 1]);
   expect(parseCommandCodeVersion("Command Code v1.28.4\n")).toEqual([1, 28, 4]);
   expect(parseCommandCodeVersion("no version here")).toBeNull();
+});
+
+/* ---------- turn state from the transcript ---------- */
+
+/* Line shapes copied from real Command Code 1.88 transcripts (content shortened). */
+const T0 = "2026-11-04T10:22:18.580Z";
+const ccLine = (role: string, source: string | null, content: unknown[], timestamp = T0) => JSON.stringify({
+  type: "message", id: "fb77fcaa", parentId: "24cd3b2e", timestamp,
+  message: { role, content, meta: source ? { source, messageId: "d0fd5678-ca07-4c6e-8324-2b9c260e43ac" } : { messageId: "38aa2bb6-07c2-4405-b2c7-494b51f6df66" } },
+  ...(role === "assistant" ? { usage: { inputTokens: 1 }, model: "deepseek/deepseek-v4-pro", effort: "max" } : {}),
+});
+const ccUser = (text = "fix the test") => ccLine("user", "user", [{ type: "text", text }]);
+const ccToolUse = (name = "shell_command") => ccLine("assistant", "model", [{ type: "thinking", thinking: "…" }, { type: "tool_use", id: "t1", name, input: {} }]);
+const ccToolResult = () => ccLine("user", "tool", [{ type: "tool_result", tool_use_id: "t1", content: "ok" }]);
+const ccAnswer = (timestamp = T0) => ccLine("assistant", "model", [{ type: "thinking", thinking: "…" }, { type: "text", text: "Done." }], timestamp);
+const ccErrorNote = () => ccLine("user", null, [{ type: "text", text: "Error: You've reached your 5-hour usage limit." }]);
+const ccSteering = () => ccLine("user", "steering", [{ type: "text", text: "also update the docs" }]);
+const ccSession = JSON.stringify({ type: "session", version: 1, id: SESSION, timestamp: T0, cwd: "/srv/demo" });
+const ccModelChange = (timestamp = "2026-11-04T12:00:00.000Z") => JSON.stringify({ type: "model_change", timestamp, model: "glm-5" });
+const NOW = Date.parse(T0) + 60_000;
+
+test("a final answer with no tool call ends the turn", () => {
+  expect(commandCodeTurnState([ccSession, ccUser(), ccToolUse(), ccToolResult(), ccAnswer()].join("\n"), NOW)).toBe("done");
+});
+
+test("the agent's own error note ends the turn too", () => {
+  expect(commandCodeTurnState([ccUser(), ccErrorNote()].join("\n"), NOW)).toBe("done");
+});
+
+test("a prompt, a steering message or a tool result means the agent is working", () => {
+  expect(commandCodeTurnState([ccAnswer(), ccUser()].join("\n"), NOW)).toBe("busy");
+  expect(commandCodeTurnState([ccToolResult(), ccSteering()].join("\n"), NOW)).toBe("busy");
+  expect(commandCodeTurnState([ccUser(), ccToolUse(), ccToolResult()].join("\n"), NOW)).toBe("busy");
+  expect(commandCodeTurnState([ccUser(), ccToolUse()].join("\n"), NOW)).toBe("busy");
+});
+
+test("a question the agent asked is never reported as asking: it is written only once answered", () => {
+  expect(commandCodeTurnState([ccUser(), ccToolUse("ask_user_question"), ccToolResult()].join("\n"), NOW)).toBe("busy");
+});
+
+test("records that are not messages are skipped, and so is a truncated first line", () => {
+  expect(commandCodeTurnState(['ge","message":{"role":"user"', ccAnswer(), ccModelChange()].join("\n"), NOW)).toBe("done");
+});
+
+test("no message at all is unknown", () => {
+  expect(commandCodeTurnState("", NOW)).toBe("unknown");
+  expect(commandCodeTurnState(ccSession, NOW)).toBe("unknown");
+});
+
+test("working evidence older than the staleness window is unknown; a finished turn stays finished", () => {
+  const later = Date.parse(T0) + 31 * 60_000;
+  expect(commandCodeTurnState(ccUser(), later)).toBe("unknown");
+  expect(commandCodeTurnState(ccAnswer(), later)).toBe("done");
+});
+
+test("staleness is the message's own time, not a later record that touched the file", () => {
+  const later = Date.parse(T0) + 31 * 60_000;
+  expect(commandCodeTurnState([ccUser(), ccModelChange(new Date(later).toISOString())].join("\n"), later)).toBe("unknown");
 });

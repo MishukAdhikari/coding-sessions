@@ -146,6 +146,8 @@ const mcpDeps: McpDeps = {
       name: PROVIDER_CAPABILITIES[id].displayName,
       remoteControl: PROVIDER_CAPABILITIES[id].remoteControl,
       turnState: PROVIDER_CAPABILITIES[id].semanticStatus,
+      // Command Code's transcript shows working/finished but never a pending question.
+      ...(id === "command-code" ? { asking: false } : {}),
     })),
     ...listCommands().map((c) => ({ id: commandProviderId(c.slug), name: c.label, remoteControl: false, turnState: false })),
   ],

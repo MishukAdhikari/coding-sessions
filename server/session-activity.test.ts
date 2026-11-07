@@ -23,9 +23,17 @@ test("lifecycle, evidence and question take priority over busy flags", () => {
   expect(sessionActivity(session({ status: "ended", phase: "failed" }))).toBe("failed");
 });
 
-test("hookless providers never infer progress or completion from CPU flags", () => {
-  for (const provider of ["command-code", "cmd:custom"] as const) {
-    expect(sessionActivity(session({ provider, busy: true, waiting: true }))).toBe("connected");
+test("a Command with no turn-state reader never infers progress or completion from CPU flags", () => {
+  expect(sessionActivity(session({ provider: "cmd:custom", busy: true, waiting: true }))).toBe("connected");
+  expect(sessionActivity(session({ provider: "cmd:custom", busy: true, turnState: false }))).toBe("connected");
+});
+
+test("Command Code and a Command whose preset reads turn state follow their flags like Codex", () => {
+  for (const extra of [{ provider: "command-code" as const }, { provider: "cmd:kimi" as const, turnState: true }]) {
+    expect(sessionActivity(session({ ...extra, busy: true }))).toBe("running");
+    expect(sessionActivity(session({ ...extra, waiting: true, asking: true }))).toBe("waiting");
+    expect(sessionActivity(session({ ...extra, waiting: true }))).toBe("finished");
+    expect(sessionActivity(session({ ...extra, busy: true, telemetryUnknown: true }))).toBe("connected");
   }
 });
 

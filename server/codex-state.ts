@@ -5,7 +5,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const SCREEN_PATTERN = /^cs-[a-zA-Z0-9._-]{1,96}$/;
 const MAX_CWD_LENGTH = 4096;
 const MAX_MODEL_LENGTH = 160;
-const STALE_ACTIVITY_MS = 30 * 60_000;
+/** Activity evidence older than this no longer says what the agent is doing. */
+export const STALE_ACTIVITY_MS = 30 * 60_000;
 const RESUME_IDENTITY_MISMATCH_ERROR = "Codex reported a different conversation than the archived session requested.";
 
 const HOOK_EVENTS = new Set([
