@@ -170,6 +170,13 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .proj-row > button { flex: none; }
 .proj-row .proj-note { color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin-top: 3px; overflow-wrap: anywhere; }
 .proj-del { padding: 10px; min-height: 44px; color: var(--status-danger); font-size: 13px; }
+.secret-fields { display: flex; flex-direction: column; gap: 12px; }
+.secret-fields[hidden] { display: none; }
+.secret-fields .hint { margin-top: 0; }
+#sheet-secrets .proj-row > span { overflow-wrap: anywhere; }
+.proj-row .row-actions { display: flex; flex: none; }
+.proj-row .proj-act { padding: 10px; min-height: 44px; color: var(--action-primary); font-size: 13px; }
+.proj-row .pick-path.row-error { color: var(--status-danger); font-family: var(--font-body); }
 .copybox { position: relative; margin-bottom: 12px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-page); cursor: pointer; }
 .copybox:hover, .copybox.copied { border-color: var(--action-primary); }
 .cmd { padding: 16px 80px 16px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--font-data); }

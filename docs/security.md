@@ -34,6 +34,7 @@ Register a passkey after initial password sign-in. An MCP authorization is acces
 | `cs` browser sign-in codes | Hashes in memory only, single use, 10 minutes, rate-limited per address. The short code shown to you is not a credential: only a signed-in browser on the app's origin can allow it, and the token is handed to `cs` once, never in a URL |
 | Built-in communicator credentials | Random per-launch capabilities; only hashes are stored in SQLite, with raw values passed through explicit child environment. They cannot authenticate to the operator MCP endpoint. |
 | External MCP connector tokens (bearer tokens; OAuth access and refresh tokens, client secrets and PKCE verifiers) | AES-256-GCM ciphertext bound to the connector, its sign-in epoch and the secret's purpose; saving is refused when no key is configured (no plaintext fallback). Write-only over the API, opened only to make an upstream request, never passed to agents. Pending sign-ins store only a hash of their state. |
+| Secrets (Settings › Secrets) and secret-manager credentials | AES-256-GCM ciphertext bound to the secret name or source; saving is refused without a key. Write-only over the API (names and timestamps only), browser session and same Origin required. Values reach every new managed session through its environment, never argv; names the shell, loader or session plumbing depend on (`PATH`, `LD_*`, `CS_*`…) are refused. Each source keeps a sealed snapshot of its last sync, used when it is unreachable. |
 | Connector launch capabilities | Random per-launch `csconn_` values, hashed in SQLite, passed through explicit child environment. A separate audience from the communicator and the operator endpoint. |
 | Workspaces, transcripts, setup logs, backups | May contain secrets or source code; not automatically encrypted or redacted as a whole |
 
@@ -89,6 +90,14 @@ The built-in communicator has a separate credential audience and five mailbox to
 Messages are stored in the private application database for 30 days. They are not encrypted separately from that database and may contain source code or sensitive text. Treat database backups accordingly. Message attribution is not authorization: a peer cannot grant additional task scope or override provider approvals. No messages are injected into terminal input or approval dialogs.
 
 These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
+
+## Secrets for sessions
+
+Settings › Secrets stores named values (API tokens, keys) and delivers them to **every** new managed session, Claude, Codex, Command Code and registered Commands alike, as environment variables. Precedence, lowest first: secret-manager values in the order the managers were added, values stored in the app, the provider's own credential (a Command's token, the Command Code key, a preset's launch settings), then session plumbing (`CS_COMMUNICATOR_*`, `CS_CONNECTOR_*`). A running session keeps the values it started with; deleting or rotating a secret affects only new launches.
+
+Secret managers are read with a dedicated, least-privilege credential: a Bitwarden Secrets Manager machine-account access token (read by the `bws` CLI, which must be installed on the server; the token reaches it through its environment), an Infisical machine identity using Universal Auth, or a Vault/OpenBao token for one KV v2 path. A source is saved only after a successful first fetch. Sources are refetched at launch when their last sync is older than five minutes, so an unreachable manager can delay a launch by up to ten seconds; on failure the last sealed snapshot is used and the error is shown in the sheet. Infisical and Vault requests use the connector transport (HTTPS, public addresses only, no redirects, no proxies), so a self-hosted manager on a private network is not reachable; local testing can use `CS_CONNECTOR_ALLOW_LOOPBACK=1`. `bws` makes its own connections and is not covered by those checks.
+
+The trust model is unchanged: every agent under the service account can read every secret delivered to it. Store only what you would give every session, and prefer narrowly scoped tokens.
 
 ## External MCP connectors
 

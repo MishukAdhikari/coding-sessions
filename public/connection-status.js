@@ -53,6 +53,17 @@
       const count = array(data.commands).length;
       return state("neutral", `${count} ${count === 1 ? "command" : "commands"}`, "");
     },
+    secrets: data => {
+      const stored = array(data.secrets);
+      const sources = array(data.sources);
+      const fromSources = new Set(sources.flatMap(source => array(source.names))).size;
+      const failing = sources.filter(source => source.lastError).length;
+      if (!stored.length && !sources.length) return state("neutral", "None", "API tokens every new session receives as environment variables.");
+      const total = new Set([...stored.map(secret => secret.name), ...sources.flatMap(source => source.names)]).size;
+      return state(failing ? "warning" : "positive", failing ? "Needs attention" : `${total} available`,
+        failing ? `${failing} ${failing === 1 ? "secret manager" : "secret managers"} could not be synced. Sessions use the last values fetched.`
+          : `${stored.length} stored here${sources.length ? ` · ${fromSources} from ${sources.length} ${sources.length === 1 ? "manager" : "managers"}` : ""}.`);
+    },
     projects: data => {
       const count = array(data.projects).length;
       return state("neutral", `${count} ${count === 1 ? "project" : "projects"}`, "");
@@ -118,7 +129,7 @@
   }
   const endpoints = {
     updates: "/api/cli-updates", "app-updates": "/api/app-updates", "server-settings": "/api/server-settings", history: "/api/sessions", sessions: "/api/sessions",
-    agents: "/api/agent-accounts", commands: "/api/commands", projects: "/api/projects",
+    agents: "/api/agent-accounts", secrets: "/api/secrets", commands: "/api/commands", projects: "/api/projects",
     connect: "/api/mcp-connections", cli: "/api/cli-tokens", connectors: "/api/connectors", github: "/api/github-auth/status",
     browser: "/api/browser-auth/status", passkey: "/api/passkeys",
   };
