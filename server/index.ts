@@ -32,6 +32,8 @@ import { handleConnectorsRoute } from "./connectors-route";
 import { ConnectorOAuth } from "./connector-oauth";
 import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
+import { defaultTranscriptRoots } from "./transcript";
+import { handleTranscriptRoute } from "./transcript-route";
 import { cliUpdates } from "./cli-updates";
 import { consumeSetupToken } from "./setup-token";
 import { INSTALLABLE_AGENTS, createAgentInstaller } from "./agent-installs";
@@ -59,6 +61,7 @@ const stepUpGrants = createStepUpGrants();
 const cliLogins = createCliLogins();
 const agentInstaller = createAgentInstaller({ onFinished: () => { void cliUpdates.versions(true); } });
 const COOKIE_NAME = "xs_auth";
+const transcriptRoots = defaultTranscriptRoots();
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 
 loadTokenKey(); // Reject a missing/malformed configured encryption key before serving requests.
@@ -571,6 +574,9 @@ const server = Bun.serve({
     if (path === "/api/sessions" && method === "GET") {
       return json({ sessions: await listSessions(), archived: listArchive(), host: hostStats() });
     }
+
+    const transcriptResponse = await handleTranscriptRoute(req, { database: db, roots: transcriptRoots, sendText: sessionIo.sendText });
+    if (transcriptResponse) return transcriptResponse;
 
     if (path === "/api/archive/clear" && method === "POST") {
       return json(clearArchive());

@@ -35,6 +35,8 @@ export interface ProviderCapabilities {
   exactResume: boolean;
   remoteControl: boolean;
   nativeChatUrl: boolean;
+  /** The app can show the conversation as a chat, parsed from the agent's own transcript. */
+  chatView: boolean;
   chatDeletion: boolean;
   externalDiscovery: boolean;
   syncedLaunch: boolean;
@@ -51,6 +53,7 @@ export const PROVIDER_CAPABILITIES: Record<BuiltinSessionProvider, Readonly<Prov
     exactResume: true,
     remoteControl: true,
     nativeChatUrl: true,
+    chatView: true,
     chatDeletion: true,
     externalDiscovery: true,
     syncedLaunch: true,
@@ -65,6 +68,7 @@ export const PROVIDER_CAPABILITIES: Record<BuiltinSessionProvider, Readonly<Prov
     exactResume: true,
     remoteControl: false,
     nativeChatUrl: false,
+    chatView: true,
     chatDeletion: false,
     externalDiscovery: false,
     syncedLaunch: false,
@@ -82,6 +86,7 @@ export const PROVIDER_CAPABILITIES: Record<BuiltinSessionProvider, Readonly<Prov
     exactResume: true,
     remoteControl: false,
     nativeChatUrl: false,
+    chatView: false, // its transcript format is not verified
     chatDeletion: false,
     externalDiscovery: false,
     syncedLaunch: false,
@@ -101,6 +106,7 @@ export const COMMAND_CAPABILITIES: Readonly<ProviderCapabilities> = {
   exactResume: false,
   remoteControl: false,
   nativeChatUrl: false,
+  chatView: false,
   chatDeletion: false,
   externalDiscovery: false,
   syncedLaunch: false,

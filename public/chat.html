@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Chat — Coding Sessions</title>
+<meta name="theme-color" content="#f3f2ed">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<script src="/theme.js?v=1"></script>
+<link rel="stylesheet" href="/app.css?v=47">
+</head>
+<body class="chat-page">
+
+<!-- The session's conversation, read from the agent's own transcript. Every
+     message is set as text, never as markup. Closing this tab ends nothing. -->
+
+<header class="term-bar">
+  <span class="term-live" aria-hidden="true"></span>
+  <div class="chat-title">
+    <h1 id="chat-name" class="term-name">Chat</h1>
+    <p id="chat-state" class="chat-state" aria-live="polite"></p>
+  </div>
+  <button id="btn-chat-term" class="term-btn">Terminal</button>
+  <button id="btn-chat-close" class="term-btn term-btn-close">Close</button>
+</header>
+
+<main id="chat-main" class="chat-main">
+  <div id="chat-banner" class="chat-banner" role="status" hidden>
+    <strong>Waiting on you.</strong>
+    <span>The agent is asking. Reply below, or open the terminal to pick from a menu.</span>
+  </div>
+  <div id="chat-list" class="chat-list" role="log" aria-live="polite" aria-label="Conversation">
+    <p id="chat-empty" class="chat-empty">Loading the conversation…</p>
+  </div>
+</main>
+
+<form id="chat-form" class="chat-form">
+  <label for="chat-input" class="sr-only">Reply</label>
+  <textarea id="chat-input" class="field chat-input" rows="1" placeholder="Reply to the agent" autocomplete="off"></textarea>
+  <button id="chat-send" class="btn btn-primary" type="submit">Send</button>
+  <p id="chat-error" class="chat-error" role="alert" hidden></p>
+</form>
+
+<div id="chat-gone" class="term-gone" hidden>
+  <p id="chat-gone-title" class="term-gone-title">This session has ended.</p>
+  <p id="chat-gone-body" class="term-gone-body">Its conversation is kept by the agent. Resume it from ended history in the app.</p>
+  <a id="chat-gone-link" class="btn btn-primary" href="/">Back to sessions</a>
+</div>
+
+<script src="/chat.js?v=1"></script>
+</body>
+</html>
