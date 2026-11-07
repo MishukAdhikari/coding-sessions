@@ -219,7 +219,9 @@ test("launch ownership exists before screen starts and advances only to awaiting
     resumeId,
   }, runtime)).toEqual({ ok: true });
   // Whichever holder this machine launches with, the session is `cs-demo` running `bash -lc`.
-  expect(screenCommand?.slice(0, -1)).toEqual(mux.spawnArgv(mux.newSessionBackend(), "cs-demo", "").slice(0, -1));
+  // herdr launches over its socket, so it has no command line to compare.
+  const backend = mux.newSessionBackend();
+  if (backend !== "herdr") expect(screenCommand?.slice(0, -1)).toEqual(mux.spawnArgv(backend, "cs-demo", "").slice(0, -1));
   expect(screenCommand?.at(-1)).toContain(`'resume' '${resumeId}'`);
   expect(screenCommand?.at(-1)).not.toContain("--last");
   expect(database.query("SELECT phase FROM launches WHERE screen = 'cs-demo'").get()).toEqual({
