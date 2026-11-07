@@ -16,7 +16,6 @@ function harness(resume: BootResumeDeps["resumeArchived"] = async () => ({ ok: t
   applyDatabaseSchema(database);
   const lines: string[] = [];
   const calls: Array<{ id: number; provider: string }> = [];
-  const followUps: Array<() => void> = [];
   let listed = 0;
   const deps: BootResumeDeps = {
     database,
@@ -24,9 +23,8 @@ function harness(resume: BootResumeDeps["resumeArchived"] = async () => ({ ok: t
     listSessions: async () => { listed++; },
     resumeArchived: async (id, provider) => { calls.push({ id, provider }); return resume(id, provider); },
     log: line => lines.push(line),
-    schedule: fn => { followUps.push(fn); },
   };
-  return { database, deps, lines, calls, followUps, listed: () => listed };
+  return { database, deps, lines, calls, listed: () => listed };
 }
 
 test("boot time is read from the btime line of /proc/stat, in milliseconds", () => {
@@ -50,7 +48,7 @@ test("only sessions the reboot killed are resumed, each with its own provider", 
   expect(await runBootResume(h.deps)).toEqual({ resumed: ["killed"], skipped: [] });
   expect(h.listed()).toBe(1);
   expect(h.calls).toEqual([{ id: killed, provider: "codex" }]);
-  expect(h.lines).toContain("boot resume: resumed “killed” (codex)");
+  expect(h.lines).toContain("boot resume: started “killed” (codex), resumed once Codex confirms the conversation");
 });
 
 test("each row is tried once: a failed resume is logged, kept in history and not retried", async () => {
@@ -102,18 +100,4 @@ test("without a boot time nothing is resumed", async () => {
   expect(h.calls).toEqual([]);
   expect(h.listed()).toBe(0);
   expect(h.lines).toEqual(["boot resume: skipped, the boot time is unknown on this system"]);
-});
-
-test("after a resume, sessions are checked once more so a resumed Codex launch settles", async () => {
-  const h = harness();
-  archive(h.database, "demo", BOOT - 500, BOOT + 10, "vanished", "codex");
-  await runBootResume(h.deps);
-  expect(h.followUps).toHaveLength(1);
-  h.followUps[0]!();
-  await Bun.sleep(0);
-  expect(h.listed()).toBe(2);
-
-  const quiet = harness();
-  await runBootResume(quiet.deps);
-  expect(quiet.followUps).toHaveLength(0);
 });

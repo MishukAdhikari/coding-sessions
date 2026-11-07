@@ -821,10 +821,11 @@ console.log(`coding-sessions listening on http://${config.listenHost.includes(":
 
 // After the listener is up, so resumed agents can reach the communicator; never awaited.
 if (config.resumeAfterBoot) {
-  setTimeout(() => {
-    void runBootResume({ database: db, bootTime: readBootTime(), listSessions, resumeArchived, log: line => console.log(line) })
-      .catch(error => console.error(`boot resume failed: ${(error as Error).message}`));
-  }, 0);
+  void runBootResume({ database: db, bootTime: readBootTime(), listSessions, resumeArchived, log: line => console.log(line) })
+    .catch(error => console.error(`boot resume failed: ${(error as Error).message}`));
+  // Record an agent that exits by itself soon after it does, so its archive row predates the
+  // next boot and that boot leaves it ended, even when nobody has the app open.
+  setInterval(() => { void listSessions().catch(() => {}); }, 60_000).unref();
 }
 
 // Live agents survive service restarts; retain their credentials until their launch ends.

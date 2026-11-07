@@ -32,11 +32,7 @@ export interface BootResumeDeps {
   listSessions: () => Promise<unknown>;
   resumeArchived: (id: number, provider: SessionProvider) => Promise<{ ok: true } | { ok: false; error: string }>;
   log: (line: string) => void;
-  /** Runs the later check that lets a resumed Codex launch settle (default: in a minute). */
-  schedule?: (fn: () => void) => void;
 }
-
-const FOLLOW_UP_MS = 60_000;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -67,21 +63,15 @@ export async function runBootResume(deps: BootResumeDeps): Promise<{ resumed: st
     catch (error) { result = { ok: false, error: errorText(error) }; }
     if (result.ok) {
       resumed.push(row.name);
-      log(`boot resume: resumed “${row.name}” (${row.provider})`);
+      // Codex proves the resume itself: its start hook confirms the exact conversation.
+      log(row.provider === "codex"
+        ? `boot resume: started “${row.name}” (codex), resumed once Codex confirms the conversation`
+        : `boot resume: resumed “${row.name}” (${row.provider})`);
     } else {
       skipped.push(row.name);
       log(`boot resume: skipped “${row.name}”: ${result.error}`);
     }
   }
   if (rows.length === 0) log("boot resume: nothing to resume");
-
-  // A resumed Codex launch leaves its archive row and waits for its start hook until
-  // listSessions next looks; with nobody watching, look once more after it has started.
-  if (resumed.length > 0) {
-    const schedule = deps.schedule ?? (fn => { setTimeout(fn, FOLLOW_UP_MS).unref?.(); });
-    schedule(() => {
-      void deps.listSessions().catch(error => log(`boot resume: follow-up check failed: ${errorText(error)}`));
-    });
-  }
   return { resumed, skipped };
 }
