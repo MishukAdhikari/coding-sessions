@@ -1,10 +1,11 @@
 import { readCsSetting } from "./environment";
 import { childEnvironment } from "./child-env";
+import { createHerdr } from "./mux-herdr";
 /**
  * The terminal holder a Session lives in — the thing that keeps an agent running
  * after every browser has disconnected and across restarts of this service.
  *
- * Two backends:
+ * Three backends:
  *  - zmx (default when installed): one daemon per session that passes the pty's
  *    bytes straight through. The browser terminal talks to the agent directly —
  *    mouse, synchronized output, truecolor and OSC 52 all reach it — and a
@@ -12,6 +13,8 @@ import { childEnvironment } from "./child-env";
  *  - GNU screen (legacy): a full terminal emulator in the middle. Still used to
  *    list, attach and end sessions that were started under it, and for new
  *    sessions when zmx is missing or `CS_MUX=screen` forces it.
+ *  - herdr (opt-in, `CS_MUX=herdr`): one pane per session in the app's own herdr
+ *    session, driven over herdr's Unix socket. See mux-herdr.ts.
  *
  * Both are addressed by the same name (`cs-<name>`, `webterm-<id>`), so the
  * launches table and every id the frontend sees stay backend-neutral.
@@ -20,7 +23,7 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type MuxBackend = "zmx" | "screen";
+export type MuxBackend = "zmx" | "screen" | "herdr";
 
 export interface MuxSession {
   name: string;
@@ -29,6 +32,10 @@ export interface MuxSession {
    *  null when zmx couldn't reach a live daemon in time — alive, pid unknown. */
   pid: number | null;
   backend: MuxBackend;
+  /** herdr only: the pane (for reads and input) and its terminal (for attach). Under herdr
+   *  every pane is a child of one server, so `pid` is the pane's own root process. */
+  paneId?: string;
+  terminalId?: string;
 }
 
 // The service unit has no XDG_RUNTIME_DIR, so zmx would fall back to /tmp while
@@ -52,10 +59,23 @@ function findZmx(): string | null {
 
 export const ZMX_BIN = findZmx();
 
-/** Backend for sessions started from now on. */
-export function newSessionBackend(): MuxBackend {
-  if (readCsSetting(process.env, "CS_MUX") === "screen") return "screen";
-  return ZMX_BIN ? "zmx" : "screen";
+function findHerdr(): string | null {
+  const found = Bun.which("herdr");
+  if (found) return found;
+  const local = join(homedir(), ".local", "bin", "herdr");
+  try { return statSync(local).isFile() ? local : null; } catch { return null; }
+}
+
+export const HERDR_BIN = findHerdr();
+/** null when herdr isn't installed: its sessions then list as none, like zmx's. */
+export const herdr = HERDR_BIN ? createHerdr(HERDR_BIN) : null;
+
+/** Backend for sessions started from now on. herdr is opt-in and needs its binary. */
+export function newSessionBackend(zmxBin: string | null = ZMX_BIN, herdrBin: string | null = HERDR_BIN): MuxBackend {
+  const forced = readCsSetting(process.env, "CS_MUX");
+  if (forced === "screen") return "screen";
+  if (forced === "herdr" && herdrBin) return "herdr";
+  return zmxBin ? "zmx" : "screen";
 }
 
 async function capture(cmd: string[], env?: Record<string, string>, cwd?: string): Promise<{ code: number; out: string; err: string }> {
@@ -101,13 +121,18 @@ export function parseZmxList(out: string): MuxSession[] {
   return rows;
 }
 
-/** Every live session under either backend. A backend that isn't installed lists nothing. */
+/**
+ * Every live session under any backend. A backend that isn't installed lists nothing.
+ * Throws only when herdr is up but has not answered since this process started, so a
+ * busy server is never read as "every herdr session ended".
+ */
 export async function listAll(): Promise<MuxSession[]> {
-  const [screen, zmx] = await Promise.all([
+  const [screen, zmx, herdrRows] = await Promise.all([
     capture(["screen", "-ls"]),
     ZMX_BIN ? capture([ZMX_BIN, "list"]) : Promise.resolve({ code: 0, out: "", err: "" }),
+    herdr ? herdr.list() : Promise.resolve([]),
   ]);
-  return [...parseZmxList(zmx.out), ...parseScreenLs(screen.out)];
+  return [...parseZmxList(zmx.out), ...herdrRows, ...parseScreenLs(screen.out)];
 }
 
 /**
@@ -126,8 +151,9 @@ export async function find(name: string): Promise<MuxSession | null> {
   return (await listAll()).find((s) => s.name === name) ?? null;
 }
 
-/** argv that starts `bash -lc <inner>` detached under `name`. Pure, for tests. */
-export function spawnArgv(backend: MuxBackend, name: string, inner: string, zmxBin: string | null = ZMX_BIN): string[] {
+/** argv that starts `bash -lc <inner>` detached under `name`. Pure, for tests. herdr has
+ *  no argv form: its launch, env included, is a socket request (see spawn). */
+export function spawnArgv(backend: Exclude<MuxBackend, "herdr">, name: string, inner: string, zmxBin: string | null = ZMX_BIN): string[] {
   // zmx has no detached flag: `attach` without a tty creates the session, and
   // the client returns at once while the daemon keeps it.
   if (backend === "zmx") return [zmxBin ?? "zmx", "attach", name, "bash", "-lc", inner];
@@ -144,12 +170,17 @@ export async function spawn(
   opts: { env?: Record<string, string>; cwd?: string; backend?: MuxBackend } = {},
 ): Promise<{ code: number; out: string; err: string }> {
   const backend = opts.backend ?? newSessionBackend();
+  if (backend === "herdr") return herdr ? herdr.spawn(name, inner, opts) : { code: 127, out: "", err: "herdr is not installed." };
   return capture(spawnArgv(backend, name, inner), opts.env, opts.cwd);
 }
 
 /** End a session under whichever backend holds it. */
 export async function quit(name: string, backend?: MuxBackend): Promise<void> {
   const which = backend ?? (await find(name))?.backend;
+  if (which === "herdr") {
+    await herdr?.quit(name);
+    return;
+  }
   if (which === "zmx" && ZMX_BIN) {
     await capture([ZMX_BIN, "kill", name]);
     return;
@@ -170,7 +201,8 @@ const ZMX_JOIN_SCRIPT =
   'exec env -u ZMX_SESSION "$0" attach "$1" false';
 
 /** The command a ttyd bridge runs to join `name` as another writable client. */
-export function attachArgv(session: Pick<MuxSession, "name" | "backend">, zmxBin: string | null = ZMX_BIN): string[] {
+export function attachArgv(session: Pick<MuxSession, "name" | "backend" | "terminalId">, zmxBin: string | null = ZMX_BIN): string[] {
+  if (session.backend === "herdr") return herdr ? herdr.attachArgv(session.terminalId) : ["sh", "-c", 'echo "herdr is not installed."; exit 1'];
   if (session.backend === "zmx") return ["sh", "-c", ZMX_JOIN_SCRIPT, zmxBin ?? "zmx", session.name];
   return ["screen", "-x", session.name];
 }
