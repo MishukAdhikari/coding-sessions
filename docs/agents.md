@@ -41,11 +41,29 @@ These are third-party tools. Each comes from its own vendor and has its own acco
 
 **Permission mode:** with agent permissions set to unrestricted (Settings → Server settings, or `CS_AGENT_PERMISSIONS`), presets start with the option above. In standard mode they start with the agent's own prompts.
 
+## Turn state
+
+The session list, the MCP tools and the activity signal show whether an agent is working, waiting for you, or finished. Each agent's state comes from a record the agent writes for itself; Coding Sessions changes nothing in the agent's own setup to get it. When the record is missing or unclear, the session shows as **Connected** instead of a guess.
+
+| Agent | Source | Working | Waiting for you | Finished |
+|---|---|---|---|---|
+| Claude Code | its transcript in `~/.claude/projects/` | yes | questions and plan approval | yes |
+| Codex | its lifecycle hooks, managed by Coding Sessions | yes | questions and approvals | yes |
+| Command Code | its transcript in `~/.commandcode/projects/` | yes | no, shows as working | yes |
+| Kimi Code | its session lock and `wire.jsonl` under `~/.kimi-code` (or `$KIMI_CODE_HOME`) | yes | approvals and questions | yes |
+| Gemini CLI, Qwen Code, opencode | none yet | | | |
+
+- **Command Code** writes a tool call only once the tool has finished, so a question or approval prompt shows as working. If a turn has written nothing for 30 minutes, the session shows as Connected, because an interrupted turn leaves no record. Through MCP, `wait_for_session` still returns when a working Command Code session's screen stops changing, so a caller can see and answer the prompt.
+- **Kimi Code** creates its session when you send the first message, so a fresh Kimi session shows as Connected until then.
+- **Gemini CLI** records a reply without its tool calls, so a reply followed by a running tool looks the same as a finished turn. Reading its state needs its hooks.
+- **Qwen Code** writes a readable transcript, but matching it to a launch needs a session id passed at launch; not done yet.
+- **opencode** keeps its state in its own database, and pending approvals only in memory. Reading it needs a plugin.
+
 ## Not supported yet
 
 Presets run as Commands. Compared with Claude Code, Codex and Command Code they have:
 
-- **No live turn state.** The list shows a session as running, not as waiting for you or finished.
+- **No live turn state, except Kimi Code.** Gemini CLI, Qwen Code and opencode sessions show as running, not as waiting for you or finished (see Turn state above).
 - **No exact resume.** An ended session can't be reopened into the same conversation from the app; the agent's own continue option still works in its terminal.
 - **No sign-in panel.** Sign in through the agent itself, as listed above.
 
