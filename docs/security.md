@@ -76,7 +76,7 @@ Do not add blanket namespace restrictions or executable-memory denial without te
 
 ### herdr backend
 
-With `CS_MUX=herdr`, the app runs its own herdr session and talks to it over herdr's Unix socket (`~/.config/herdr/sessions/coding-sessions/herdr.sock`, mode 0600). herdr opens no TCP port. Each launch's environment, including stored secrets and communicator tokens, goes in the socket request and reaches only that pane's process. It is never passed as `--env KEY=VALUE`, where `ps` would show it. The herdr server itself starts with a minimal environment, so panes get their variables from the launch alone.
+With `CS_MUX=herdr`, the app runs its own herdr session and talks to it over herdr's Unix socket (`~/.config/herdr/sessions/coding-sessions/herdr.sock`, mode 0600). herdr opens no TCP port. Each launch's environment, including stored secrets and communicator tokens, goes in the socket request and reaches only that pane's process. It is never passed as `--env KEY=VALUE`, where `ps` would show it. The herdr server itself starts with a minimal environment, so panes get their variables from the launch alone. herdr also sets `HERDR_SOCKET_PATH` in every pane, so an agent can use herdr's API to read or type into the other sessions and to start panes. That is the same reach `zmx send` and `screen -X` already give any process of the service account; it is not a new boundary, but it is advertised.
 
 The app writes its herdr config (`herdr.toml` under `CS_RUNTIME_DIR`) and passes it to every herdr process it runs. That config turns off herdr's background version and agent-manifest checks against herdr.dev, and its own agent restore. It also moves herdr's prefix key off ctrl+b, which agents use. Pane screen history stays off, herdr's default.
 
