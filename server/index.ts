@@ -48,6 +48,7 @@ import { handleSecretsRoute } from "./secrets-route";
 import { secretStore } from "./secret-store";
 import { recordAccountLogin } from "./account-history";
 import { countActivity, createActivitySignal, handleActivityRequest } from "./activity-signal";
+import { readBootTime, runBootResume } from "./boot-resume";
 
 const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
@@ -817,6 +818,14 @@ if (config.activityPort !== null) {
 }
 
 console.log(`coding-sessions listening on http://${config.listenHost.includes(":") ? `[${config.listenHost}]` : config.listenHost}:${server.port} (rpID: ${auth.RP_ID})`);
+
+// After the listener is up, so resumed agents can reach the communicator; never awaited.
+if (config.resumeAfterBoot) {
+  setTimeout(() => {
+    void runBootResume({ database: db, bootTime: readBootTime(), listSessions, resumeArchived, log: line => console.log(line) })
+      .catch(error => console.error(`boot resume failed: ${(error as Error).message}`));
+  }, 0);
+}
 
 // Live agents survive service restarts; retain their credentials until their launch ends.
 setInterval(() => {

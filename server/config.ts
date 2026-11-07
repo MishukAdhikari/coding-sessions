@@ -38,7 +38,9 @@ export function readConfig(env: Environment) {
   if (activityPort !== null && (!Number.isInteger(activityPort) || activityPort < 1 || activityPort > 65535 || activityPort === port)) {
     throw new Error("CS_ACTIVITY_PORT must be an integer from 1 to 65535, different from PORT.");
   }
-  return { port, listenHost, activityPort, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
+  // Opt-in: after a reboot, resume the sessions it killed (server/boot-resume.ts).
+  const resumeAfterBoot = readCsSetting(env, "CS_RESUME_AFTER_BOOT") === "1";
+  return { port, listenHost, activityPort, resumeAfterBoot, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
     unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: readCsSetting(env, "CS_TRUST_PROXY") === "1",
     trustedProxies: parseTrustedProxies(readCsSetting(env, "CS_TRUSTED_PROXIES")) };
 }

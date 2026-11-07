@@ -109,7 +109,7 @@ test("after a resume, sessions are checked once more so a resumed Codex launch s
   archive(h.database, "demo", BOOT - 500, BOOT + 10, "vanished", "codex");
   await runBootResume(h.deps);
   expect(h.followUps).toHaveLength(1);
-  h.followUps[0]();
+  h.followUps[0]!();
   await Bun.sleep(0);
   expect(h.listed()).toBe(2);
 

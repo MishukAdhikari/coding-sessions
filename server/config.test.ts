@@ -25,6 +25,12 @@ test("agent environment excludes app secrets, arbitrary cloud tokens and runtime
   expect(childEnvironment({}, { ...source, CS_CHILD_ENV: "inherit" }).CREDENTIALS_DIRECTORY).toBeUndefined();
 });
 
+test("resuming after boot is off unless CS_RESUME_AFTER_BOOT is 1", () => {
+  expect(readConfig({}).resumeAfterBoot).toBe(false);
+  expect(readConfig({ CS_RESUME_AFTER_BOOT: "1" }).resumeAfterBoot).toBe(true);
+  for (const value of ["0", "yes", "true", ""]) expect(readConfig({ CS_RESUME_AFTER_BOOT: value }).resumeAfterBoot).toBe(false);
+});
+
 test("the listen address stays on loopback unless set to another IP address", () => {
   expect(readConfig({}).listenHost).toBe("127.0.0.1");
   expect(readConfig({ CS_LISTEN_HOST: "0.0.0.0" }).listenHost).toBe("0.0.0.0");
