@@ -54,6 +54,7 @@ test("capabilities describe the provider boundary from one matrix", () => {
     displayName: "Claude",
     remoteControl: true,
     nativeChatUrl: true,
+    chatView: true,
     chatDeletion: true,
     externalDiscovery: true,
     syncedLaunch: true,
@@ -63,6 +64,7 @@ test("capabilities describe the provider boundary from one matrix", () => {
     displayName: "Codex",
     remoteControl: false,
     nativeChatUrl: false,
+    chatView: true,
     chatDeletion: false,
     externalDiscovery: false,
     syncedLaunch: false,
@@ -72,6 +74,7 @@ test("capabilities describe the provider boundary from one matrix", () => {
   // exact resume and declines semantic status. Both halves matter to the UI.
   expect(PROVIDER_CAPABILITIES["command-code"]).toMatchObject({
     displayName: "Command Code",
+    chatView: false,
     managedLaunch: true,
     freshWorkspace: true,
     webTerminal: true,
