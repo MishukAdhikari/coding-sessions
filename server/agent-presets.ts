@@ -2,8 +2,8 @@
  * Agent presets: third-party CLI coding agents that register as Commands in one step.
  *
  * Each preset carries facts checked against the agent's own docs and a local install:
- * its binary, the option that turns its approval prompts off, and how it loads an MCP
- * server. Tokens never appear in argv or in a config file — they reach the MCP bridge
+ * its binary, the option that turns its approval prompts off, how it loads an MCP
+ * server, and whether its turn state can be read (kimi-state.ts). Tokens never appear in argv or in a config file — they reach the MCP bridge
  * through the launch environment, by inheritance or by a reference the agent expands.
  */
 import { homedir } from "node:os";
@@ -25,6 +25,12 @@ export interface AgentPreset {
   mcp: string;
   homepage: string;
   notes: string;
+  /**
+   * Whether this app reads the agent's turn state (working, waiting for you,
+   * finished) from a record the agent writes itself. Only true where that record
+   * was checked against the agent's own source; the rest report liveness only.
+   */
+  turnState: boolean;
 }
 
 export const AGENT_PRESETS: readonly AgentPreset[] = [
@@ -34,30 +40,37 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     unrestrictedArgs: ["--approval-mode=yolo", "--skip-trust"],
     mcp: "~/.gemini/settings.json", homepage: "https://github.com/google-gemini/gemini-cli",
     notes: "Needs a Gemini API key or Gemini Code Assist. In standard mode, trust the folder when Gemini asks so its MCP servers start.",
+    turnState: false,
   },
   {
     id: "kimi", label: "Kimi Code", bin: "kimi", envVar: null, npmPackage: "@moonshot-ai/kimi-code",
     unrestrictedArgs: ["--auto"],
     mcp: "~/.kimi-code/mcp.json", homepage: "https://github.com/MoonshotAI/kimi-code",
     notes: "Sign in with `kimi login` in the server terminal; it does not read API keys from the environment.",
+    turnState: true,
   },
   {
     id: "qwen", label: "Qwen Code", bin: "qwen", envVar: "OPENAI_API_KEY", npmPackage: "@qwen-code/qwen-code",
     unrestrictedArgs: ["--approval-mode", "yolo"],
     mcp: "--mcp-config at launch", homepage: "https://github.com/QwenLM/qwen-code",
     notes: "Uses an OpenAI-compatible API key, or /auth inside the agent.",
+    turnState: false,
   },
   {
     id: "opencode", label: "opencode", bin: "opencode", envVar: null, npmPackage: "opencode-ai",
     unrestrictedArgs: ["--auto"],
     mcp: "OPENCODE_CONFIG_CONTENT at launch", homepage: "https://github.com/anomalyco/opencode",
     notes: "Sign in with `opencode auth login` in the server terminal.",
+    turnState: false,
   },
 ];
 
 export function findPreset(id: unknown): AgentPreset | null {
   return AGENT_PRESETS.find(preset => preset.id === id) ?? null;
 }
+
+/** Whether a Command registered from this preset reports turn state. */
+export const presetReadsTurnState = (id: unknown): boolean => findPreset(id)?.turnState === true;
 
 export interface PresetLaunchOptions extends Paths {
   unrestricted: boolean;

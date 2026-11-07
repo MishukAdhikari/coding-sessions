@@ -29,9 +29,11 @@ Scripts and agents on the server itself can call the same tools without a token 
 | `end_session` | End a Session (archives it); `delete_workspace` also removes its folder. |
 
 States: `starting`, `working`, `asking` (blocked on a question), `waiting`
-(finished its turn), `running` (alive, no turn state — Command Code and registered
-Commands, or Codex with stale telemetry), `ended`. Without turn state,
-`wait_for_session` returns once the screen has stopped changing for ~4 s.
+(finished its turn), `running` (alive, no turn state — registered Commands other
+than Kimi Code, or stale activity evidence), `ended`. Without turn state,
+`wait_for_session` returns once the screen has stopped changing for ~4 s. Command Code
+never reports `asking` (its transcript can't show a pending question), so for a
+`working` Command Code session the wait also returns on a still screen.
 
 Only Managed Sessions (`m:cs-*`) can be read or typed into; an External Session has
 no holder to reach.

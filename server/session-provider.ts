@@ -75,14 +75,15 @@ export const PROVIDER_CAPABILITIES: Record<BuiltinSessionProvider, Readonly<Prov
     authentication: "device-auth",
   },
   /* Command Code keeps its conversations as addressable transcripts and reopens one
-     by id, so exact resume is honest here. It publishes no lifecycle hook this app
-     can subscribe to, so turn state is not — its cards report liveness, not mood. */
+     by id, so exact resume is honest here. The same transcript shows whether a turn
+     is running or finished (not whether it waits on a question), so turn state is
+     read from it. */
   "command-code": {
     displayName: "Command Code",
     managedLaunch: true,
     freshWorkspace: true,
     webTerminal: true,
-    semanticStatus: false,
+    semanticStatus: true,
     exactResume: true,
     remoteControl: false,
     nativeChatUrl: false,
