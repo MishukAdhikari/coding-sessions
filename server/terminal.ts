@@ -148,6 +148,7 @@ export function list(): Array<{ id: string; base: string; screen: string; mux: m
 export async function open(target: TermTarget): Promise<{ ok: true; id: string; url: string; mux: mux.MuxBackend } | { ok: false; error: string }> {
   let screenName: string;
   let backend: mux.MuxBackend;
+  let terminalId: string | undefined;
   let ephemeral = false;
 
   if (target.kind === "attach") {
@@ -157,6 +158,7 @@ export async function open(target: TermTarget): Promise<{ ok: true; id: string; 
     const session = await mux.find(screenName);
     if (!session) return { ok: false, error: "That session is not running." };
     backend = session.backend;
+    terminalId = session.terminalId;
   } else {
     // fresh login shell inside its own session, so it persists after the tab closes
     const id0 = shortId();
@@ -166,6 +168,8 @@ export async function open(target: TermTarget): Promise<{ ok: true; id: string; 
     const cwd = target.cwd && target.cwd.startsWith("/") ? target.cwd : (process.env.HOME ?? "/");
     const { code } = await mux.spawn(screenName, "exec bash -l", { cwd, backend });
     if (code !== 0) return { ok: false, error: "Could not start a shell session." };
+    // A herdr pane is joined by its terminal id, known only once it exists.
+    if (backend === "herdr") terminalId = (await mux.find(screenName))?.terminalId;
   }
 
   const id = shortId();
@@ -212,7 +216,7 @@ export async function open(target: TermTarget): Promise<{ ok: true; id: string; 
         `rm -f "$h" "$w"`,
         `exec screen -x '${screenName}'`,
       ].join("; ")]
-    : mux.attachArgv({ name: screenName, backend });
+    : mux.attachArgv({ name: screenName, backend, terminalId });
 
   // ttyd: writable, own UI under base-path. NOT --once: the bridge must survive
   // brief disconnects (phone backgrounding, network blips) so reconnect works —

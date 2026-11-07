@@ -73,6 +73,21 @@ Add `--dry-run` to see the plan without changing anything.
 
 Setup never changes SSH settings or existing firewall rules. An existing Caddy configuration with other sites is kept; setup only adds one import line, checks the result, and puts everything back if Caddy rejects it. Kernel limits are only ever raised. To check that the domain points at the server, it asks `api.ipify.org` for the server's public IP.
 
+## herdr session backend (optional)
+
+Agent sessions run under GNU screen on an installed server (zmx where it is installed). [herdr](https://github.com/herdrdev/herdr) can hold them instead:
+
+```text
+sudo coding-sessions setup --herdr
+```
+
+This installs herdr 0.9.5 to `/usr/local/bin/herdr`, checked against its pinned SHA-256, and sets `CS_MUX=herdr` for a new instance. On an existing instance it prints the line to add to `/etc/coding-sessions/<instance>.env`. Restart the service after editing it. Without herdr on the server, `CS_MUX=herdr` falls back to zmx, then screen.
+
+- Only new sessions use herdr. Sessions already running under zmx or screen keep working, and herdr sessions keep working if you switch back.
+- The app runs its own herdr session, `coding-sessions`, separate from any herdr you use yourself. Each agent session is one pane, labelled with its session name.
+- The browser terminal joins the pane directly. One browser tab holds a session at a time: opening it in a second tab takes it over, and the first tab is disconnected. Reopening shows the current screen, not earlier scrollback.
+- If the herdr server stops (a reboot, `herdr server stop`), its agents stop, and their sessions are archived as after a reboot. One herdr server holds every herdr session, so a crash ends all of them at once.
+
 ## Running the server
 
 The `coding-sessions` command manages everything afterwards:

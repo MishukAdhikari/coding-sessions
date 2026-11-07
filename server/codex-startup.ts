@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, ope
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { childEnvironment } from "./child-env";
-import type { MuxBackend } from "./mux";
+import { herdr, type MuxBackend } from "./mux";
 
 const LIMIT = 64 * 1024;
 export const CODEX_READINESS_TIMEOUT_ERROR = "Codex started, but its managed SessionStart hook did not report readiness.";
@@ -92,14 +92,24 @@ export interface StartupTerminal {
   backend: MuxBackend;
   screen: string;
   zmxBin: string | null;
+  /** herdr only: the pane to read. */
+  paneId?: string;
+}
+
+/** The visible screen of a herdr pane, or null. */
+async function readHerdrViewport(paneId: string): Promise<string | null> {
+  const r = herdr ? await herdr.read(paneId, "visible") : null;
+  return r?.ok ? r.text.slice(-LIMIT) : null;
 }
 
 export async function readStartupViewport(target: StartupTerminal, dependencies: {
   run?: typeof boundedTerminalCommand;
   runtimeDirectory?: string;
+  readHerdr?: (paneId: string) => Promise<string | null>;
 } = {}): Promise<string | null> {
   const run = dependencies.run ?? boundedTerminalCommand;
   if (!/^cs-[a-z0-9][a-z0-9_-]{0,42}$/.test(target.screen)) return null;
+  if (target.backend === "herdr") return target.paneId ? (dependencies.readHerdr ?? readHerdrViewport)(target.paneId) : null;
   if (target.backend === "zmx") return target.zmxBin ? run([target.zmxBin, "history", target.screen]) : null;
   let directory: string | undefined;
   try {

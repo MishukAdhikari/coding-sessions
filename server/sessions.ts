@@ -792,6 +792,20 @@ export function resolveActivity(cpuHigh: boolean, st: TurnState): Activity {
   };
 }
 
+/**
+ * The cs-* session `proc` runs in: walk its parents up to a holder's root pid. Under herdr
+ * every pane is a child of one server, so holders are keyed by each pane's own root
+ * process, never by the server. Pure, for tests.
+ */
+export function holderScreenFor(proc: Proc, screens: Map<number, string>, byPid: Map<number, Proc>): string | null {
+  let cursor: Proc | undefined = proc;
+  for (let depth = 0; cursor && depth < 10; depth++) {
+    if (screens.has(cursor.pid)) return screens.get(cursor.pid)!;
+    cursor = byPid.get(cursor.ppid);
+  }
+  return null;
+}
+
 export async function listSessions(): Promise<SessionInfo[]> {
   const [procs, holders] = await Promise.all([listProcs(), mux.listAll()]);
   const screens = new Map<number, string>();
@@ -805,13 +819,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
   const claimedScreens = new Set<string>();
 
   for (const proc of claudeProcs) {
-    // Walk parents to find an owning cs-* session root
-    let screenName: string | null = null;
-    let cursor: Proc | undefined = proc;
-    for (let depth = 0; cursor && depth < 10; depth++) {
-      if (screens.has(cursor.pid)) { screenName = screens.get(cursor.pid)!; break; }
-      cursor = byPid.get(cursor.ppid);
-    }
+    const screenName = holderScreenFor(proc, screens, byPid);
 
     // Outside a cs-* screen, only a remote-controlled claude counts as an
     // External Session. Without that guard every ordinary `claude` the user
@@ -925,7 +933,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
     if (mayObserveStartup && launch.launch_id && holder
       && !db.query("SELECT 1 FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id)) {
       observation = await startupProbe(launch.launch_id, proc.pid, {
-        backend: holder.backend, screen: launch.screen, zmxBin: mux.ZMX_BIN,
+        backend: holder.backend, screen: launch.screen, zmxBin: mux.ZMX_BIN, paneId: holder.paneId,
       }, DB_PATH);
     }
     const startup = reconcileCodexStartup(db, launch, observation);
@@ -1350,6 +1358,10 @@ export interface ManagedCodexRuntime {
   dbPath: string;
   preflight: () => ReturnType<typeof preflightCodex>;
   execute: (command: string[], env?: Record<string, string>) => Promise<{ code: number; out: string; err: string }>;
+  /** herdr has no argv form for a launch: it goes through mux.spawn, env over the socket. */
+  spawn?: typeof mux.spawn;
+  /** Backend for this launch; absent means mux.newSessionBackend(). */
+  backend?: () => mux.MuxBackend;
   uuid: () => string;
   now: () => number;
   connectors?: Pick<Connectors, "available" | "prepare" | "revoke">;
@@ -1425,7 +1437,12 @@ export async function startManagedCodex(
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
     const secrets = await runtime.secretEnv?.() ?? {};
-    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken) });
+    const env = { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken) };
+    const inner = `${options.setupPrefix ?? ""}${command}`;
+    const backend = runtime.backend?.() ?? mux.newSessionBackend();
+    result = backend === "herdr"
+      ? await (runtime.spawn ?? mux.spawn)(options.screen, inner, { env, backend })
+      : await runtime.execute(mux.spawnArgv(backend, options.screen, inner), env);
   } catch { result = { code: 1, out: "", err: "Could not start Codex with its session communicator." }; }
   if (result.code !== 0) {
     launchCommunicator.revoke(launchId);
