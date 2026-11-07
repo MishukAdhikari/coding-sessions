@@ -38,3 +38,14 @@ test("the listen address stays on loopback unless set to another IP address", ()
   expect(() => readConfig({ CS_LISTEN_HOST: "example.com" })).toThrow("CS_LISTEN_HOST");
   expect(() => readConfig({ CS_LISTEN_HOST: "0.0.0.0; rm" })).toThrow();
 });
+
+test("the control socket is off unless CS_SOCKET or CS_SOCKET_PATH turns it on", () => {
+  expect(readConfig({}).socketPath).toBeNull();
+  expect(readConfig({ CS_SOCKET: "0" }).socketPath).toBeNull();
+  expect(readConfig({ CS_DATA_DIR: "/srv/cs/data", CS_SOCKET: "1" }).socketPath).toBe("/srv/cs/data/cs.sock");
+  expect(readConfig({ CS_SOCKET_PATH: "/srv/cs/run/control.sock" }).socketPath).toBe("/srv/cs/run/control.sock");
+  expect(() => readConfig({ CS_SOCKET: "yes" })).toThrow("CS_SOCKET");
+  expect(() => readConfig({ CS_SOCKET_PATH: "run/cs.sock" })).toThrow("CS_SOCKET_PATH");
+  expect(() => readConfig({ CS_SOCKET_PATH: `/${"a".repeat(120)}.sock` })).toThrow("too long");
+  expect(() => readConfig({ CS_DATA_DIR: `/${"d".repeat(120)}`, CS_SOCKET: "1" })).toThrow("too long");
+});

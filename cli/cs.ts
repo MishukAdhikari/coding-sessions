@@ -15,6 +15,7 @@ import {
   parseServerArgs, prettyProject, RUN, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
+import { runClient } from "../server/socket-client";
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "cs");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -1004,6 +1005,8 @@ USAGE
   cs mcp add|status|remove       let Claude Code / Codex drive sessions over MCP
   cs install [agent…]            install agents on the server (no args: list them)
                                    claude codex command-code gemini kimi qwen opencode
+  cs socket <method> [json|-]    on the server: one request over the local control socket
+                                   (--socket=<path> or CS_SOCKET_PATH; - reads params from stdin)
   cs doctor                      check bun/claude/config/ssh/token/rsync setup
   cs pull                        git pull the current branch
   cs server add <name> <url>     add a server; signs in through the browser
@@ -1037,6 +1040,7 @@ try {
     case "doctor": await cmdDoctor(cfg()); break;
     case "mcp": await cmdMcp(cfg, args); break;
     case "install": await cmdInstall(cfg(), args); break;
+    case "socket": process.exit(await runClient(args)); break;
     case "version": case "--version": case "-V": console.log(`cs v${csVersion()}`); break;
     case undefined: process.exit(run(["claude"])); break; // bare `cs` → local claude
     case "help": case "--help": case "-h": printHelp(); break;

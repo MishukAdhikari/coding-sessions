@@ -163,7 +163,7 @@ export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "a
  * default. `cs term` keeps `-S` as its short `--sync`. Nothing after `--` is touched.
  */
 /** Subcommands that never talk to a chosen server (or choose it themselves). */
-const LOCAL_COMMANDS = new Set(["server", "pull", "upgrade", "version", "--version", "-V", "help", "--help", "-h"]);
+const LOCAL_COMMANDS = new Set(["server", "socket", "pull", "upgrade", "version", "--version", "-V", "help", "--help", "-h"]);
 /** What parseServerArgs returns as `sub` for a prompt: local claude, or a run on the server. */
 export const RUN = "<run>";
 

@@ -49,6 +49,7 @@ import { secretStore } from "./secret-store";
 import { recordAccountLogin } from "./account-history";
 import { countActivity, createActivitySignal, handleActivityRequest } from "./activity-signal";
 import { readBootTime, runBootResume } from "./boot-resume";
+import { startControlSocket } from "./control-socket";
 
 const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
@@ -815,6 +816,12 @@ if (config.activityPort !== null) {
   // Sample every minute too, so activity between two polls is not missed.
   setInterval(() => { void activitySignal.refresh(); }, 60_000).unref?.();
   console.log(`activity signal on http://127.0.0.1:${config.activityPort}/activity`);
+}
+
+// The MCP tools over a private Unix socket, for scripts and agents on this machine (docs/socket.md).
+if (config.socketPath) {
+  startControlSocket({ path: config.socketPath, deps: mcpDeps });
+  console.log(`control socket at ${config.socketPath}`);
 }
 
 console.log(`coding-sessions listening on http://${config.listenHost.includes(":") ? `[${config.listenHost}]` : config.listenHost}:${server.port} (rpID: ${auth.RP_ID})`);
