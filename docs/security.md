@@ -91,6 +91,12 @@ Messages are stored in the private application database for 30 days. They are no
 
 These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
 
+## Chat view
+
+The chat view (`chat.html`, "Open chat" on a running session) reads the agent's own transcript and needs the same sign-in as the rest of the app. `GET /api/sessions/:id/transcript` takes only a managed session id (`m:cs-…`) and a byte cursor. The file is chosen from that session's own records and nothing else: for Codex, the conversation UUID its SessionStart hook reported, matched against the rollout's `session_meta` under `~/.codex/sessions` (or a `CODEX_HOME` forwarded to sessions); for Claude Code, the transcript id stored on its launch, under `~/.claude/projects`. The real path must stay inside that folder, so a symlink out of it is refused. Responses are not cached and are bounded: 200 messages, 8,000 characters each, and lines over 1 MiB (large tool output) are skipped. Tool output and reasoning are never sent. Command Code and registered Commands have no chat view, because their transcript formats are not verified.
+
+`POST /api/sessions/:id/message` types the reply into the session through the same path as the MCP `send_message` tool (`zmx send`, or `screen -X stuff` for older sessions). Like that tool, the reply text appears on that command's argument list for the moment it runs, so don't paste secrets into the chat. The page sets all transcript text as plain text, never as HTML.
+
 ## Secrets for sessions
 
 Settings › Secrets stores named values (API tokens, keys) and delivers them to **every** new managed session, Claude, Codex, Command Code and registered Commands alike, as environment variables. Precedence, lowest first: secret-manager values in the order the managers were added, values stored in the app, the provider's own credential (a Command's token, the Command Code key, a preset's launch settings), then session plumbing (`CS_COMMUNICATOR_*`, `CS_CONNECTOR_*`). A running session keeps the values it started with; deleting or rotating a secret affects only new launches.
