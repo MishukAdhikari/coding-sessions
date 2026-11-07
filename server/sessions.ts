@@ -739,12 +739,16 @@ export function failScreenlessCodexLaunch(database: Database, row: LaunchRow): L
     : null;
 }
 
+/** Why a session left: the user ended it, or its screen was found gone. */
+export type ArchiveEndReason = "ended" | "vanished";
+
 /** Move a launch row into the archive. Safe to race — whoever deletes the row archives it. */
 export function archiveManagedLaunch(
   database: Database,
   row: LaunchRow,
   endedAt: number,
   claudeUrl?: string | null,
+  endReason: ArchiveEndReason = "vanished",
 ): boolean {
   const archive = database.transaction(() => {
     const codexState = rowProvider(row.provider) === "codex" && row.launch_id
@@ -753,7 +757,7 @@ export function archiveManagedLaunch(
       : null;
     const gone = database.query("DELETE FROM launches WHERE screen = ?").run(row.screen);
     if (gone.changes === 0) return false; // someone else already archived it
-    database.query("INSERT INTO archive (name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    database.query("INSERT INTO archive (name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
         row.name,
         row.project_path,
@@ -764,14 +768,15 @@ export function archiveManagedLaunch(
         endedAt,
         rowProvider(row.provider) === "codex" ? 0 : (row.remote_control ?? 1),
         rowProvider(row.provider),
+        endReason,
       );
     return true;
   });
   return archive();
 }
 
-function archiveRow(row: LaunchRow, claudeUrl?: string | null): void {
-  archiveManagedLaunch(db, row, Date.now(), claudeUrl);
+function archiveRow(row: LaunchRow, endReason: ArchiveEndReason, claudeUrl?: string | null): void {
+  archiveManagedLaunch(db, row, Date.now(), claudeUrl, endReason);
 }
 
 export interface Activity { active: boolean; busy: boolean; waiting: boolean; asking: boolean; telemetryUnknown: boolean }
@@ -1141,7 +1146,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       });
       continue;
     }
-    archiveRow(row);
+    archiveRow(row, "vanished");
   }
 
   const livePids = new Set(sessions.map((s) => s.pid).filter(Boolean));
@@ -1765,7 +1770,7 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     if (pid && !force) await gracefulKill(pid);
     await mux.quit(screenName);
     const chatUrl = (pid ? urlCache.get(pid) : undefined) ?? launch?.claude_url ?? null;
-    if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, chatUrl);
+    if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, "ended", chatUrl);
     else if (launch) db.query("DELETE FROM launches WHERE screen = ?").run(screenName);
     if (deleteChat && provider === "claude") queueChatDeletion(chatUrl);
     if (deleteWorkspace && launch) {
@@ -1783,7 +1788,7 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     const target = procs.find((p) => p.pid === pid && isClaudeProc(p.args));
     if (!target) return { ok: false, error: "That session is already gone." };
     try { process.kill(pid, force ? "SIGKILL" : "SIGTERM"); } catch { return { ok: false, error: "Failed to signal process." }; }
-    db.query("INSERT INTO archive (name, project_path, claude_url, started_at, ended_at, provider) VALUES (?, ?, ?, ?, ?, 'claude')")
+    db.query("INSERT INTO archive (name, project_path, claude_url, started_at, ended_at, provider, end_reason) VALUES (?, ?, ?, ?, ?, 'claude', 'ended')")
       .run(extractRemoteControlName(target.args) ?? "unnamed", procCwd(pid), urlCache.get(pid) ?? null,
            Date.now() - target.etimes * 1000, Date.now());
     if (deleteChat) queueChatDeletion(urlCache.get(pid) ?? null);

@@ -18,6 +18,8 @@ Terminate HTTPS at a trusted reverse proxy and keep the application listener ina
 {"active":false,"working":0,"waiting":0,"terminals":0,"last_activity_at":"2026-11-05T11:32:49.205Z","idle_seconds":120}
 ```
 
+`CS_RESUME_AFTER_BOOT=1` (off by default) resumes sessions after the machine reboots, or after a sandbox wakes, which is the same thing to the server: the disk is kept and every running agent is gone. Right after the server starts it resumes each Claude, Codex and Command Code session that was running when the machine went down, under its own name, in its own folder, with the permissions the server is set to. Nobody has to open the app first, so agents start working again unattended; leave it off if that is not what you want. A session you ended stays ended, and so does one whose agent exited by itself while the machine and the service were up (the server checks every minute while this is on). A restart of the service alone resumes nothing, since sessions survive it. In a container the boot time is the host's, so a container restart ends sessions and does not resume them. A Codex session counts as resumed once Codex confirms the same conversation. Each session is tried once: one whose folder or conversation is gone stays in history, and the service log (`journalctl`) has a `boot resume:` line for every session it resumed or skipped. The boot time comes from `/proc/stat`, so on other systems the setting does nothing.
+
 Register a passkey after initial password sign-in. An MCP authorization is access to this instance, not permission to one isolated project. Review client consent and revoke unused CLI/OAuth access. Report suspected vulnerabilities privately using [SECURITY.md](../SECURITY.md).
 
 ## Secret map
