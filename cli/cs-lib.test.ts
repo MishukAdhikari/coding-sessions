@@ -109,3 +109,7 @@ test("MCP names and token variables are plain for the default server, suffixed f
     .toEqual(["codex", "mcp", "add", "coding-sessions-lab", "--url", "https://lab.example.com/mcp", "--bearer-token-env-var", "CS_TOKEN_LAB"]);
   expect(mcpAddCommand("claude", "https://lab.example.com", { name: "coding-sessions-lab" })[7]).toBe("coding-sessions-lab");
 });
+
+test("cs socket is a local command, not a prompt for the server", () => {
+  expect(parseServerArgs(["socket", "--socket=/s.sock", "list_sessions", "-"])).toEqual({ sub: "socket", args: ["--socket=/s.sock", "list_sessions", "-"] });
+});
