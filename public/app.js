@@ -1202,6 +1202,17 @@
       term.onclick = () => { closeSheet(); openWebTerminal({ kind: "attach", screen }, "Opening web terminal…"); };
     }
 
+    // The same conversation as a chat, read from the agent's own transcript.
+    const chat = $("btn-chat");
+    const canChat = providerHas(provider, "chatView") && typeof s.id === "string" && s.id.startsWith("m:") && s.status === "running";
+    chat.hidden = !canChat;
+    if (canChat) {
+      chat.onclick = () => {
+        closeSheet();
+        window.open(`/chat.html?id=${encodeURIComponent(s.id)}&name=${encodeURIComponent(s.name)}`, "_blank");
+      };
+    }
+
     wireCopyCmd(provider, s.project, s.resumeId, s.name, s.status === "ended", s.remoteControl !== false);
 
     const wsRow = $("ws-row");
@@ -1269,6 +1280,7 @@
     if (canOpenClaude) open.href = a.claudeUrl;
     else open.removeAttribute("href");
     $("btn-web-term").hidden = true;
+    $("btn-chat").hidden = true;
     wireCopyCmd(provider, a.project, a.resumeId, a.name, true, a.remoteControl !== false);
 
     const wsRow = $("ws-row");

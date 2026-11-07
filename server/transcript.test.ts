@@ -46,7 +46,7 @@ test("Codex: shows prompts, replies and tool calls, hides injected context", () 
   expect(messages.map(m => [m.role, m.text])).toEqual([
     ["user", "now access the production database"],
     ["assistant", "I'll check the connection first."],
-    ["tool", "exec const r = await tools.exec_command({\"cmd\":\"ls -la\"})"],
+    ["tool", "exec ls -la"],
     ["tool", "exec_command git status"],
     ["assistant", "Access verified."],
   ]);

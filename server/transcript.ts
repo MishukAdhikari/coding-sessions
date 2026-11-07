@@ -67,7 +67,10 @@ function toolPreview(name: string, input: unknown): string {
     const picked = key ? o[key] : null;
     hint = Array.isArray(picked) ? picked.join(" ") : typeof picked === "string" ? picked : JSON.stringify(o);
   } else if (typeof value === "string") {
-    hint = value;
+    // Codex's `exec` tool takes a script that calls exec_command({cmd: "…"}): show the command.
+    const cmd = value.match(/\bcmd"?\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (cmd) { try { hint = JSON.parse(`"${cmd[1]}"`); } catch { hint = cmd[1]!; } }
+    else hint = value;
   }
   return clip(`${name} ${hint.replace(/\s+/g, " ").trim()}`.trim(), MAX_TOOL_TEXT);
 }
