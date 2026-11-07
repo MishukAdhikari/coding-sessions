@@ -11,6 +11,8 @@ PKCE; an `cs_` CLI token also works as a fixed bearer header.
 
 The quickest setup from a terminal is the [`cs` CLI](cli.md): `cs mcp add claude` or `cs mcp add codex`.
 
+Scripts and agents on the server itself can call the same tools without a token over the opt-in [local control socket](socket.md).
+
 ## Tools
 
 | Tool | What it does |

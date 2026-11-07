@@ -20,6 +20,12 @@ Terminate HTTPS at a trusted reverse proxy and keep the application listener ina
 
 Register a passkey after initial password sign-in. An MCP authorization is access to this instance, not permission to one isolated project. Review client consent and revoke unused CLI/OAuth access. Report suspected vulnerabilities privately using [SECURITY.md](../SECURITY.md).
 
+### Local control socket
+
+`CS_SOCKET=1` or `CS_SOCKET_PATH` (off by default) serves the MCP tools on a Unix socket with no sign-in ([details](socket.md)). The socket is 0600 in a 0700 folder owned by the service account, so the service account and root can use it, and no other local account can. It never listens on TCP.
+
+Enabling it gives every program running as the service account full operator control, with no token. That includes every agent in every Session: any of them can launch and end Sessions, type into another Session, answer its approval prompts with `press_keys`, and sign agent accounts in or out with `agent_auth`. Without the socket, an agent would need to tamper with the account's files to get the same reach, which the trust model above already allows. With it, a single line of JSON is enough, so a prompt-injected agent no longer has to work for it. The communicator's separation from the operator endpoint (see [Session communication](#session-communication)) does not hold for an instance with the socket on. Turn it on only where every agent the instance runs is trusted with operator control.
+
 ## Secret map
 
 | Secret or configuration | Handling and limitation |
@@ -89,7 +95,7 @@ The built-in communicator has a separate credential audience and five mailbox to
 
 Messages are stored in the private application database for 30 days. They are not encrypted separately from that database and may contain source code or sensitive text. Treat database backups accordingly. Message attribution is not authorization: a peer cannot grant additional task scope or override provider approvals. No messages are injected into terminal input or approval dialogs.
 
-These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
+These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. The [local control socket](#local-control-socket), when enabled, gives agents the administrative tools directly. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
 
 ## Secrets for sessions
 

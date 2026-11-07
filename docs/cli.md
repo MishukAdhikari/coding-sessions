@@ -88,6 +88,7 @@ cs term [name] [--sync]       interactive claude on the server that survives dis
 cs mirror [name]              join a live session in your terminal, next to the app
 cs ssh [name]                 shell on the server, in the session's folder
 cs mcp add|status|remove      let Claude Code / Codex drive sessions over MCP
+cs socket <method> [json|-]   on the server: call a tool over the local control socket (socket.md)
 cs server add|ls|use|rm       the servers this machine uses
 cs                            anything else goes to your local `claude`
 ```
