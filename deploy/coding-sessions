@@ -436,6 +436,7 @@ cmd_setup() {
   say "  • Raise file-watch and open-file limits$( [[ $SWAP = yes ]] && echo '; add 2 GB swap')$(command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active' && echo '; allow 80/443 in ufw')"
   say "  • Agents: ${AGENTS//,/, }"
   say "  • Playwright browser: $BROWSER   • Daily updates: $UPDATES"
+  [[ ${HERDR:-no} = yes ]] && say "  • Install herdr 0.9.5 (checksum-verified) and use it for new sessions"
   say "  ${D}Not touched: SSH settings, existing firewall rules, other sites. The DNS check asked api.ipify.org for this server's public IP.${N}"
   ((dry)) && { say ""; say "Dry run: nothing was changed."; return 0; }
   confirm "Go ahead?" Y || die "nothing was changed"

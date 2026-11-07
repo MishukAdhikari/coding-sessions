@@ -50,23 +50,15 @@ process.env.ZMX_NO_DETACH_KEY ||= "1";
 // every launch would silently start nothing. The service is never "inside" one.
 delete process.env.ZMX_SESSION;
 
-function findZmx(): string | null {
-  const found = Bun.which("zmx");
+function findBin(name: string): string | null {
+  const found = Bun.which(name);
   if (found) return found;
-  const local = join(homedir(), ".local", "bin", "zmx");
+  const local = join(homedir(), ".local", "bin", name);
   try { return statSync(local).isFile() ? local : null; } catch { return null; }
 }
 
-export const ZMX_BIN = findZmx();
-
-function findHerdr(): string | null {
-  const found = Bun.which("herdr");
-  if (found) return found;
-  const local = join(homedir(), ".local", "bin", "herdr");
-  try { return statSync(local).isFile() ? local : null; } catch { return null; }
-}
-
-export const HERDR_BIN = findHerdr();
+export const ZMX_BIN = findBin("zmx");
+export const HERDR_BIN = findBin("herdr");
 /** null when herdr isn't installed: its sessions then list as none, like zmx's. */
 export const herdr = HERDR_BIN ? createHerdr(HERDR_BIN) : null;
 
@@ -124,13 +116,15 @@ export function parseZmxList(out: string): MuxSession[] {
 /**
  * Every live session under any backend. A backend that isn't installed lists nothing.
  * Throws only when herdr is up but has not answered since this process started, so a
- * busy server is never read as "every herdr session ended".
+ * busy server is never read as "every herdr session ended"; `strict: false` lists the
+ * other backends' sessions instead.
  */
-export async function listAll(): Promise<MuxSession[]> {
+export async function listAll(opts: { strict?: boolean } = {}): Promise<MuxSession[]> {
+  const strict = opts.strict ?? true;
   const [screen, zmx, herdrRows] = await Promise.all([
     capture(["screen", "-ls"]),
     ZMX_BIN ? capture([ZMX_BIN, "list"]) : Promise.resolve({ code: 0, out: "", err: "" }),
-    herdr ? herdr.list() : Promise.resolve([]),
+    herdr ? herdr.list().catch((e) => { if (strict) throw e; return []; }) : Promise.resolve([]),
   ]);
   return [...parseZmxList(zmx.out), ...herdrRows, ...parseScreenLs(screen.out)];
 }
@@ -147,8 +141,10 @@ export async function listByPrefix(prefix: string): Promise<Map<number, string>>
   return map;
 }
 
+/** One session by name. A herdr that isn't answering hides only herdr's sessions here, so
+ *  zmx and screen sessions can still be read, typed into and ended meanwhile. */
 export async function find(name: string): Promise<MuxSession | null> {
-  return (await listAll()).find((s) => s.name === name) ?? null;
+  return (await listAll({ strict: false })).find((s) => s.name === name) ?? null;
 }
 
 /** argv that starts `bash -lc <inner>` detached under `name`. Pure, for tests. herdr has

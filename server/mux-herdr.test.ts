@@ -250,6 +250,13 @@ test("list: a down server lists nothing; one that stops answering keeps the last
   expect(await f.herdr.list()).toEqual([]);
 });
 
+test("a host with herdr installed but unused asks herdr for its socket once, not on every listing", async () => {
+  const f = fakeHerdr(() => err("server_not_running"));
+  for (let i = 0; i < 3; i++) expect(await f.herdr.list()).toEqual([]);
+  expect(f.runs).toHaveLength(1);
+  expect(f.runs[0]!.argv).toEqual(["/usr/local/bin/herdr", "session", "list", "--json"]);
+});
+
 test("quit closes every pane under the name, live or leftover", async () => {
   const f = fakeHerdr((method) => method === "pane.list"
     ? ok({ panes: [pane("w1:p2", "term_aa", "cs-a", "cs-a"), pane("w1:p3", "term_bb", "cs-a"), pane("w1:p4", "term_cc", "cs-b", "cs-b")] })

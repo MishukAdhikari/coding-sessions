@@ -168,8 +168,11 @@ export function socketRequest(path: string, method: string, params: object, time
 async function runCapture(argv: string[], env: Env): Promise<{ code: number; out: string; err: string }> {
   try {
     const p = Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe", env });
+    const timer = setTimeout(() => { try { p.kill(9); } catch {} }, 5000);
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-    return { code: await p.exited, out, err };
+    const code = await p.exited;
+    clearTimeout(timer);
+    return { code, out, err };
   } catch (e) {
     return { code: 127, out: "", err: String((e as Error)?.message ?? e) };
   }
@@ -187,7 +190,9 @@ export interface HerdrDeps {
   sleep(ms: number): Promise<void>;
 }
 
+let configFile: string | null = null;
 function writeConfig(): string {
+  if (configFile) return configFile;
   const dir = resolve(readCsSetting(process.env, "CS_RUNTIME_DIR") ?? join(homedir(), ".local", "state", "coding-sessions"));
   const file = join(dir, "herdr.toml");
   const text = herdrConfigToml();
@@ -197,7 +202,7 @@ function writeConfig(): string {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(file, text, { mode: 0o600 });
   }
-  return file;
+  return (configFile = file);
 }
 
 const defaultDeps: HerdrDeps = {
@@ -218,12 +223,13 @@ export function createHerdr(bin: string, deps: HerdrDeps = defaultDeps) {
 
   const cliEnv = (): Env => ({ ...childEnvironment(), HERDR_CONFIG_PATH: deps.config() });
 
+  /** Asked of herdr once (and again after this app starts the server), so a host with
+   *  herdr installed but unused runs no herdr process per listing. */
   async function socketPath(): Promise<string> {
     if (socket) return socket;
     const r = await deps.run([bin, "session", "list", "--json"], cliEnv());
     const found = r.code === 0 ? parseSessionSocket(r.out) : null;
-    if (found) socket = found;
-    return found ?? join(homedir(), ".config", "herdr", "sessions", HERDR_SESSION, "herdr.sock");
+    return (socket = found ?? join(homedir(), ".config", "herdr", "sessions", HERDR_SESSION, "herdr.sock"));
   }
 
   async function request(method: string, params: object, timeoutMs?: number): Promise<HerdrReply> {
@@ -274,8 +280,8 @@ export function createHerdr(bin: string, deps: HerdrDeps = defaultDeps) {
   }
 
   return {
-    /** Live launches, each with its pane's root pid. See KTD9: a server that is down lists
-     *  nothing; one that does not answer keeps the last good listing, or throws before any. */
+    /** Live launches, each with its pane's root pid. A server that is down lists nothing;
+     *  one that does not answer keeps the last good listing, or throws before there is one. */
     async list(): Promise<HerdrSession[]> {
       const r = await request("pane.list", {});
       if (!r.ok) {
@@ -334,7 +340,8 @@ export function createHerdr(bin: string, deps: HerdrDeps = defaultDeps) {
     },
 
     attachArgv(terminalId: string | undefined): string[] {
-      return herdrAttachArgv(bin, terminalId, deps.config());
+      // No config write for a session that can't be joined anyway.
+      return terminalId ? herdrAttachArgv(bin, terminalId, deps.config()) : herdrAttachArgv(bin, undefined, "");
     },
   };
 }

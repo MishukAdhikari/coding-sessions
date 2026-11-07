@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, ope
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { childEnvironment } from "./child-env";
-import type { MuxBackend } from "./mux";
+import { herdr, type MuxBackend } from "./mux";
 
 const LIMIT = 64 * 1024;
 export const CODEX_READINESS_TIMEOUT_ERROR = "Codex started, but its managed SessionStart hook did not report readiness.";
@@ -98,7 +98,6 @@ export interface StartupTerminal {
 
 /** The visible screen of a herdr pane, or null. */
 async function readHerdrViewport(paneId: string): Promise<string | null> {
-  const { herdr } = await import("./mux");
   const r = herdr ? await herdr.read(paneId, "visible") : null;
   return r?.ok ? r.text.slice(-LIMIT) : null;
 }
