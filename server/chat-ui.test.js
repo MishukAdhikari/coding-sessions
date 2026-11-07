@@ -109,6 +109,20 @@ test("a session that ended stops polling and says so", async () => {
   expect(h.timers.length).toBe(0);
 });
 
+test("a proxy error or restart retries instead of ending the chat", async () => {
+  const h = harness([
+    { status: 502, body: {} },
+    { status: 200, body: { cursor: 3, state: "waiting", messages: [{ id: "0:0", role: "assistant", text: "back", at: null }] } },
+  ]);
+  await settle();
+  expect(h.get("chat-main").hidden).toBe(false);
+  expect(h.get("chat-state").textContent).toBe("Reconnecting…");
+  expect(h.timers.at(-1).ms).toBe(5000);
+  await h.timers.at(-1).fn();
+  expect(h.get("chat-list").children.length).toBe(1);
+  expect(h.get("chat-main").hidden).toBe(false);
+});
+
 test("an id that is not a managed session never reaches the server", async () => {
   const h = harness([], "e:123");
   await settle();

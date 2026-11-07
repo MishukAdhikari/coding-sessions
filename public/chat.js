@@ -52,9 +52,14 @@
     }
     if (res.status === 401) return showGone("You're signed out.", "Sign in again, then reopen the chat from the app.", "Sign in");
     if (res.status === 404) return showGone();
-    if (!res.ok) {
+    if (res.status === 422) {
       const body = await res.json().catch(() => ({}));
       return showGone("No chat for this session.", body.error || "Open its web terminal from the app instead.");
+    }
+    // A proxy error or a restart (the app updates itself) is passing: keep trying.
+    if (!res.ok) {
+      $("chat-state").textContent = "Reconnecting…";
+      return schedule(RETRY_MS);
     }
     const data = await res.json();
     if (data.reset) { list.replaceChildren(); seen = new Set(); }
