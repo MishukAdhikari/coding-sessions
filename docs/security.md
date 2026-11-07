@@ -74,6 +74,14 @@ Detached sessions intentionally outlive web-service restarts. The unit therefore
 
 Do not add blanket namespace restrictions or executable-memory denial without testing provider sandboxes and JIT runtimes. Do not relax filesystem ownership, grant sudo, or expose privileged daemon sockets merely to make a failing workflow work. Systemd options can affect descendants and must be tested on both supported Ubuntu releases. [Systemd execution settings](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html)
 
+### herdr backend
+
+With `CS_MUX=herdr`, the app runs its own herdr session and talks to it over herdr's Unix socket (`~/.config/herdr/sessions/coding-sessions/herdr.sock`, mode 0600). herdr opens no TCP port. Each launch's environment, including stored secrets and communicator tokens, goes in the socket request and reaches only that pane's process. It is never passed as `--env KEY=VALUE`, where `ps` would show it. The herdr server itself starts with a minimal environment, so panes get their variables from the launch alone.
+
+The app writes its herdr config (`herdr.toml` under `CS_RUNTIME_DIR`) and passes it to every herdr process it runs. That config turns off herdr's background version and agent-manifest checks against herdr.dev, and its own agent restore. It also moves herdr's prefix key off ctrl+b, which agents use. Pane screen history stays off, herdr's default.
+
+herdr saves each pane's launch command, not its environment, in `session.json` and in up to 48 `session-snapshots/` files under `~/.config/herdr/sessions/coding-sessions/`. That includes past sessions' repository, paths and agent arguments. Treat that directory as private session data. After a herdr restart, herdr restores those panes as plain shells. The app does not count them as sessions and closes them on its next launch.
+
 ## Optional claude.ai browser integration
 
 The separate chat-management browser login requires an explicit `CAI_EMAIL` and a provisioned Playwright Chromium/Xvfb runtime. The standard installer does not install that optional browser stack. The email is passed only to the login process; no personal account is assumed. Its persistent browser profile is sensitive account state, separate from Claude Code authentication.
