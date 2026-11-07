@@ -7,6 +7,7 @@ import {
   commandCodeEnv,
   commandCodeModel,
   commandCodeProjectDirName,
+  commandCodeTranscriptSuperseded,
   commandCodeTurnState,
   findCommandCodeSessionId,
   findCommandCodeTranscript,
@@ -367,4 +368,42 @@ test("working evidence older than the staleness window is unknown; a finished tu
 test("staleness is the message's own time, not a later record that touched the file", () => {
   const later = Date.parse(T0) + 31 * 60_000;
   expect(commandCodeTurnState([ccUser(), ccModelChange(new Date(later).toISOString())].join("\n"), later)).toBe("unknown");
+});
+
+/* ---------- /clear and /new move the session to a new transcript ---------- */
+
+const CLEARED = "22222222-2222-4222-8222-222222222222";
+const OTHER_LAUNCH = "33333333-3333-4333-8333-333333333333";
+const PINNED = `/x/projects/home-example-workspaces-demo/${SESSION}.jsonl`;
+
+test("a newer transcript beside the pinned one, written after the launch, supersedes it", () => {
+  const fs = fakeFs({
+    "home-example-workspaces-demo": {
+      [`${SESSION}.jsonl`]: { mtime: 5_000 },
+      [`${CLEARED}.jsonl`]: { mtime: 9_000 },
+    },
+  });
+  expect(commandCodeTranscriptSuperseded(PINNED, 1_000, new Set(), fs)).toBe(true);
+});
+
+test("an older transcript, another launch's transcript, or a checkpoint file does not", () => {
+  const fs = fakeFs({
+    "home-example-workspaces-demo": {
+      [`${SESSION}.jsonl`]: { mtime: 5_000 },
+      [`${CLEARED}.jsonl`]: { mtime: 4_000 },
+      [`${OTHER_LAUNCH}.jsonl`]: { mtime: 9_000 },
+      [`${SESSION}.checkpoints.jsonl`]: { mtime: 9_000 },
+    },
+  });
+  expect(commandCodeTranscriptSuperseded(PINNED, 1_000, new Set([OTHER_LAUNCH]), fs)).toBe(false);
+});
+
+test("a transcript from before this launch started does not supersede it", () => {
+  const fs = fakeFs({
+    "home-example-workspaces-demo": {
+      [`${SESSION}.jsonl`]: { mtime: 5_000 },
+      [`${CLEARED}.jsonl`]: { mtime: 9_000 },
+    },
+  });
+  expect(commandCodeTranscriptSuperseded(PINNED, 20_000, new Set(), fs)).toBe(false);
 });

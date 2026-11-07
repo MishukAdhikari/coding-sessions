@@ -17,7 +17,7 @@ import { lastTurnState, type TurnState } from "./turn-state";
 import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type CommandProvider, type SessionProvider } from "./session-provider";
 import { commandEnv, findCommand, resolveBin, type CustomCommand } from "./commands";
 import { sessionSecretEnv } from "./secret-store";
-import { findPreset, presetLaunch } from "./agent-presets";
+import { findPreset, presetLaunch, presetReadsTurnState } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
 import { codexActivity, isCodexSessionId } from "./codex-state";
 import { findKimiWire, kimiTurnState } from "./kimi-state";
@@ -25,6 +25,7 @@ import {
   buildCommandCodeInvocation,
   commandCodeEnv,
   commandCodeModel,
+  commandCodeTranscriptSuperseded,
   commandCodeTurnState,
   findCommandCodeSessionId,
   findCommandCodeTranscript,
@@ -253,19 +254,28 @@ function commandCodeModelFor(pid: number, cwd: string | null, sessionId: string 
 
 const waitingCache = new Map<number, { at: number; state: TurnState }>();
 
+/** A turn-state read, cached ~4s per pid to keep the poll cheap. */
+function cachedTurnState(pid: number, read: () => TurnState): TurnState {
+  const cached = waitingCache.get(pid);
+  if (cached && Date.now() - cached.at < 4000) return cached.state;
+  const state = read();
+  waitingCache.set(pid, { at: Date.now(), state });
+  return state;
+}
+
 /**
  * What a Command Code session's last turn is doing, from its own transcript (see
  * commandCodeTurnState). No transcript yet — a session nobody has spoken to — is
- * "unknown". Cached ~4s per pid, like the Claude reader below.
+ * "unknown".
  */
-function commandCodeTurnStateFor(pid: number, cwd: string | null, sessionId: string | null): TurnState {
-  const cached = waitingCache.get(pid);
-  if (cached && Date.now() - cached.at < 4000) return cached.state;
-  const path = cwd && sessionId ? findCommandCodeTranscript(cwd, sessionId) : null;
-  const text = path ? readTranscriptTail(path) : null;
-  const state: TurnState = text ? commandCodeTurnState(text) : "unknown";
-  waitingCache.set(pid, { at: Date.now(), state });
-  return state;
+function commandCodeTurnStateFor(pid: number, cwd: string | null, sessionId: string | null, launchedAt: number, otherIds: ReadonlySet<string>): TurnState {
+  return cachedTurnState(pid, () => {
+    const path = cwd && sessionId ? findCommandCodeTranscript(cwd, sessionId) : null;
+    // After /clear or /new the agent writes a new transcript; the pinned one is history.
+    if (!path || commandCodeTranscriptSuperseded(path, launchedAt, otherIds)) return "unknown";
+    const text = readTranscriptTail(path);
+    return text ? commandCodeTurnState(text) : "unknown";
+  });
 }
 
 /**
@@ -280,32 +290,32 @@ function commandCodeTurnStateFor(pid: number, cwd: string | null, sessionId: str
  * pid to keep the poll cheap.
  */
 function turnStateFor(pid: number, cwd: string | null, etimes: number): TurnState {
-  const c = waitingCache.get(pid);
-  if (c && Date.now() - c.at < 4000) return c.state;
-  const path = findTranscript(pid, cwd, etimes);
-  const text = path ? readTranscriptTail(path) : null;
-  const state: TurnState = text ? lastTurnState(text) : "unknown";
-  waitingCache.set(pid, { at: Date.now(), state });
-  return state;
+  return cachedTurnState(pid, () => {
+    const path = findTranscript(pid, cwd, etimes);
+    const text = path ? readTranscriptTail(path) : null;
+    return text ? lastTurnState(text) : "unknown";
+  });
 }
 
 /**
  * What a Kimi Code session's last turn is doing, from the wire record of the session
- * its process (or a child of it) holds — see kimi-state.ts. Cached ~4s per pid.
+ * its process (or a child of it) holds — see kimi-state.ts.
  */
 function kimiTurnStateFor(proc: Proc, procs: Proc[]): TurnState {
-  const cached = waitingCache.get(proc.pid);
-  if (cached && Date.now() - cached.at < 4000) return cached.state;
-  const pids = new Set([proc.pid]);
+  return cachedTurnState(proc.pid, () => {
+    const path = findKimiWire(selfAndDescendants(proc.pid, procs));
+    const text = path ? readTranscriptTail(path) : null;
+    return text ? kimiTurnState(text) : "unknown";
+  });
+}
+
+function selfAndDescendants(root: number, procs: Proc[]): Set<number> {
+  const pids = new Set([root]);
   for (let grew = true; grew;) {
     grew = false;
     for (const p of procs) if (pids.has(p.ppid) && !pids.has(p.pid)) { pids.add(p.pid); grew = true; }
   }
-  const path = findKimiWire(pids);
-  const text = path ? readTranscriptTail(path) : null;
-  const state: TurnState = text ? kimiTurnState(text) : "unknown";
-  waitingCache.set(proc.pid, { at: Date.now(), state });
-  return state;
+  return pids;
 }
 
 export interface Proc { pid: number; ppid: number; etimes: number; pcpu: number; args: string }
@@ -1008,6 +1018,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
   // recovered from the meta file the agent writes for itself at startup. Turn state
   // comes from that conversation's transcript, never from CPU.
   const commandCodeLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider = 'command-code'`).all() as LaunchRow[];
+  const commandCodeIds = new Set(commandCodeLaunches.map(row => row.resume_id?.toLowerCase()).filter((id): id is string => !!id));
   for (const launch of commandCodeLaunches) {
     const screenEntry = [...screens.entries()].find(([, name]) => name === launch.screen);
     if (!screenEntry) continue;
@@ -1021,7 +1032,8 @@ export async function listSessions(): Promise<SessionInfo[]> {
       db.query("UPDATE launches SET resume_id = ? WHERE screen = ? AND provider = 'command-code'")
         .run(resumeId, launch.screen);
     }
-    const act = resolveActivity(proc.pcpu >= ACTIVE_CPU_PCT, commandCodeTurnStateFor(proc.pid, project, resumeId));
+    const otherIds = new Set([...commandCodeIds].filter(id => id !== resumeId?.toLowerCase()));
+    const act = resolveActivity(proc.pcpu >= ACTIVE_CPU_PCT, commandCodeTurnStateFor(proc.pid, project, resumeId, launch.created_at, otherIds));
     sessions.push({
       id: `m:${launch.screen}`,
       kind: "managed",
@@ -1065,10 +1077,11 @@ export async function listSessions(): Promise<SessionInfo[]> {
     const slug = commandSlug(provider);
     const definition = slug ? findCommand(slug) : null;
     const project = procCwd(proc.pid) ?? launch.project_path;
-    const turnState = findPreset(definition?.preset)?.turnState === true;
+    const turnState = presetReadsTurnState(definition?.preset);
+    const cpuHigh = proc.pcpu >= ACTIVE_CPU_PCT;
     const act = turnState
-      ? resolveActivity(proc.pcpu >= ACTIVE_CPU_PCT, kimiTurnStateFor(proc, procs))
-      : { active: proc.pcpu >= ACTIVE_CPU_PCT, busy: proc.pcpu >= ACTIVE_CPU_PCT, waiting: false, asking: false, telemetryUnknown: false };
+      ? resolveActivity(cpuHigh, kimiTurnStateFor(proc, procs))
+      : { active: cpuHigh, busy: cpuHigh, waiting: false, asking: false, telemetryUnknown: false };
     sessions.push({
       id: `m:${launch.screen}`,
       kind: "managed",

@@ -13,7 +13,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, normalize } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import type { Database } from "bun:sqlite";
 import { db } from "./db";
 import { childEnvironment } from "./child-env";
@@ -225,6 +225,33 @@ export function findCommandCodeTranscript(
     if (file) return join(dir, file);
   }
   return null;
+}
+
+/**
+ * Whether the agent has moved on from this conversation. `/clear` and `/new` give a
+ * running Command Code a fresh conversation id and a new transcript beside the old
+ * one, so a transcript in the same directory written after both this one and the
+ * launch means the pinned transcript no longer shows the current turn. Transcripts
+ * owned by other launches (`otherIds`) do not count.
+ */
+export function commandCodeTranscriptSuperseded(
+  transcriptPath: string,
+  launchedAtMs: number,
+  otherIds: ReadonlySet<string>,
+  fs: CommandCodeFsDependencies = defaultCommandCodeFs,
+): boolean {
+  const pinnedAt = fs.mtimeMs(transcriptPath);
+  if (pinnedAt == null) return false;
+  const dir = dirname(transcriptPath);
+  const pinned = basename(transcriptPath).toLowerCase();
+  for (const file of fs.listFiles(dir)) {
+    if (!file.toLowerCase().endsWith(".jsonl") || file.toLowerCase() === pinned) continue;
+    const id = normalizeCommandCodeSessionId(file.slice(0, -".jsonl".length));
+    if (!id || otherIds.has(id)) continue;
+    const at = fs.mtimeMs(join(dir, file));
+    if (at != null && at > pinnedAt && at >= launchedAtMs - 5_000) return true;
+  }
+  return false;
 }
 
 /**

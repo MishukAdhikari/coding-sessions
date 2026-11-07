@@ -69,6 +69,9 @@ export function findPreset(id: unknown): AgentPreset | null {
   return AGENT_PRESETS.find(preset => preset.id === id) ?? null;
 }
 
+/** Whether a Command registered from this preset reports turn state. */
+export const presetReadsTurnState = (id: unknown): boolean => findPreset(id)?.turnState === true;
+
 export interface PresetLaunchOptions extends Paths {
   unrestricted: boolean;
   connectors: boolean;

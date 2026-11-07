@@ -20,7 +20,7 @@ import { githubStatus, saveGithubToken, removeGithubAuth } from "./github-auth";
 import { validateProjectPath } from "./project-path";
 import { hostStats } from "./host-stats";
 import { clearCommandToken, createCommand, deleteCommand, findCommand, listCommands, listPresets, setCommandToken } from "./commands";
-import { findPreset } from "./agent-presets";
+import { presetReadsTurnState } from "./agent-presets";
 import { clearCommandCodeToken, hasCommandCodeToken, preflightCommandCode, setCommandCodeToken } from "./command-code";
 import { fetchBranches, fetchPull, parsePullRef, parseRepoRef } from "./repo-refs";
 import * as oauth from "./oauth";
@@ -150,7 +150,7 @@ const mcpDeps: McpDeps = {
       // Command Code's transcript shows working/finished but never a pending question.
       ...(id === "command-code" ? { asking: false } : {}),
     })),
-    ...listCommands().map((c) => ({ id: commandProviderId(c.slug), name: c.label, remoteControl: false, turnState: findPreset(c.preset)?.turnState === true })),
+    ...listCommands().map((c) => ({ id: commandProviderId(c.slug), name: c.label, remoteControl: false, turnState: presetReadsTurnState(c.preset) })),
   ],
   async launch({ name, provider, projectId, repo, remoteControl }) {
     const options = launchOptionsFromRequest({ provider, remoteControl: PROVIDER_CAPABILITIES[provider as keyof typeof PROVIDER_CAPABILITIES]?.remoteControl ? remoteControl : false });

@@ -244,12 +244,6 @@ function turnStateFor(deps: McpDeps, provider: SessionProvider): boolean {
   return deps.providers().find((p) => p.id === provider)?.turnState ?? false;
 }
 
-/** Whether a "working" state can hide a question or approval prompt the agent never reports. */
-function questionsHidden(deps: McpDeps, provider: SessionProvider): boolean {
-  const entry = deps.providers().find((p) => p.id === provider);
-  return !!entry?.turnState && entry.asking === false;
-}
-
 async function findSession(deps: McpDeps, id: string): Promise<SessionInfo | undefined> {
   return (await deps.listSessions()).find((s) => s.id === id);
 }
@@ -269,8 +263,10 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
   let same = 0;
   for (;;) {
     const s = await findSession(deps, id);
-    const turnState = s ? turnStateFor(deps, s.provider) : false;
-    const hidden = s ? questionsHidden(deps, s.provider) : false;
+    const entry = s ? deps.providers().find((p) => p.id === s.provider) : undefined;
+    const turnState = entry?.turnState ?? false;
+    // A "working" state can hide a question or approval prompt the agent never reports.
+    const hidden = turnState && entry?.asking === false;
     const state = sessionState(s, turnState);
     const screen = state === "ended" ? null : await deps.readScreen(id, lines);
     const text = screen?.ok ? screen.value : "";
