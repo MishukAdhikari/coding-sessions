@@ -17,8 +17,8 @@ export interface ActivityCounts {
 
 export interface ActivitySnapshot extends ActivityCounts {
   active: boolean;
-  lastActivityAt: string; // ISO 8601
-  idleSeconds: number;
+  last_activity_at: string; // ISO 8601
+  idle_seconds: number;
 }
 
 interface SessionLike { status: string; activity?: string }
@@ -48,7 +48,7 @@ export function createActivitySignal(deps: { sample: () => Promise<ActivityCount
     const active = last.working + last.waiting + last.terminals > 0;
     if (active) touch();
     const at = now();
-    return { active, ...last, lastActivityAt: new Date(lastActivity).toISOString(), idleSeconds: active ? 0 : Math.max(0, Math.floor((at - lastActivity) / 1000)) };
+    return { active, ...last, last_activity_at: new Date(lastActivity).toISOString(), idle_seconds: active ? 0 : Math.max(0, Math.floor((at - lastActivity) / 1000)) };
   }
 
   return { touch, refresh };

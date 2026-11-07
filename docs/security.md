@@ -12,10 +12,10 @@ Use a dedicated VM for an untrusted workload. A stronger service-to-runner bound
 
 Terminate HTTPS at a trusted reverse proxy and keep the application listener inaccessible to untrusted direct clients. Forward WebSocket upgrades for terminals. Enable `CS_TRUST_PROXY=1` only when the proxy overwrites forwarded client headers and clients cannot bypass it.
 
-`CS_ACTIVITY_PORT` (off by default) opens a second listener on `127.0.0.1` with one route, `GET /activity`, and no sign-in. It is for an idle check on the same machine, such as one that stops or suspends a server nobody is using. It returns whether anything is active and when it last was: agents working or starting, agents waiting for an answer or approval, and web terminals with a browser attached. It shows counts only, no session names, repositories or content. Any local account on the machine can read it, so do not enable it where that timing is sensitive, and never route the proxy to this port.
+`CS_ACTIVITY_PORT` (off by default) opens a second listener on `127.0.0.1` with one route, `GET /activity`, and no sign-in. It is for an idle check on the same machine, such as one that stops or suspends a server nobody is using. It returns whether anything is active and when it last was: agents working or starting, agents waiting for an answer or approval, and web terminals with a browser attached. It shows counts only, no session names, repositories or content. Any local account on the machine can read it, so do not enable it where that timing is sensitive, and never route the proxy to this port. `sudo coding-sessions activity --json` prints the same answer, and fails while the signal is off.
 
 ```json
-{"active":false,"working":0,"waiting":0,"terminals":0,"lastActivityAt":"2026-11-05T11:32:49.205Z","idleSeconds":120}
+{"active":false,"working":0,"waiting":0,"terminals":0,"last_activity_at":"2026-11-05T11:32:49.205Z","idle_seconds":120}
 ```
 
 Register a passkey after initial password sign-in. An MCP authorization is access to this instance, not permission to one isolated project. Review client consent and revoke unused CLI/OAuth access. Report suspected vulnerabilities privately using [SECURITY.md](../SECURITY.md).

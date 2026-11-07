@@ -81,6 +81,7 @@ The `coding-sessions` command manages everything afterwards:
 sudo coding-sessions setup               re-run setup: repair, or change agents, browser, updates
 sudo coding-sessions doctor              check everything; each problem comes with its fix
 sudo coding-sessions status              URL, versions, services, updates
+sudo coding-sessions activity [--json]   when it was last in use (needs CS_ACTIVITY_PORT)
 sudo coding-sessions agents              installed agents and versions
 sudo coding-sessions agents install gemini kimi
 sudo coding-sessions agents update

@@ -476,6 +476,20 @@ load_instance() {
 
 cmd_setup_link() { need_root setup-link; load_instance; print_setup_link; }
 
+# The last-activity signal (CS_ACTIVITY_PORT, server/activity-signal.ts), for an idle check
+# on this machine. Fails when the signal is off, so a caller can fall back to its own checks.
+cmd_activity() {
+  need_root activity
+  load_instance
+  local json=0 port body
+  [[ ${1:-} = --json ]] && json=1
+  port=$(sed -n 's/^CS_ACTIVITY_PORT=//p' "/etc/coding-sessions/$INSTANCE.env" 2>/dev/null | tail -n 1)
+  [[ $port =~ ^[0-9]{1,5}$ ]] || die "the activity signal is off: add CS_ACTIVITY_PORT=9131 to /etc/coding-sessions/$INSTANCE.env, then: sudo coding-sessions restart"
+  body=$(curl -fsS --max-time 5 "http://127.0.0.1:$port/activity") || die "the activity signal on 127.0.0.1:$port did not answer; is the app running? sudo coding-sessions status"
+  if ((json)); then say "$body"; return; fi
+  if [[ $body = *'"active":true'* ]]; then say "active now"; else say "idle since $(sed -n 's/.*"last_activity_at":"\([^"]*\)".*/\1/p' <<<"$body")"; fi
+}
+
 cmd_status() {
   need_root status
   load_instance
@@ -590,6 +604,7 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
   sudo coding-sessions setup-link        one-time sign-in link (lost access, new device)
   sudo coding-sessions doctor            check everything, with fixes
   sudo coding-sessions status            what's running, where, which version
+  sudo coding-sessions activity [--json] when anything was last in use (CS_ACTIVITY_PORT)
   sudo coding-sessions agents [list]     installed agents and versions
   sudo coding-sessions agents install a… install agents (as the service account)
   sudo coding-sessions agents update     update installed agents
@@ -607,6 +622,7 @@ main() {
     setup|install) cmd_setup "$@" ;;
     setup-link|link) cmd_setup_link ;;
     status) cmd_status ;;
+    activity) cmd_activity "$@" ;;
     doctor) cmd_doctor ;;
     agents|agent) cmd_agents "$@" ;;
     browser) cmd_browser "$@" ;;
