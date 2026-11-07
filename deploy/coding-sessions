@@ -220,6 +220,7 @@ run_engine() {
   [[ $ARCH = arm64 ]] && sha=$BUN_SHA_ARM64
   args=(--instance "$INSTANCE" --origin "https://$DOMAIN" --port "$PORT" --bun-version "$BUN_VERSION" --bun-sha256 "$sha" --source "$SOURCE")
   [[ $UPDATES = yes ]] && args+=(--daily-updates)
+  [[ ${HERDR:-no} = yes ]] && args+=(--herdr)
   CS_INSTALL_CALLER=cli "$SOURCE/deploy/install-ubuntu" "${args[@]}"
 }
 
@@ -363,6 +364,7 @@ cmd_setup() {
       --browser) BROWSER=yes; shift ;; --no-browser) BROWSER=no; shift ;;
       --updates) UPDATES=yes; shift ;; --no-updates) UPDATES=no; shift ;;
       --swap) SWAP=yes; shift ;; --no-swap) SWAP=no; shift ;;
+      --herdr) HERDR=yes; shift ;;
       --skip-dns-check) skip_dns=1; shift ;; --dry-run) dry=1; shift ;;
       --no-link) no_link=1; shift ;; --expect-commit) EXPECT_COMMIT=${2:?}; shift 2 ;;
       --yes|-y) ASSUME_YES=1; shift ;;
@@ -598,6 +600,7 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
        --browser | --no-browser          Playwright Chromium for agents
        --updates | --no-updates          daily app and agent updates
        --swap | --no-swap                add 2 GB swap on small servers
+       --herdr                           opt-in: install pinned herdr and use it for new sessions
        --instance NAME --port PORT       defaults: personal, 9121
        --skip-dns-check  --dry-run  --yes
        --no-link                         don't print the sign-in link (e.g. when an AI agent runs setup)
