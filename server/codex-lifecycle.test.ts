@@ -384,3 +384,29 @@ test("only positive bound startup evidence can recover a legacy timeout failure"
     expect(reconcileCodexStartup(database, row(), "input").inputReady).toBe(false);
   } finally { database.close(); }
 });
+
+test("under herdr, Codex launches through mux.spawn with secrets in its env, never in the command", async () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  let seen: { screen: string; inner: string; opts: { env?: Record<string, string>; backend?: mux.MuxBackend } } | null = null;
+  const runtime: ManagedCodexRuntime = {
+    database,
+    dbPath: "/var/lib/coding-sessions/app.db",
+    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.166.0" }),
+    secretEnv: async () => ({ OPENAI_API_KEY: "stored-openai" }),
+    execute: async () => { throw new Error("herdr launches have no argv form"); },
+    backend: () => "herdr",
+    spawn: async (screen, inner, opts = {}) => { seen = { screen, inner, opts }; return { code: 0, out: "", err: "" }; },
+    uuid: () => launchId,
+    now: () => 2,
+  };
+  expect(await startManagedCodex({ screen: "cs-demo", name: "demo", projectPath: "/srv/demo" }, runtime)).toEqual({ ok: true });
+  expect(seen!.screen).toBe("cs-demo");
+  expect(seen!.opts.backend).toBe("herdr");
+  expect(seen!.opts.env!.OPENAI_API_KEY).toBe("stored-openai");
+  expect(seen!.opts.env!.CS_COMMUNICATOR_TOKEN).toStartWith("cscomm_");
+  expect(seen!.inner).not.toContain("stored-openai");
+  expect(seen!.inner).not.toContain(seen!.opts.env!.CS_COMMUNICATOR_TOKEN!);
+  expect(database.query("SELECT phase FROM launches WHERE screen = 'cs-demo'").get()).toEqual({ phase: "awaiting_session_start" });
+  database.close();
+});

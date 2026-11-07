@@ -111,3 +111,13 @@ test("terminal reads cap output, reject failures and terminate hung probes", asy
   expect(await boundedTerminalCommand([process.execPath, "-e", "setInterval(()=>{},1000)"])).toBeNull();
   expect(Date.now() - started).toBeLessThan(2500);
 });
+
+test("herdr probe reads the pane's visible screen and never runs screen or zmx", async () => {
+  const run = async () => { throw new Error("no terminal command for herdr"); };
+  const seen: string[] = [];
+  const readHerdr = async (paneId: string) => { seen.push(paneId); return prompt; };
+  expect(await readStartupViewport({ ...target, backend: "herdr", paneId: "w1:p2" }, { run, readHerdr })).toBe(prompt);
+  expect(seen).toEqual(["w1:p2"]);
+  expect(await readStartupViewport({ ...target, backend: "herdr" }, { run, readHerdr })).toBeNull();
+  expect(await readStartupViewport({ ...target, backend: "herdr", paneId: "w1:p2", screen: "bad name" }, { run, readHerdr })).toBeNull();
+});

@@ -88,6 +88,12 @@ async function holder(id: string): Promise<IoResult<mux.MuxSession>> {
 export async function readScreen(id: string, lines = 60): Promise<IoResult<string>> {
   const h = await holder(id);
   if (!h.ok) return h;
+  if (h.value.backend === "herdr") {
+    if (!mux.herdr || !h.value.paneId) return { ok: false, error: "Couldn't read the session." };
+    // herdr counts the blank rows below the cursor; read extra so tailLines can trim them.
+    const r = await mux.herdr.read(h.value.paneId, "recent", Math.max(1, lines) + 50);
+    return r.ok ? { ok: true, value: tailLines(r.text, lines) } : { ok: false, error: r.error || "Couldn't read the session." };
+  }
   if (h.value.backend === "zmx") {
     const r = await run([mux.ZMX_BIN ?? "zmx", "history", h.value.name]);
     if (r.code !== 0) return { ok: false, error: r.err.trim() || "Couldn't read the session." };
@@ -108,6 +114,11 @@ export async function readScreen(id: string, lines = 60): Promise<IoResult<strin
 
 async function write(session: mux.MuxSession, bytes: string): Promise<IoResult<true>> {
   if (bytes.includes("\0")) return { ok: false, error: "Text can't contain NUL." };
+  if (session.backend === "herdr") {
+    // Same raw bytes as `zmx send`: herdr passes paste markers, CR and escapes through.
+    const r = mux.herdr && session.paneId ? await mux.herdr.write(session.paneId, bytes) : { ok: false as const, error: "" };
+    return r.ok ? { ok: true, value: true } : { ok: false, error: r.error || "Couldn't type into the session." };
+  }
   const r = session.backend === "zmx"
     ? await run([mux.ZMX_BIN ?? "zmx", "send", session.name, bytes])
     // screen's `stuff` reads backslash escapes; double them so text arrives as typed.
