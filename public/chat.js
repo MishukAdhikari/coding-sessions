@@ -21,6 +21,7 @@
   const POLL_MS = 2000;
   const HIDDEN_POLL_MS = 15000;
   const RETRY_MS = 5000;
+  const MAX_ROWS = 1000;
   const STATE_TEXT = { asking: "Waiting on you", working: "Working…", waiting: "Your turn", unknown: "" };
 
   let cursor = null;
@@ -83,6 +84,8 @@
       if (typeof m.at === "string") row.title = new Date(m.at).toLocaleString();
       list.append(row);
     }
+    // A tab left open on a long session keeps the latest messages, not all of them.
+    while (list.children.length > MAX_ROWS) list.firstElementChild.remove();
     pin();
   }
 

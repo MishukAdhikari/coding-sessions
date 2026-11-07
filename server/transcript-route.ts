@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { PRIVATE_NO_STORE_HEADERS } from "./browser-session";
 import { codexActivity } from "./codex-state";
 import type { IoResult } from "./session-io";
-import { readTail, readTranscriptWindow, resolveTranscript, type TranscriptRoots } from "./transcript";
+import { findChatSession, readTail, readTranscriptWindow, resolveTranscript, type TranscriptRoots } from "./transcript";
 import { lastTurnState } from "./turn-state";
 
 export interface TranscriptRouteDependencies {
@@ -39,11 +39,10 @@ export async function handleTranscriptRoute(request: Request, deps: TranscriptRo
   let id: string;
   try { id = decodeURIComponent(rawId!); } catch { return json({ error: "No such session." }, 404); }
 
-  const resolved = resolveTranscript(deps.database, id, deps.roots);
-  if (!resolved.ok) return json({ error: resolved.error }, resolved.status);
-  const { provider, path, launchId, screen } = resolved.value;
-
   if (isReply) {
+    // Typing needs the session, not its transcript file.
+    const session = findChatSession(deps.database, id);
+    if (!session.ok) return json({ error: session.error }, session.status);
     const body = await request.json().catch(() => null) as { text?: unknown } | null;
     const text = typeof body?.text === "string" ? body.text : "";
     if (!text.trim()) return json({ error: "Type a message first." }, 422);
@@ -51,6 +50,10 @@ export async function handleTranscriptRoute(request: Request, deps: TranscriptRo
     const sent = await deps.sendText(id, text);
     return sent.ok ? json({ ok: true }) : json({ error: sent.error }, 422);
   }
+
+  const resolved = resolveTranscript(deps.database, id, deps.roots);
+  if (!resolved.ok) return json({ error: resolved.error }, resolved.status);
+  const { provider, path, launchId, screen } = resolved.value;
 
   const rawAfter = url.searchParams.get("after");
   const after = rawAfter !== null && /^\d{1,15}$/.test(rawAfter) ? Number(rawAfter) : null;

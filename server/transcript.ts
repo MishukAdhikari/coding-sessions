@@ -345,13 +345,27 @@ function findCodexRollout(codexHome: string, sessionId: string): string | null {
   return null;
 }
 
-/** The transcript of the managed session `id` ("m:cs-…"), from its own records only. */
-export function resolveTranscript(database: Database, id: string, roots: TranscriptRoots): ResolveResult {
+interface ChatLaunch { screen: string; provider: TranscriptFormat; project_path: string; launch_id: string | null; resume_id: string | null }
+
+/** The launch row of a managed session that has a chat view, without touching any file. */
+export function findChatSession(database: Database, id: string): { ok: true; value: ChatLaunch } | { ok: false; status: 404 | 422; error: string } {
   const screen = screenFromId(id);
   if (!screen) return { ok: false, status: 404, error: "No such session." };
   const launch = database.query("SELECT screen, provider, project_path, launch_id, resume_id FROM launches WHERE screen = ?").get(screen) as
-    { screen: string; provider: string; project_path: string; launch_id: string | null; resume_id: string | null } | null;
+    (Omit<ChatLaunch, "provider"> & { provider: string }) | null;
   if (!launch) return { ok: false, status: 404, error: "No such session." };
+  if (launch.provider !== "codex" && launch.provider !== "claude") {
+    return { ok: false, status: 422, error: "The chat view isn't available for this agent." };
+  }
+  return { ok: true, value: launch as ChatLaunch };
+}
+
+/** The transcript of the managed session `id` ("m:cs-…"), from its own records only. */
+export function resolveTranscript(database: Database, id: string, roots: TranscriptRoots): ResolveResult {
+  const found = findChatSession(database, id);
+  if (!found.ok) return found;
+  const launch = found.value;
+  const screen = launch.screen;
 
   if (launch.provider === "codex") {
     const state = launch.launch_id
@@ -363,12 +377,8 @@ export function resolveTranscript(database: Database, id: string, roots: Transcr
     return { ok: true, value: { provider: "codex", path, launchId: launch.launch_id, screen } };
   }
 
-  if (launch.provider === "claude") {
-    const rid = launch.resume_id && RESUME_ID_RE.test(launch.resume_id) ? launch.resume_id : null;
-    const folder = join(roots.claudeProjects, launch.project_path.replace(/[^a-zA-Z0-9]/g, "-"));
-    const path = rid ? insideRoot(roots.claudeProjects, join(folder, `${rid}.jsonl`)) : null;
-    return { ok: true, value: { provider: "claude", path, launchId: launch.launch_id, screen } };
-  }
-
-  return { ok: false, status: 422, error: "The chat view isn't available for this agent." };
+  const rid = launch.resume_id && RESUME_ID_RE.test(launch.resume_id) ? launch.resume_id : null;
+  const folder = join(roots.claudeProjects, launch.project_path.replace(/[^a-zA-Z0-9]/g, "-"));
+  const path = rid ? insideRoot(roots.claudeProjects, join(folder, `${rid}.jsonl`)) : null;
+  return { ok: true, value: { provider: "claude", path, launchId: launch.launch_id, screen } };
 }
