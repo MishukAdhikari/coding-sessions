@@ -20,6 +20,7 @@ import { sessionSecretEnv } from "./secret-store";
 import { findPreset, presetLaunch } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
 import { codexActivity, isCodexSessionId } from "./codex-state";
+import { findKimiWire, kimiTurnState } from "./kimi-state";
 import {
   buildCommandCodeInvocation,
   commandCodeEnv,
@@ -285,6 +286,25 @@ function turnStateFor(pid: number, cwd: string | null, etimes: number): TurnStat
   const text = path ? readTranscriptTail(path) : null;
   const state: TurnState = text ? lastTurnState(text) : "unknown";
   waitingCache.set(pid, { at: Date.now(), state });
+  return state;
+}
+
+/**
+ * What a Kimi Code session's last turn is doing, from the wire record of the session
+ * its process (or a child of it) holds — see kimi-state.ts. Cached ~4s per pid.
+ */
+function kimiTurnStateFor(proc: Proc, procs: Proc[]): TurnState {
+  const cached = waitingCache.get(proc.pid);
+  if (cached && Date.now() - cached.at < 4000) return cached.state;
+  const pids = new Set([proc.pid]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const p of procs) if (pids.has(p.ppid) && !pids.has(p.pid)) { pids.add(p.pid); grew = true; }
+  }
+  const path = findKimiWire(pids);
+  const text = path ? readTranscriptTail(path) : null;
+  const state: TurnState = text ? kimiTurnState(text) : "unknown";
+  waitingCache.set(proc.pid, { at: Date.now(), state });
   return state;
 }
 
@@ -1031,8 +1051,9 @@ export async function listSessions(): Promise<SessionInfo[]> {
   }
 
   // Registered Commands are managed-only, like Codex: persisted ownership picks the
-  // screen, process ancestry proves the agent is live. No hooks, so no turn state —
-  // liveness and CPU are the only honest signals (plan R6).
+  // screen, process ancestry proves the agent is live. Turn state only for a preset
+  // whose own session record this app reads (Kimi Code); every other Command reports
+  // liveness, never a guess from CPU.
   const commandLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider LIKE 'cmd:%'`).all() as LaunchRow[];
   for (const launch of commandLaunches) {
     const provider = rowProvider(launch.provider);
@@ -1044,6 +1065,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
     const slug = commandSlug(provider);
     const definition = slug ? findCommand(slug) : null;
     const project = procCwd(proc.pid) ?? launch.project_path;
+    const turnState = findPreset(definition?.preset)?.turnState === true;
+    const act = turnState
+      ? resolveActivity(proc.pcpu >= ACTIVE_CPU_PCT, kimiTurnStateFor(proc, procs))
+      : { active: proc.pcpu >= ACTIVE_CPU_PCT, busy: proc.pcpu >= ACTIVE_CPU_PCT, waiting: false, asking: false, telemetryUnknown: false };
     sessions.push({
       id: `m:${launch.screen}`,
       kind: "managed",
@@ -1059,11 +1084,12 @@ export async function listSessions(): Promise<SessionInfo[]> {
       pid: proc.pid,
       uptimeSec: proc.etimes,
       cpu: proc.pcpu,
-      active: proc.pcpu >= ACTIVE_CPU_PCT,
-      busy: proc.pcpu >= ACTIVE_CPU_PCT,
-      waiting: false,
-      asking: false,
-      telemetryUnknown: false,
+      active: act.active,
+      busy: act.busy,
+      waiting: act.waiting,
+      asking: act.asking,
+      telemetryUnknown: act.telemetryUnknown,
+      turnState,
       claudeUrl: null,
       remoteControl: false,
       resumeId: null,
