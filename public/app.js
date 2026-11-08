@@ -518,15 +518,26 @@
   // Pull requests the session's agent printed (server/pr-links.ts), newest first.
   const PR_STATES = new Set(["open", "draft", "merged", "closed"]);
   const PR_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/pull\/\d+$/;
+  // GitHub's own PR icons (Octicons, MIT, THIRD_PARTY_NOTICES.md), 16x16, one per state.
+  const PR_ICON_PATHS = {
+    open: "M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z",
+    merged: "M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z",
+    closed: "M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 5.5a.75.75 0 0 1 .75.75v3.378a2.251 2.251 0 1 1-1.5 0V7.25a.75.75 0 0 1 .75-.75Zm-2.03-5.273a.75.75 0 0 1 1.06 0l.97.97.97-.97a.748.748 0 0 1 1.265.332.75.75 0 0 1-.205.729l-.97.97.97.97a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018l-.97-.97-.97.97a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l.97-.97-.97-.97a.75.75 0 0 1 0-1.06ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z",
+    draft: "M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z",
+  };
+  const prIcon = (state) => `<svg class="pr-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="${PR_ICON_PATHS[state] || PR_ICON_PATHS.open}"/></svg>`;
   const prLinksHtml = (prs) => {
     const valid = (Array.isArray(prs) ? prs : []).filter(pr => pr && PR_URL_RE.test(pr.url) && Number.isInteger(pr.number));
     if (!valid.length) return "";
+    // `#10071` alone when the card's PRs share a repo; `repo#10071` when they don't, so each stays unambiguous.
+    const oneRepo = new Set(valid.map(pr => pr.repo)).size === 1;
     return `<span class="card-prs">${valid.map(pr => {
       // Only a state GitHub confirmed gets a color (server/pr-status.ts); anything else is neutral.
       const state = PR_STATES.has(pr.state) ? pr.state : "unknown";
       const where = `${pr.repo}#${pr.number}`;
       const label = [typeof pr.title === "string" && pr.title ? pr.title : null, state === "unknown" ? null : state, `${where} on GitHub`].filter(Boolean).join(" · ");
-      return `<span class="pr-link" role="link" tabindex="0" data-state="${state}" data-href="${escapeHtml(pr.url)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${escapeHtml(`${pr.repo.split("/")[1]}#${pr.number}`)}</span>`;
+      const text = oneRepo ? `#${pr.number}` : `${pr.repo.split("/")[1]}#${pr.number}`;
+      return `<span class="pr-link" role="link" tabindex="0" data-state="${state}" data-href="${escapeHtml(pr.url)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${prIcon(state)}<span class="pr-num">${escapeHtml(text)}</span></span>`;
     }).join("")}</span>`;
   };
   const openPrLink = (href) => { if (PR_URL_RE.test(href || "")) window.open(href, "_blank", "noopener,noreferrer"); };
