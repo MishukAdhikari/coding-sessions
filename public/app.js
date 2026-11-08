@@ -451,6 +451,7 @@
           <span class="card-name">${escapeHtml(s.name)}</span>
           <span class="card-sub">${escapeHtml(middlePath(s.projectLabel || s.project || "—"))}</span>
           <span class="card-status">${statusLine(s)}</span>
+          ${prLinksHtml(s.prs)}
         </span>
         <span class="card-side">
           <span class="card-time">${humanDuration(s.uptimeSec)}</span>
@@ -458,7 +459,16 @@
           ${s.model ? `<br><span class="chip chip-model">${escapeHtml(s.model)}</span>` : ""}
           ${s.kind === "external" ? '<br><span class="chip">external</span>' : ""}
         </span>`;
-      card.addEventListener("click", () => confirmEnd(s));
+      card.addEventListener("click", (event) => {
+        // A PR chip opens the PR, not the session's menu (the card is a button, so the chip can't be a real link).
+        const pr = event.target.closest?.(".pr-link");
+        if (pr) { event.stopPropagation(); openPrLink(pr.dataset.href); return; }
+        confirmEnd(s);
+      });
+      card.addEventListener("keydown", (event) => {
+        const pr = event.target.closest?.(".pr-link");
+        if (pr && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); openPrLink(pr.dataset.href); }
+      });
       list.appendChild(card);
     }
 
@@ -505,6 +515,14 @@
     }
   }
 
+  // Pull requests the session's agent printed (server/pr-links.ts), newest first.
+  const PR_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/pull\/\d+$/;
+  const prLinksHtml = (prs) => {
+    const valid = (Array.isArray(prs) ? prs : []).filter(pr => pr && PR_URL_RE.test(pr.url) && Number.isInteger(pr.number));
+    if (!valid.length) return "";
+    return `<span class="card-prs">${valid.map(pr => `<span class="pr-link" role="link" tabindex="0" data-href="${escapeHtml(pr.url)}" title="${escapeHtml(`${pr.repo}#${pr.number} on GitHub`)}">${escapeHtml(`${pr.repo.split("/")[1]}#${pr.number}`)}</span>`).join("")}</span>`;
+  };
+  const openPrLink = (href) => { if (PR_URL_RE.test(href || "")) window.open(href, "_blank", "noopener,noreferrer"); };
   const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   // Long paths truncate in the MIDDLE so both the root and the folder name stay visible
