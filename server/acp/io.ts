@@ -51,7 +51,8 @@ export function acpAwareIo(io: SessionIo, deps: { database: Database; dataDir: s
       const found = find(id);
       if (!found.ok) return io.readScreen(id, lines);
       const screen = await io.readScreen(id, lines);
-      const pending = pendingPermissions(found.paths.events)[0];
+      // Only a waiting bridge has an open request; skip reading the log otherwise.
+      const pending = readState(found.paths.state)?.state === "waiting" ? pendingPermissions(found.paths.events)[0] : undefined;
       if (!pending) return screen;
       const note = `\n\n[Chat session] Permission requested: ${pending.title}\nAnswer with send_message using one option: ${optionList(pending)}`;
       return { ok: true, value: `${screen.ok ? screen.value : ""}${note}` };

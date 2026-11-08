@@ -204,16 +204,18 @@
         more.setAttribute("aria-expanded", String(open));
         more.addEventListener("click", () => {
           if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
-          const fresh = outputBlock(item, text, index);
-          wrap.replaceWith ? wrap.replaceWith(fresh) : null;
+          wrap.replaceWith?.(outputBlock(item, text, index));
         });
         wrap.append(more);
       }
       return wrap;
     }
 
+    // A diff is computed once per content object, not again on each re-render or "show all".
+    const diffRows = new WeakMap();
     function diffBlock(item, content, index) {
-      const rows = unifiedDiff(content.oldText, content.newText);
+      let rows = diffRows.get(content);
+      if (!rows) { rows = unifiedDiff(content.oldText, content.newText); diffRows.set(content, rows); }
       const added = rows.filter((r) => r.type === "add").length;
       const removed = rows.filter((r) => r.type === "del").length;
       const wrap = el("div", "cv-diff");

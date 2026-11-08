@@ -39,10 +39,10 @@ import { onServerSettingChange, serverSettings } from "./server-settings-instanc
 import { agentStatePaths, isInsideWorkspace } from "./workspace-cleanup";
 import { sessionActivity, type SessionActivity } from "./session-activity";
 import { acpCommand, defaultAcpResolveDeps } from "./acp/agents";
-import { buildAcpLaunch } from "./acp/launch";
+import { acpHolderCommand, buildAcpLaunch } from "./acp/launch";
 import { readState } from "./acp/event-log";
 import { acpSessionFields } from "./acp/state-map";
-import { acpPaths, removeSessionDir } from "./acp/paths";
+import { acpPaths, clearSessionFiles, removeSessionDir } from "./acp/paths";
 
 export type LaunchMode = "terminal" | "acp";
 
@@ -801,7 +801,6 @@ export async function startAcpSession(options: AcpSessionStart): Promise<{ ok: t
   if (!paths.ok) return paths;
   const slug = commandSlug(options.provider);
   const credentials = options.provider === "command-code" ? commandCodeEnv() : slug ? commandEnv(slug) : {};
-  let inner = "";
   return startCommunicatingSession({
     screen: options.screen, name: options.name, projectPath: options.projectPath,
     provider: options.provider as CommunicatingSessionOptions["provider"], remoteControl: 0, mode: "acp",
@@ -814,10 +813,11 @@ export async function startAcpSession(options: AcpSessionStart): Promise<{ ok: t
         resumeId: options.resumeId ?? null, autoAllow: serverSettings.unrestricted(),
       });
       if (!built.ok) throw new Error(built.error);
-      inner = built.inner;
       return built.env;
     },
-    command: () => inner,
+    // Called only once this launch holds the name and no holder runs under it, so an old
+    // conversation's files are cleared here and never a live session's.
+    command: () => { clearSessionFiles(paths.paths); return acpHolderCommand(options.projectPath); },
   });
 }
 
@@ -2135,8 +2135,9 @@ export async function deleteArchived(id: number, deleteWorkspace = false, delete
   }
   if (deleteChat) queueChatDeletion(row.claude_url);
   // A chat session's conversation log goes with its history row, unless a live session reuses the name.
-  if (row.mode === "acp" && !db.query("SELECT 1 FROM launches WHERE screen = ?").get(SCREEN_PREFIX + row.name.toLowerCase())) {
-    removeSessionDir(config.dataDir, SCREEN_PREFIX + row.name.toLowerCase());
+  const acpScreen = SCREEN_PREFIX + row.name.toLowerCase();
+  if (row.mode === "acp" && !db.query("SELECT 1 FROM launches WHERE screen = ?").get(acpScreen)) {
+    removeSessionDir(config.dataDir, acpScreen);
   }
   db.query("DELETE FROM archive WHERE id = ?").run(id);
   return { ok: true };

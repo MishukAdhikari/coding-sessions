@@ -1,7 +1,7 @@
 /** The server side of Chat (ACP) mode: agents, launch, state mapping, routes and MCP I/O. */
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { applyDatabaseSchema } from "../db-schema";
 import { countActivity } from "../activity-signal";
 import { sessionState } from "../mcp";
@@ -89,6 +89,15 @@ describe("launch options and the holder command", () => {
     expect(built.env.CS_ACP_MCP).toContain("${CS_COMMUNICATOR_TOKEN}"); // a reference, never the value
   });
 
+  test("building a launch never touches a live session's log or state (the name is not reserved yet)", () => {
+    const dataDir = base();
+    const live = bridgeFiles(dataDir, "cs-chat", { state: "working" }, [["user", { text: "still running" }]]);
+    const built = buildAcpLaunch({ dataDir, screen: "cs-chat", cwd: "/srv", argv: ["x"], mcp: [], autoAllow: false });
+    expect(built.ok).toBe(true);
+    expect(readFileSync(live.events, "utf8")).toContain("still running");
+    expect(existsSync(live.state)).toBe(true);
+  });
+
   test("a socket path of 100 bytes or more is refused before anything is created", () => {
     const built = buildAcpLaunch({ dataDir: `/${"d".repeat(90)}`, screen: "cs-chat", cwd: "/", argv: ["x"], mcp: [], autoAllow: false });
     expect(built.ok).toBe(false);
@@ -151,10 +160,10 @@ describe("routes", () => {
     const h = harness();
     acpRow(h.database);
     bridgeFiles(h.dataDir, "cs-chat", { state: "working" }, [["user", { text: "hi" }], ["turn_end", { stopReason: "end_turn" }]]);
-    const first = await (await h.call("/api/sessions/m%3Acs-chat/acp"))!.json();
+    const first = await (await h.call("/api/sessions/m%3Acs-chat/acp"))!.json() as any;
     expect(first).toMatchObject({ mode: "acp", state: "working", agent: { name: "fake" } });
     expect(first.events.map((e: any) => e.kind)).toEqual(["user", "turn_end"]);
-    const again = await (await h.call(`/api/sessions/m%3Acs-chat/acp?after=${first.cursor}`))!.json();
+    const again = await (await h.call(`/api/sessions/m%3Acs-chat/acp?after=${first.cursor}`))!.json() as any;
     expect(again.events).toEqual([]);
   });
 
@@ -182,7 +191,7 @@ describe("routes", () => {
     bridgeFiles(h.dataDir, "cs-chat", { state: "waiting" });
     const res = await h.call("/api/sessions/m%3Acs-chat/acp", { method: "POST", body: JSON.stringify({ op: "permission", requestId: "perm-1", optionId: "zzz" }) });
     expect(res!.status).toBe(422);
-    expect((await res!.json()).error).toContain("options");
+    expect(((await res!.json()) as any).error).toContain("options");
   });
 
   test("commands are validated before anything is sent", () => {
