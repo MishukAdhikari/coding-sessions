@@ -52,6 +52,7 @@ The session list, the MCP tools and the activity signal show whether an agent is
 | Command Code | its transcript in `~/.commandcode/projects/` | yes | no, shows as working | yes |
 | Kimi Code | its session lock and `wire.jsonl` under `~/.kimi-code` (or `$KIMI_CODE_HOME`) | yes | approvals and questions | yes |
 | Gemini CLI, Qwen Code, opencode | none yet | | | |
+| Any agent in Chat (ACP) mode | the bridge's own state (`state.json`) | yes | permission requests | yes |
 
 - **Command Code** writes a tool call only once the tool has finished, so a question or approval prompt shows as working. If a turn has written nothing for 30 minutes, the session shows as Connected, because an interrupted turn leaves no record. Through MCP, `wait_for_session` still returns when a working Command Code session's screen stops changing, so a caller can see and answer the prompt.
 - **Kimi Code** creates its session when you send the first message, so a fresh Kimi session shows as Connected until then.
@@ -59,12 +60,41 @@ The session list, the MCP tools and the activity signal show whether an agent is
 - **Qwen Code** writes a readable transcript, but matching it to a launch needs a session id passed at launch; not done yet.
 - **opencode** keeps its state in its own database, and pending approvals only in memory. Reading it needs a plugin.
 
+## Chat (ACP) mode
+
+Every session starts in one of two modes, chosen per session in **Start a session** (or with `mode` on the MCP `launch_session` tool):
+
+- **Terminal** (the default): the agent's own terminal UI, exactly as before.
+- **Chat (ACP)**: the agent speaks the [Agent Client Protocol](https://agentclientprotocol.com) and the session opens as a chat. Replies stream in as formatted text, tool calls show as rows with their status and diffs, the agent's plan shows as a checklist, and a permission request shows as a card with the agent's own options (Allow once, Always allow, Reject…). **Stop** cancels the current turn.
+
+A chat session survives app restarts and updates like a terminal session. Its holder (`cs-<name>`, under zmx, screen or herdr) runs a small bridge, `server/acp/bridge.ts`, which starts the agent, keeps the conversation in an event log on disk, and takes the chat's messages and answers on a private socket. A permission request waits in the bridge, so it is still there after a restart.
+
+| Agent | ACP command | Installed from | Sign-in | Resume |
+|---|---|---|---|---|
+| Claude Code | `claude-agent-acp` | `npm install -g @agentclientprotocol/claude-agent-acp` | your existing `claude` login | session/load |
+| Codex | `codex-acp` | `npm install -g @agentclientprotocol/codex-acp` | `CODEX_API_KEY` / `OPENAI_API_KEY` (Settings › Secrets), or your Codex login | session/load |
+| Command Code | `command-code acp` | the installed Command Code CLI | `cmd login`, or the app-managed key | session/load |
+| Gemini CLI preset | `gemini --acp` | preset install | `GEMINI_API_KEY` (Add key) | session/load |
+| Qwen Code preset | `qwen --acp` | preset install | `/auth` in the agent, or an OpenAI-compatible key | session/load |
+| opencode preset | `opencode acp` | preset install | `opencode auth login` | session/load |
+| Kimi Code preset | `kimi acp` | preset install | `kimi login` | session/load |
+
+The commands were checked on 2026-11-08 against each agent's source and the [ACP registry](https://github.com/agentclientprotocol/registry). The Claude Code and Codex adapters are not installed automatically; until they are, **Chat (ACP)** is shown but disabled for those agents, with the install command. Coding Sessions never downloads an adapter at launch.
+
+- **Sign in first.** Chat mode does not run an agent's sign-in flow. An agent that isn't signed in shows the launch as failed, with the agent's own message (for example, "Gemini API key is missing or not configured").
+- **Permissions.** In standard mode every request the agent makes shows as a card. With agent permissions set to unrestricted, the bridge answers each request with the agent's **Allow once** option and the chat shows it as automatic. It never picks an "always" option for you, because agents remember those beyond the session.
+- **Resume.** Reopening an ended chat session asks the agent to reload the same conversation (ACP `session/load`). If the agent can't, a new conversation starts in the same folder and the chat says so.
+- **The communicator.** Chat sessions get the built-in Coding Sessions MCP server (and external connectors, when enabled), passed to the agent when the session starts.
+- **MCP drivers.** `send_message` sends a prompt. While the agent waits on a permission request, the session's state is `asking`, `read_session` lists the request's options, and `send_message` with one option's name answers it. `press_keys` does not apply to chat sessions.
+- **Fresh workspaces** (a repository cloned at launch) and synced launches are terminal-only for now.
+- **Not supported yet:** registered Commands that are not from a preset (their ACP command isn't known), images and file attachments in prompts, slash-command menus, and session modes and model switching from the chat.
+
 ## Not supported yet
 
 Presets run as Commands. Compared with Claude Code, Codex and Command Code they have:
 
-- **No live turn state, except Kimi Code.** Gemini CLI, Qwen Code and opencode sessions show as running, not as waiting for you or finished (see Turn state above).
-- **No exact resume.** An ended session can't be reopened into the same conversation from the app; the agent's own continue option still works in its terminal.
+- **No live turn state in a terminal, except Kimi Code.** Gemini CLI, Qwen Code and opencode terminal sessions show as running, not as waiting for you or finished (see Turn state above). In Chat (ACP) mode they report all three.
+- **No exact resume in a terminal.** An ended terminal session can't be reopened into the same conversation from the app; the agent's own continue option still works in its terminal. Chat (ACP) sessions resume through `session/load`.
 - **No sign-in panel.** Sign in through the agent itself, as listed above.
 
 ## Notes
