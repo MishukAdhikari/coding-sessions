@@ -35,6 +35,8 @@ export interface ProviderCapabilities {
   exactResume: boolean;
   remoteControl: boolean;
   nativeChatUrl: boolean;
+  /** The app can show the conversation as a chat, parsed from the agent's own transcript. */
+  chatView: boolean;
   chatDeletion: boolean;
   externalDiscovery: boolean;
   syncedLaunch: boolean;
@@ -51,6 +53,7 @@ export const PROVIDER_CAPABILITIES: Record<BuiltinSessionProvider, Readonly<Prov
     exactResume: true,
     remoteControl: true,
     nativeChatUrl: true,
+    chatView: true,
     chatDeletion: true,
     externalDiscovery: true,
     syncedLaunch: true,
@@ -65,23 +68,26 @@ export const PROVIDER_CAPABILITIES: Record<BuiltinSessionProvider, Readonly<Prov
     exactResume: true,
     remoteControl: false,
     nativeChatUrl: false,
+    chatView: true,
     chatDeletion: false,
     externalDiscovery: false,
     syncedLaunch: false,
     authentication: "device-auth",
   },
   /* Command Code keeps its conversations as addressable transcripts and reopens one
-     by id, so exact resume is honest here. It publishes no lifecycle hook this app
-     can subscribe to, so turn state is not — its cards report liveness, not mood. */
+     by id, so exact resume is honest here. The same transcript shows whether a turn
+     is running or finished (not whether it waits on a question), so turn state is
+     read from it. */
   "command-code": {
     displayName: "Command Code",
     managedLaunch: true,
     freshWorkspace: true,
     webTerminal: true,
-    semanticStatus: false,
+    semanticStatus: true,
     exactResume: true,
     remoteControl: false,
     nativeChatUrl: false,
+    chatView: false, // its transcript format is not verified
     chatDeletion: false,
     externalDiscovery: false,
     syncedLaunch: false,
@@ -101,6 +107,7 @@ export const COMMAND_CAPABILITIES: Readonly<ProviderCapabilities> = {
   exactResume: false,
   remoteControl: false,
   nativeChatUrl: false,
+  chatView: false,
   chatDeletion: false,
   externalDiscovery: false,
   syncedLaunch: false,

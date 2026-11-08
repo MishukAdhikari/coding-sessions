@@ -10,7 +10,7 @@ export function sessionActivity(s: SessionInfo): SessionActivity {
   if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupWaitingForTrust) return "waiting";
   if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupInputReady) return "ready";
   if (s.status === "starting") return "starting";
-  if (!capabilitiesFor(s.provider).semanticStatus || s.telemetryUnknown) return "connected";
+  if (!(s.turnState ?? capabilitiesFor(s.provider).semanticStatus) || s.telemetryUnknown) return "connected";
   if (s.asking) return "waiting";
   if (s.busy) return "running";
   if (s.waiting) return s.provider === "codex" && !s.turnComplete ? "ready" : "finished";

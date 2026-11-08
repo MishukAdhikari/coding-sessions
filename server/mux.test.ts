@@ -49,6 +49,26 @@ test("attach argv per holder; zmx joins only a listed session and never inherits
   expect(attachArgv({ name: "cs-a", backend: "screen" })).toEqual(["screen", "-x", "cs-a"]);
 });
 
+test("CS_MUX=herdr selects herdr only when its binary is found; otherwise selection is unchanged", () => {
+  const prev = process.env.CS_MUX;
+  try {
+    process.env.CS_MUX = "herdr";
+    expect(newSessionBackend("/z/zmx", "/h/herdr")).toBe("herdr");
+    expect(newSessionBackend("/z/zmx", null)).toBe("zmx");
+    expect(newSessionBackend(null, null)).toBe("screen");
+    delete process.env.CS_MUX;
+    expect(newSessionBackend("/z/zmx", "/h/herdr")).toBe("zmx");
+    process.env.CS_MUX = "screen";
+    expect(newSessionBackend("/z/zmx", "/h/herdr")).toBe("screen");
+  } finally { if (prev === undefined) delete process.env.CS_MUX; else process.env.CS_MUX = prev; }
+});
+
+test("a herdr session without a live terminal can't be joined, whether or not herdr is installed", () => {
+  const argv = attachArgv({ name: "cs-a", backend: "herdr" });
+  expect(argv.slice(0, 2)).toEqual(["sh", "-c"]);
+  expect(argv[2]).toContain("exit 1");
+});
+
 test("CS_MUX=screen forces the legacy holder for new sessions", () => {
   const prev = process.env.CS_MUX;
   process.env.CS_MUX = "screen";

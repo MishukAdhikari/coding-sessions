@@ -8,18 +8,19 @@ usage() {
 Usage: sudo ./deploy/install-ubuntu --instance NAME --origin https://HOST --port PORT
        (--bun /path/to/reviewed/linux/bun | --bun-version VERSION --bun-sha256 SHA256)
        [--source /path/to/reviewed/checkout] [--daily-updates] [--codex-hooks]
-       [--install-nginx] [--no-start] [--check]
+       [--install-nginx] [--no-start] [--check] [--herdr]
 
 Ubuntu 22.04/24.04/26.04, Debian 12/13. Creates a dedicated cs-NAME user; existing unmanaged users,
 units, state or Codex policies are never taken over. --check validates inputs and
 reports paths without writes. --no-start stages units for offline validation.
+--herdr is opt-in: it installs pinned herdr 0.9.5 and selects it for new sessions.
 Provider CLIs and authentication are separate operator steps. No sudo grant is
 made to the service account. Nginx is opt-in; HTTPS must be provisioned afterward.
 USAGE
 }
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 instance='' origin='' port='' bun_path='' bun_version='' bun_sha256=''
-daily=0 hooks=0 nginx=0 start=1 check=0
+daily=0 hooks=0 nginx=0 start=1 check=0 herdr=0
 while (($#)); do
   case "$1" in
     --instance|--origin|--port|--bun|--bun-version|--bun-sha256|--source)
@@ -32,6 +33,7 @@ while (($#)); do
       shift 2;;
     --daily-updates) daily=1; shift;; --codex-hooks) hooks=1; shift;;
     --install-nginx) nginx=1; shift;; --no-start) start=0; shift;; --check) check=1; shift;;
+    --herdr) herdr=1; shift;;
     --help|-h) usage; exit 0;; *) fail "unknown option: $1";;
   esac
 done
@@ -154,6 +156,18 @@ if ! ttyd_ok "$ttyd_have"; then
     rm -f "$ttyd_tmp"
   fi
 fi
+# Opt-in herdr multiplexer: pinned upstream build, checked against its digest.
+if ((herdr)) && [[ $(/usr/local/bin/herdr --version 2>/dev/null || true) != 'herdr 0.9.5' ]]; then
+  case $bun_arch in
+    x64) herdr_file=herdr-linux-x86_64 herdr_sum=14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d;;
+    *) herdr_file=herdr-linux-aarch64 herdr_sum=17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c;;
+  esac
+  herdr_tmp=$(mktemp)
+  curl --fail --location --proto '=https' --tlsv1.2 -o "$herdr_tmp" "https://github.com/herdrdev/herdr/releases/download/v0.9.5/$herdr_file"
+  printf '%s  %s\n' "$herdr_sum" "$herdr_tmp" | sha256sum --check --status || { rm -f "$herdr_tmp"; fail 'herdr checksum mismatch'; }
+  install -o root -g root -m 0755 "$herdr_tmp" /usr/local/bin/herdr
+  rm -f "$herdr_tmp"
+fi
 if ((nginx)); then apt-get install -y nginx certbot python3-certbot-nginx; fi
 stage=$(mktemp -d /tmp/cs-install.XXXXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
@@ -214,6 +228,8 @@ done
 if [[ ! -e $instance_home/.screenrc ]]; then
   printf 'termcapinfo xterm*|xterms|xs|rxvt ti@:te@\ndefscrollback 10000\ndefutf8 on\n' | runuser -u "$service_user" -- tee "$instance_home/.screenrc" >/dev/null
 fi
+mux=screen
+((herdr)) && mux=herdr
 if [[ ! -e $config_root/$instance.env ]]; then
   cat > "$config_root/$instance.env" <<ENV
 HOME=$instance_home
@@ -227,7 +243,7 @@ SCREENDIR=$instance_home/run/screen
 CS_AGENT_PERMISSIONS=standard
 CS_CHILD_ENV=filtered
 CS_TRUST_PROXY=1
-CS_MUX=screen
+CS_MUX=$mux
 CS_CLI_UPDATE_TIMER=coding-sessions-update@$instance.timer
 CS_CLI_UPDATE_SERVICE=coding-sessions-update@$instance.service
 CS_CLI_UPDATE_CONTROL=0
@@ -240,6 +256,7 @@ else
   chmod 0600 "$config_root/$instance.env"
   grep -qx "ORIGIN=$origin" "$config_root/$instance.env" && grep -qx "PORT=$port" "$config_root/$instance.env" || fail 'existing origin or port differs; edit instance configuration deliberately, then rerun'
   grep -q '^CS_APP_UPDATE_STATUS=' "$config_root/$instance.env" || printf 'CS_APP_UPDATE_STATUS=/var/lib/coding-sessions/app-updates/%s.json\nCS_APP_UPDATE_CHANNEL=releases\n' "$instance" >> "$config_root/$instance.env"
+  if ((herdr)); then printf 'herdr installed; to use it for new sessions set CS_MUX=herdr in %s and restart coding-sessions@%s\n' "$config_root/$instance.env" "$instance"; fi
 fi
 for unit in coding-sessions@.service coding-sessions-update@.service coding-sessions-update@.timer coding-sessions-app-update@.service coding-sessions-app-update@.timer; do
   install -o root -g root -m 0644 "$source_dir/deploy/templates/$unit" /etc/systemd/system/

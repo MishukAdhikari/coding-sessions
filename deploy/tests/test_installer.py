@@ -46,6 +46,29 @@ class InstallerContractTests(unittest.TestCase):
         ], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_herdr_is_opt_in_pinned_and_checksummed(self):
+        result = self.check("--herdr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        usage = subprocess.run(["bash", str(ROOT / "deploy/install-ubuntu"), "--help"], capture_output=True, text=True)
+        self.assertIn("--herdr", usage.stdout)
+        installer = (ROOT / "deploy/install-ubuntu").read_text()
+        self.assertIn("herdr=0", installer)
+        self.assertIn("https://github.com/herdrdev/herdr/releases/download/v0.9.5/$herdr_file", installer)
+        self.assertIn("'herdr 0.9.5'", installer)
+        for asset, digest in [("herdr-linux-x86_64", "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d"),
+                              ("herdr-linux-aarch64", "17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c")]:
+            self.assertIn(f"herdr_file={asset} herdr_sum={digest}", installer)
+        self.assertIn('printf \'%s  %s\\n\' "$herdr_sum" "$herdr_tmp" | sha256sum --check --status', installer)
+        self.assertIn('install -o root -g root -m 0755 "$herdr_tmp" /usr/local/bin/herdr', installer)
+        self.assertIn("CS_MUX=$mux", installer)
+        self.assertNotIn("CS_MUX=screen", installer)
+
+    def test_setup_passes_herdr_through_to_the_installer(self):
+        cli = (ROOT / "deploy/coding-sessions").read_text()
+        self.assertIn("--herdr) HERDR=yes; shift ;;", cli)
+        self.assertIn("[[ ${HERDR:-no} = yes ]] && args+=(--herdr)", cli)
+        self.assertIn("--herdr                           opt-in: install pinned herdr", cli)
+
     def test_app_updater_picks_newest_stable_release_tag(self):
         result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"],
             input="v0.1.9\nv0.10.0\nv0.2.0\nv1.0.0-rc1\nnot-a-tag\nv0.9.12\n", capture_output=True, text=True)

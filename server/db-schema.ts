@@ -102,6 +102,12 @@ export function applyDatabaseSchema(database: Database): void {
   addColumn(database, "ALTER TABLE launches ADD COLUMN phase TEXT NOT NULL DEFAULT 'ready'");
   addColumn(database, "ALTER TABLE launches ADD COLUMN error_message TEXT");
   addColumn(database, "ALTER TABLE launches ADD COLUMN resume_archive_id INTEGER");
+  // Why a row left: 'ended' when the user ended it, 'vanished' when its screen was found gone
+  // (a reboot, or the agent exiting by itself). Older rows have no reason and are never
+  // resumed automatically. boot_resume_at is set when the after-boot pass tried the row, so
+  // it is tried once (see server/boot-resume.ts).
+  addColumn(database, "ALTER TABLE archive ADD COLUMN end_reason TEXT");
+  addColumn(database, "ALTER TABLE archive ADD COLUMN boot_resume_at INTEGER");
 
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS launches_launch_id_idx ON launches (launch_id);

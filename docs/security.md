@@ -18,7 +18,15 @@ Terminate HTTPS at a trusted reverse proxy and keep the application listener ina
 {"active":false,"working":0,"waiting":0,"terminals":0,"last_activity_at":"2026-11-05T11:32:49.205Z","idle_seconds":120}
 ```
 
+`CS_RESUME_AFTER_BOOT=1` (off by default) resumes sessions after the machine reboots, or after a sandbox wakes, which is the same thing to the server: the disk is kept and every running agent is gone. Right after the server starts it resumes each Claude, Codex and Command Code session that was running when the machine went down, under its own name, in its own folder, with the permissions the server is set to. Nobody has to open the app first, so agents start working again unattended; leave it off if that is not what you want. A session you ended stays ended, and so does one whose agent exited by itself while the machine and the service were up (the server checks every minute while this is on). A restart of the service alone resumes nothing, since sessions survive it. In a container the boot time is the host's, so a container restart ends sessions and does not resume them. A Codex session counts as resumed once Codex confirms the same conversation. Each session is tried once: one whose folder or conversation is gone stays in history, and the service log (`journalctl`) has a `boot resume:` line for every session it resumed or skipped. The boot time comes from `/proc/stat`, so on other systems the setting does nothing.
+
 Register a passkey after initial password sign-in. An MCP authorization is access to this instance, not permission to one isolated project. Review client consent and revoke unused CLI/OAuth access. Report suspected vulnerabilities privately using [SECURITY.md](../SECURITY.md).
+
+### Local control socket
+
+`CS_SOCKET=1` or `CS_SOCKET_PATH` (off by default) serves the MCP tools on a Unix socket with no sign-in ([details](socket.md)). The socket is 0600 in a 0700 folder owned by the service account, so the service account and root can use it, and no other local account can. It never listens on TCP.
+
+Enabling it gives every program running as the service account full operator control, with no token. That includes every agent in every Session: any of them can launch and end Sessions, type into another Session, answer its approval prompts with `press_keys`, and sign agent accounts in or out with `agent_auth`. Without the socket, an agent would need to tamper with the account's files to get the same reach, which the trust model above already allows. With it, a single line of JSON is enough, so a prompt-injected agent no longer has to work for it. The communicator's separation from the operator endpoint (see [Session communication](#session-communication)) does not hold for an instance with the socket on. Turn it on only where every agent the instance runs is trusted with operator control.
 
 ## Secret map
 
@@ -74,6 +82,14 @@ Detached sessions intentionally outlive web-service restarts. The unit therefore
 
 Do not add blanket namespace restrictions or executable-memory denial without testing provider sandboxes and JIT runtimes. Do not relax filesystem ownership, grant sudo, or expose privileged daemon sockets merely to make a failing workflow work. Systemd options can affect descendants and must be tested on both supported Ubuntu releases. [Systemd execution settings](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html)
 
+### herdr backend
+
+With `CS_MUX=herdr`, the app runs its own herdr session and talks to it over herdr's Unix socket (`~/.config/herdr/sessions/coding-sessions/herdr.sock`, mode 0600). herdr opens no TCP port. Each launch's environment, including stored secrets and communicator tokens, goes in the socket request and reaches only that pane's process. It is never passed as `--env KEY=VALUE`, where `ps` would show it. The herdr server itself starts with a minimal environment, so panes get their variables from the launch alone. herdr also sets `HERDR_SOCKET_PATH` in every pane, so an agent can use herdr's API to read or type into the other sessions and to start panes. That is the same reach `zmx send` and `screen -X` already give any process of the service account; it is not a new boundary, but it is advertised.
+
+The app writes its herdr config (`herdr.toml` under `CS_RUNTIME_DIR`) and passes it to every herdr process it runs. That config turns off herdr's background version and agent-manifest checks against herdr.dev, and its own agent restore. It also moves herdr's prefix key off ctrl+b, which agents use. Pane screen history stays off, herdr's default.
+
+herdr saves each pane's launch command, not its environment, in `session.json` and in up to 48 `session-snapshots/` files under `~/.config/herdr/sessions/coding-sessions/`. That includes past sessions' repository, paths and agent arguments. Treat that directory as private session data. After a herdr restart, herdr restores those panes as plain shells. The app does not count them as sessions and closes them on its next launch.
+
 ## Optional claude.ai browser integration
 
 The separate chat-management browser login requires an explicit `CAI_EMAIL` and a provisioned Playwright Chromium/Xvfb runtime. The standard installer does not install that optional browser stack. The email is passed only to the login process; no personal account is assumed. Its persistent browser profile is sensitive account state, separate from Claude Code authentication.
@@ -89,7 +105,13 @@ The built-in communicator has a separate credential audience and five mailbox to
 
 Messages are stored in the private application database for 30 days. They are not encrypted separately from that database and may contain source code or sensitive text. Treat database backups accordingly. Message attribution is not authorization: a peer cannot grant additional task scope or override provider approvals. No messages are injected into terminal input or approval dialogs.
 
-These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
+These controls prevent accidental use of the administrative connector and cross-mailbox reads through the communicator API. The [local control socket](#local-control-socket), when enabled, gives agents the administrative tools directly. They do not isolate malicious programs sharing the Unix account: such programs may access other process environments or account-owned files. Use separate Unix accounts/instances or VMs for mutually untrusted agents.
+
+## Chat view
+
+The chat view (`chat.html`, "Open chat" on a running session) reads the agent's own transcript and needs the same sign-in as the rest of the app. `GET /api/sessions/:id/transcript` takes only a managed session id (`m:cs-…`) and a byte cursor. The file is chosen from that session's own records and nothing else: for Codex, the conversation UUID its SessionStart hook reported, matched against the rollout's `session_meta` under `~/.codex/sessions` (or a `CODEX_HOME` forwarded to sessions); for Claude Code, the transcript id stored on its launch, under `~/.claude/projects`. The real path must stay inside that folder, so a symlink out of it is refused. Responses are not cached and are bounded: 200 messages, 8,000 characters each, and lines over 1 MiB (large tool output) are skipped. Tool output and reasoning are never sent. Command Code and registered Commands have no chat view, because their transcript formats are not verified.
+
+`POST /api/sessions/:id/message` types the reply into the session through the same path as the MCP `send_message` tool (`zmx send`, or `screen -X stuff` for older sessions). Like that tool, the reply text appears on that command's argument list for the moment it runs, so don't paste secrets into the chat. The page sets all transcript text as plain text, never as HTML.
 
 ## Secrets for sessions
 

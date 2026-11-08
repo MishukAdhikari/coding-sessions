@@ -25,7 +25,7 @@ function harness(over: Partial<McpDeps> = {}) {
     providers: () => [
       { id: "claude", name: "Claude", remoteControl: true, turnState: true },
       { id: "codex", name: "Codex", remoteControl: false, turnState: true },
-      { id: "command-code", name: "Command Code", remoteControl: false, turnState: false },
+      { id: "command-code", name: "Command Code", remoteControl: false, turnState: true, asking: false },
     ],
     launch: async ({ name }) => ({ ok: true, id: `m:cs-${name}` }),
     end: async () => ({ ok: true }),
@@ -153,11 +153,30 @@ test("wait_for_session times out while working", async () => {
 test("wait_for_session without turn state waits for a still screen", async () => {
   let n = 0;
   const { deps } = harness({
-    listSessions: async () => [session({ provider: "command-code", waiting: false })],
+    listSessions: async () => [session({ provider: "cmd:custom", waiting: false })],
     readScreen: async () => ({ ok: true, value: n++ < 3 ? `busy ${n}` : "idle" }),
   });
   const r = await call(deps, "wait_for_session", { session_id: "m:cs-demo", timeout_seconds: 60 });
   expect(r.structuredContent).toMatchObject({ state: "running", timed_out: false, screen: "idle" });
+});
+
+test("wait_for_session hands back a working agent that cannot report a question once its screen is still", async () => {
+  let n = 0;
+  const { deps } = harness({
+    listSessions: async () => [session({ provider: "command-code", busy: true, waiting: false })],
+    readScreen: async () => ({ ok: true, value: n++ < 3 ? `busy ${n}` : "Allow shell_command? (y/n)" }),
+  });
+  const r = await call(deps, "wait_for_session", { session_id: "m:cs-demo", timeout_seconds: 60 });
+  expect(r.structuredContent).toMatchObject({ state: "working", timed_out: false, screen: "Allow shell_command? (y/n)" });
+});
+
+test("wait_for_session keeps waiting on a working agent that does report questions", async () => {
+  const { deps } = harness({
+    listSessions: async () => [session({ provider: "codex", busy: true, waiting: false })],
+    readScreen: async () => ({ ok: true, value: "still" }),
+  });
+  const r = await call(deps, "wait_for_session", { session_id: "m:cs-demo", timeout_seconds: 20 });
+  expect(r.structuredContent).toMatchObject({ state: "working", timed_out: true });
 });
 
 test("wait_for_session returns at once when the session is gone", async () => {

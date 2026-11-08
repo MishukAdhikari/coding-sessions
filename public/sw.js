@@ -1,5 +1,5 @@
 /* Coding Sessions — service worker: network-first app shell, offline fallback */
-const CACHE = "xs-v80";
+const CACHE = "xs-v81";
 const ASSETS = [
   "/",
   "/app.css",
@@ -15,6 +15,8 @@ const ASSETS = [
   "/app.js",
   "/term.html",
   "/term.js",
+  "/chat.html",
+  "/chat.js",
   "/icon.svg",
   "/apple-touch-icon.png",
   "/manifest.webmanifest",

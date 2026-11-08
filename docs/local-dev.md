@@ -37,7 +37,7 @@ Leave secure cookies enabled for HTTPS. Passkeys are bound to the relying-party 
 
 ## Sessions and providers
 
-Install `ttyd` and GNU screen before starting the server; executable locations can be resolved at startup. On macOS, `brew install ttyd screen` supplies these dependencies. Authenticate provider CLIs under the same account that runs the app, using disposable credentials when testing destructive authentication actions.
+Install `ttyd` and GNU screen before starting the server; executable locations can be resolved at startup. On macOS, `brew install ttyd screen` supplies these dependencies. To try the herdr backend, put a herdr release binary on `PATH` (or in `~/.local/bin`) and start with `CS_MUX=herdr`; the app starts its own `coding-sessions` herdr session. Authenticate provider CLIs under the same account that runs the app, using disposable credentials when testing destructive authentication actions.
 
 Workspaces live under the running account's `~/workspaces`. There is no built-in personal project or default GitHub repository: add projects yourself, or configure `CS_DEFAULT_REPO=owner/repository`. Standard launches retain trust and approval prompts. `CS_CHILD_ENV=filtered` forwards a small operational environment, not every variable in your shell. Use explicit provider credentials rather than turning on `inherit` to hide a test failure.
 

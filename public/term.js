@@ -19,11 +19,11 @@
 
   $("term-name").textContent = name;
 
-  // ⇞ enters screen's copy mode (Ctrl-A [) by default. A zmx session has no
-  // copy mode — its scrollback reaches the browser as-is, and Claude's
+  // ⇞ enters screen's copy mode (Ctrl-A [) by default. zmx and herdr sessions have
+  // no copy mode — their scrollback reaches the browser as-is, and Claude's
   // fullscreen view scrolls itself — so there the key sends Page Up instead;
   // Ctrl-A [ would type a literal "[" into the prompt.
-  if (params.get("mux") === "zmx") {
+  if (params.get("mux") === "zmx" || params.get("mux") === "herdr") {
     const scrollKey = keys.querySelector(".key-scroll");
     if (scrollKey) {
       scrollKey.dataset.seq = "\x1b[5~";

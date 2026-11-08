@@ -17,6 +17,10 @@ test("every preset is listed once and unknown ids are refused", () => {
   expect(findPreset(undefined)).toBeNull();
 });
 
+test("only Kimi Code reads turn state; the other presets report liveness", () => {
+  expect(AGENT_PRESETS.filter(p => p.turnState).map(p => p.id)).toEqual(["kimi"]);
+});
+
 test("the no-prompt option is added only in unrestricted mode", () => {
   const expected: Record<AgentPresetId, string[]> = {
     gemini: ["--approval-mode=yolo", "--skip-trust"], kimi: ["--auto"], qwen: ["--approval-mode", "yolo"], opencode: ["--auto"],

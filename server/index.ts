@@ -20,6 +20,7 @@ import { githubStatus, saveGithubToken, removeGithubAuth } from "./github-auth";
 import { validateProjectPath } from "./project-path";
 import { hostStats } from "./host-stats";
 import { clearCommandToken, createCommand, deleteCommand, findCommand, listCommands, listPresets, setCommandToken } from "./commands";
+import { presetReadsTurnState } from "./agent-presets";
 import { clearCommandCodeToken, hasCommandCodeToken, preflightCommandCode, setCommandCodeToken } from "./command-code";
 import { fetchBranches, fetchPull, parsePullRef, parseRepoRef } from "./repo-refs";
 import * as oauth from "./oauth";
@@ -32,6 +33,8 @@ import { handleConnectorsRoute } from "./connectors-route";
 import { ConnectorOAuth } from "./connector-oauth";
 import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
+import { defaultTranscriptRoots } from "./transcript";
+import { handleTranscriptRoute } from "./transcript-route";
 import { cliUpdates } from "./cli-updates";
 import { consumeSetupToken } from "./setup-token";
 import { INSTALLABLE_AGENTS, createAgentInstaller } from "./agent-installs";
@@ -48,6 +51,8 @@ import { handleSecretsRoute } from "./secrets-route";
 import { secretStore } from "./secret-store";
 import { recordAccountLogin } from "./account-history";
 import { countActivity, createActivitySignal, handleActivityRequest } from "./activity-signal";
+import { readBootTime, runBootResume } from "./boot-resume";
+import { startControlSocket } from "./control-socket";
 
 const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
@@ -57,6 +62,7 @@ const stepUpGrants = createStepUpGrants();
 const cliLogins = createCliLogins();
 const agentInstaller = createAgentInstaller({ onFinished: () => { void cliUpdates.versions(true); } });
 const COOKIE_NAME = "xs_auth";
+const transcriptRoots = defaultTranscriptRoots();
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 
 loadTokenKey(); // Reject a missing/malformed configured encryption key before serving requests.
@@ -146,8 +152,10 @@ const mcpDeps: McpDeps = {
       name: PROVIDER_CAPABILITIES[id].displayName,
       remoteControl: PROVIDER_CAPABILITIES[id].remoteControl,
       turnState: PROVIDER_CAPABILITIES[id].semanticStatus,
+      // Command Code's transcript shows working/finished but never a pending question.
+      ...(id === "command-code" ? { asking: false } : {}),
     })),
-    ...listCommands().map((c) => ({ id: commandProviderId(c.slug), name: c.label, remoteControl: false, turnState: false })),
+    ...listCommands().map((c) => ({ id: commandProviderId(c.slug), name: c.label, remoteControl: false, turnState: presetReadsTurnState(c.preset) })),
   ],
   async launch({ name, provider, projectId, repo, remoteControl }) {
     const options = launchOptionsFromRequest({ provider, remoteControl: PROVIDER_CAPABILITIES[provider as keyof typeof PROVIDER_CAPABILITIES]?.remoteControl ? remoteControl : false });
@@ -570,6 +578,9 @@ const server = Bun.serve({
       return json({ sessions: await listSessions(), archived: listArchive(), host: hostStats() });
     }
 
+    const transcriptResponse = await handleTranscriptRoute(req, { database: db, roots: transcriptRoots, sendText: sessionIo.sendText });
+    if (transcriptResponse) return transcriptResponse;
+
     if (path === "/api/archive/clear" && method === "POST") {
       return json(clearArchive());
     }
@@ -816,7 +827,22 @@ if (config.activityPort !== null) {
   console.log(`activity signal on http://127.0.0.1:${config.activityPort}/activity`);
 }
 
+// The MCP tools over a private Unix socket, for scripts and agents on this machine (docs/socket.md).
+if (config.socketPath) {
+  startControlSocket({ path: config.socketPath, deps: mcpDeps });
+  console.log(`control socket at ${config.socketPath}`);
+}
+
 console.log(`coding-sessions listening on http://${config.listenHost.includes(":") ? `[${config.listenHost}]` : config.listenHost}:${server.port} (rpID: ${auth.RP_ID})`);
+
+// After the listener is up, so resumed agents can reach the communicator; never awaited.
+if (config.resumeAfterBoot) {
+  void runBootResume({ database: db, bootTime: readBootTime(), listSessions, resumeArchived, log: line => console.log(line) })
+    .catch(error => console.error(`boot resume failed: ${(error as Error).message}`));
+  // Record an agent that exits by itself soon after it does, so its archive row predates the
+  // next boot and that boot leaves it ended, even when nobody has the app open.
+  setInterval(() => { void listSessions().catch(() => {}); }, 60_000).unref();
+}
 
 // Live agents survive service restarts; retain their credentials until their launch ends.
 setInterval(() => {

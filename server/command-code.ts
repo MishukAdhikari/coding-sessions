@@ -4,20 +4,22 @@
  * What this agent can and cannot deliver is decided by two facts about its CLI.
  * It persists every conversation as `~/.commandcode/projects/<munged-cwd>/<uuid>.jsonl`
  * and will reopen one by id, so exact resume is real here — unlike a registered
- * Command, which has no portable resume contract and honestly declines. It ships
- * no lifecycle hook this app can subscribe to, so turn state is not real here —
- * liveness and CPU are the only honest signals, and `semanticStatus` says so.
+ * Command, which has no portable resume contract and honestly declines. The same
+ * transcript says whether a turn is running or finished (`commandCodeTurnState`),
+ * so turn state is read from it rather than guessed from CPU.
  *
  * Everything below builds an argv, never a shell string, and the credential is
  * handed over through the environment: `/proc/<pid>/cmdline` is world-readable.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, normalize } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import type { Database } from "bun:sqlite";
 import { db } from "./db";
 import { childEnvironment } from "./child-env";
 import { sealSecret, openSecret, type SecretCodec } from "./secrets";
+import { STALE_ACTIVITY_MS } from "./codex-state";
+import type { TurnState } from "./turn-state";
 
 export const MINIMUM_COMMAND_CODE_VERSION = [1, 28, 0] as const;
 export const COMMAND_CODE_PREFLIGHT_COMMAND_TIMEOUT_MS = 8_000;
@@ -226,6 +228,33 @@ export function findCommandCodeTranscript(
 }
 
 /**
+ * Whether the agent has moved on from this conversation. `/clear` and `/new` give a
+ * running Command Code a fresh conversation id and a new transcript beside the old
+ * one, so a transcript in the same directory written after both this one and the
+ * launch means the pinned transcript no longer shows the current turn. Transcripts
+ * owned by other launches (`otherIds`) do not count.
+ */
+export function commandCodeTranscriptSuperseded(
+  transcriptPath: string,
+  launchedAtMs: number,
+  otherIds: ReadonlySet<string>,
+  fs: CommandCodeFsDependencies = defaultCommandCodeFs,
+): boolean {
+  const pinnedAt = fs.mtimeMs(transcriptPath);
+  if (pinnedAt == null) return false;
+  const dir = dirname(transcriptPath);
+  const pinned = basename(transcriptPath).toLowerCase();
+  for (const file of fs.listFiles(dir)) {
+    if (!file.toLowerCase().endsWith(".jsonl") || file.toLowerCase() === pinned) continue;
+    const id = normalizeCommandCodeSessionId(file.slice(0, -".jsonl".length));
+    if (!id || otherIds.has(id)) continue;
+    const at = fs.mtimeMs(join(dir, file));
+    if (at != null && at > pinnedAt && at >= launchedAtMs - 5_000) return true;
+  }
+  return false;
+}
+
+/**
  * The model a session is actually running, read from the last one its transcript
  * recorded. Vendor-qualified ids ("deepseek/deepseek-v4-pro") lose only the
  * routing prefix — this agent runs open models whose names are the useful half.
@@ -236,6 +265,40 @@ export function commandCodeModel(transcriptTail: string): string | null {
   if (!raw) return null;
   const trimmed = raw.slice(raw.lastIndexOf("/") + 1).trim();
   return trimmed || null;
+}
+
+/**
+ * What the last turn in a Command Code transcript is doing. Only `message` lines
+ * count; `session` and `model_change` records are skipped.
+ *   - assistant with no tool call → "done": the agent answered and stopped.
+ *   - assistant with a tool call, or a user line from the user, a steering message
+ *     or a tool result → "busy".
+ *   - a user line with no `meta.source` → "done": the agent's own "Error: …" note
+ *     (usage limit, sign-in) ends the turn.
+ * The agent writes a tool call together with its result, once the tool finishes, so
+ * a running tool, an approval prompt or a question it asked all read "busy" — never
+ * "asking". An interrupt writes nothing, so "busy" older than the staleness window,
+ * measured from that message's own timestamp, is "unknown".
+ */
+export function commandCodeTurnState(tailText: string, now = Date.now()): TurnState {
+  const lines = tailText.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    let record: any;
+    try { record = JSON.parse(line); } catch { continue; } // a truncated first line
+    if (record?.type !== "message") continue;
+    const message = record.message ?? {};
+    const content: any[] = Array.isArray(message.content) ? message.content : [];
+    let state: TurnState;
+    if (message.role === "assistant") state = content.some((part) => part?.type === "tool_use") ? "busy" : "done";
+    else if (message.role === "user") state = message.meta?.source ? "busy" : "done";
+    else return "unknown";
+    if (state === "done") return state;
+    const at = Date.parse(record.timestamp);
+    return Number.isFinite(at) && now - at <= STALE_ACTIVITY_MS ? state : "unknown";
+  }
+  return "unknown";
 }
 
 /* ---------- credential ---------- */

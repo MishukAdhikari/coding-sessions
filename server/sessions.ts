@@ -17,13 +17,16 @@ import { lastTurnState, type TurnState } from "./turn-state";
 import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type CommandProvider, type SessionProvider } from "./session-provider";
 import { commandEnv, findCommand, resolveBin, type CustomCommand } from "./commands";
 import { sessionSecretEnv } from "./secret-store";
-import { findPreset, presetLaunch } from "./agent-presets";
+import { findPreset, presetLaunch, presetReadsTurnState } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
 import { codexActivity, isCodexSessionId } from "./codex-state";
+import { findKimiWire, kimiTurnState } from "./kimi-state";
 import {
   buildCommandCodeInvocation,
   commandCodeEnv,
   commandCodeModel,
+  commandCodeTranscriptSuperseded,
+  commandCodeTurnState,
   findCommandCodeSessionId,
   findCommandCodeTranscript,
   isCommandCodeProc,
@@ -72,6 +75,7 @@ export interface SessionInfo {
   startupInputReady?: boolean; // Live input evidence; SessionStart still owns conversation readiness.
   startupWaitingForTrust?: boolean; // A live pre-hook Codex TUI needs a folder-trust decision.
   turnComplete?: boolean; // Codex Stop, distinct from its initial SessionStart readiness
+  turnState?: boolean;     // A Command whose preset reads turn state (capabilities cover the built-ins)
   claudeUrl: string | null;
   remoteControl: boolean;  // launched with --remote-control → drivable from the Claude app
   resumeId: string | null; // local id for `claude --resume <id>` in a terminal
@@ -250,6 +254,30 @@ function commandCodeModelFor(pid: number, cwd: string | null, sessionId: string 
 
 const waitingCache = new Map<number, { at: number; state: TurnState }>();
 
+/** A turn-state read, cached ~4s per pid to keep the poll cheap. */
+function cachedTurnState(pid: number, read: () => TurnState): TurnState {
+  const cached = waitingCache.get(pid);
+  if (cached && Date.now() - cached.at < 4000) return cached.state;
+  const state = read();
+  waitingCache.set(pid, { at: Date.now(), state });
+  return state;
+}
+
+/**
+ * What a Command Code session's last turn is doing, from its own transcript (see
+ * commandCodeTurnState). No transcript yet — a session nobody has spoken to — is
+ * "unknown".
+ */
+function commandCodeTurnStateFor(pid: number, cwd: string | null, sessionId: string | null, launchedAt: number, otherIds: ReadonlySet<string>): TurnState {
+  return cachedTurnState(pid, () => {
+    const path = cwd && sessionId ? findCommandCodeTranscript(cwd, sessionId) : null;
+    // After /clear or /new the agent writes a new transcript; the pinned one is history.
+    if (!path || commandCodeTranscriptSuperseded(path, launchedAt, otherIds)) return "unknown";
+    const text = readTranscriptTail(path);
+    return text ? commandCodeTurnState(text) : "unknown";
+  });
+}
+
 /**
  * Classify what the session's last real turn is doing, by reading the transcript
  * tail (see turn-state.ts):
@@ -262,13 +290,32 @@ const waitingCache = new Map<number, { at: number; state: TurnState }>();
  * pid to keep the poll cheap.
  */
 function turnStateFor(pid: number, cwd: string | null, etimes: number): TurnState {
-  const c = waitingCache.get(pid);
-  if (c && Date.now() - c.at < 4000) return c.state;
-  const path = findTranscript(pid, cwd, etimes);
-  const text = path ? readTranscriptTail(path) : null;
-  const state: TurnState = text ? lastTurnState(text) : "unknown";
-  waitingCache.set(pid, { at: Date.now(), state });
-  return state;
+  return cachedTurnState(pid, () => {
+    const path = findTranscript(pid, cwd, etimes);
+    const text = path ? readTranscriptTail(path) : null;
+    return text ? lastTurnState(text) : "unknown";
+  });
+}
+
+/**
+ * What a Kimi Code session's last turn is doing, from the wire record of the session
+ * its process (or a child of it) holds — see kimi-state.ts.
+ */
+function kimiTurnStateFor(proc: Proc, procs: Proc[]): TurnState {
+  return cachedTurnState(proc.pid, () => {
+    const path = findKimiWire(selfAndDescendants(proc.pid, procs));
+    const text = path ? readTranscriptTail(path) : null;
+    return text ? kimiTurnState(text) : "unknown";
+  });
+}
+
+function selfAndDescendants(root: number, procs: Proc[]): Set<number> {
+  const pids = new Set([root]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const p of procs) if (pids.has(p.ppid) && !pids.has(p.pid)) { pids.add(p.pid); grew = true; }
+  }
+  return pids;
 }
 
 export interface Proc { pid: number; ppid: number; etimes: number; pcpu: number; args: string }
@@ -739,12 +786,16 @@ export function failScreenlessCodexLaunch(database: Database, row: LaunchRow): L
     : null;
 }
 
+/** Why a session left: the user ended it, or its screen was found gone. */
+export type ArchiveEndReason = "ended" | "vanished";
+
 /** Move a launch row into the archive. Safe to race — whoever deletes the row archives it. */
 export function archiveManagedLaunch(
   database: Database,
   row: LaunchRow,
   endedAt: number,
   claudeUrl?: string | null,
+  endReason: ArchiveEndReason = "vanished",
 ): boolean {
   const archive = database.transaction(() => {
     const codexState = rowProvider(row.provider) === "codex" && row.launch_id
@@ -753,7 +804,7 @@ export function archiveManagedLaunch(
       : null;
     const gone = database.query("DELETE FROM launches WHERE screen = ?").run(row.screen);
     if (gone.changes === 0) return false; // someone else already archived it
-    database.query("INSERT INTO archive (name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    database.query("INSERT INTO archive (name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
         row.name,
         row.project_path,
@@ -764,14 +815,15 @@ export function archiveManagedLaunch(
         endedAt,
         rowProvider(row.provider) === "codex" ? 0 : (row.remote_control ?? 1),
         rowProvider(row.provider),
+        endReason,
       );
     return true;
   });
   return archive();
 }
 
-function archiveRow(row: LaunchRow, claudeUrl?: string | null): void {
-  archiveManagedLaunch(db, row, Date.now(), claudeUrl);
+function archiveRow(row: LaunchRow, endReason: ArchiveEndReason, claudeUrl?: string | null): void {
+  archiveManagedLaunch(db, row, Date.now(), claudeUrl, endReason);
 }
 
 export interface Activity { active: boolean; busy: boolean; waiting: boolean; asking: boolean; telemetryUnknown: boolean }
@@ -787,6 +839,20 @@ export function resolveActivity(cpuHigh: boolean, st: TurnState): Activity {
   };
 }
 
+/**
+ * The cs-* session `proc` runs in: walk its parents up to a holder's root pid. Under herdr
+ * every pane is a child of one server, so holders are keyed by each pane's own root
+ * process, never by the server. Pure, for tests.
+ */
+export function holderScreenFor(proc: Proc, screens: Map<number, string>, byPid: Map<number, Proc>): string | null {
+  let cursor: Proc | undefined = proc;
+  for (let depth = 0; cursor && depth < 10; depth++) {
+    if (screens.has(cursor.pid)) return screens.get(cursor.pid)!;
+    cursor = byPid.get(cursor.ppid);
+  }
+  return null;
+}
+
 export async function listSessions(): Promise<SessionInfo[]> {
   const [procs, holders] = await Promise.all([listProcs(), mux.listAll()]);
   const screens = new Map<number, string>();
@@ -800,13 +866,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
   const claimedScreens = new Set<string>();
 
   for (const proc of claudeProcs) {
-    // Walk parents to find an owning cs-* session root
-    let screenName: string | null = null;
-    let cursor: Proc | undefined = proc;
-    for (let depth = 0; cursor && depth < 10; depth++) {
-      if (screens.has(cursor.pid)) { screenName = screens.get(cursor.pid)!; break; }
-      cursor = byPid.get(cursor.ppid);
-    }
+    const screenName = holderScreenFor(proc, screens, byPid);
 
     // Outside a cs-* screen, only a remote-controlled claude counts as an
     // External Session. Without that guard every ordinary `claude` the user
@@ -920,7 +980,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
     if (mayObserveStartup && launch.launch_id && holder
       && !db.query("SELECT 1 FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id)) {
       observation = await startupProbe(launch.launch_id, proc.pid, {
-        backend: holder.backend, screen: launch.screen, zmxBin: mux.ZMX_BIN,
+        backend: holder.backend, screen: launch.screen, zmxBin: mux.ZMX_BIN, paneId: holder.paneId,
       }, DB_PATH);
     }
     const startup = reconcileCodexStartup(db, launch, observation);
@@ -968,10 +1028,10 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
   // Command Code is managed-only like Codex, but hookless: persisted ownership picks
   // the screen, process ancestry proves the agent is live, and the conversation id is
-  // recovered from the meta file the agent writes for itself at startup. Without a
-  // hook there is no turn state to report, so the card carries liveness and CPU and
-  // never guesses at "working" or "needs you".
+  // recovered from the meta file the agent writes for itself at startup. Turn state
+  // comes from that conversation's transcript, never from CPU.
   const commandCodeLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider = 'command-code'`).all() as LaunchRow[];
+  const commandCodeIds = new Set(commandCodeLaunches.map(row => row.resume_id?.toLowerCase()).filter((id): id is string => !!id));
   for (const launch of commandCodeLaunches) {
     const screenEntry = [...screens.entries()].find(([, name]) => name === launch.screen);
     if (!screenEntry) continue;
@@ -985,7 +1045,8 @@ export async function listSessions(): Promise<SessionInfo[]> {
       db.query("UPDATE launches SET resume_id = ? WHERE screen = ? AND provider = 'command-code'")
         .run(resumeId, launch.screen);
     }
-    const cpuHigh = proc.pcpu >= ACTIVE_CPU_PCT;
+    const otherIds = new Set([...commandCodeIds].filter(id => id !== resumeId?.toLowerCase()));
+    const act = resolveActivity(proc.pcpu >= ACTIVE_CPU_PCT, commandCodeTurnStateFor(proc.pid, project, resumeId, launch.created_at, otherIds));
     sessions.push({
       id: `m:${launch.screen}`,
       kind: "managed",
@@ -1001,11 +1062,11 @@ export async function listSessions(): Promise<SessionInfo[]> {
       pid: proc.pid,
       uptimeSec: proc.etimes,
       cpu: proc.pcpu,
-      active: cpuHigh,
-      busy: cpuHigh,
-      waiting: false,
-      asking: false,
-      telemetryUnknown: false,
+      active: act.active,
+      busy: act.busy,
+      waiting: act.waiting,
+      asking: act.asking,
+      telemetryUnknown: act.telemetryUnknown,
       claudeUrl: null,
       remoteControl: false,
       resumeId,
@@ -1015,8 +1076,9 @@ export async function listSessions(): Promise<SessionInfo[]> {
   }
 
   // Registered Commands are managed-only, like Codex: persisted ownership picks the
-  // screen, process ancestry proves the agent is live. No hooks, so no turn state —
-  // liveness and CPU are the only honest signals (plan R6).
+  // screen, process ancestry proves the agent is live. Turn state only for a preset
+  // whose own session record this app reads (Kimi Code); every other Command reports
+  // liveness, never a guess from CPU.
   const commandLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider LIKE 'cmd:%'`).all() as LaunchRow[];
   for (const launch of commandLaunches) {
     const provider = rowProvider(launch.provider);
@@ -1028,6 +1090,11 @@ export async function listSessions(): Promise<SessionInfo[]> {
     const slug = commandSlug(provider);
     const definition = slug ? findCommand(slug) : null;
     const project = procCwd(proc.pid) ?? launch.project_path;
+    const turnState = presetReadsTurnState(definition?.preset);
+    const cpuHigh = proc.pcpu >= ACTIVE_CPU_PCT;
+    const act = turnState
+      ? resolveActivity(cpuHigh, kimiTurnStateFor(proc, procs))
+      : { active: cpuHigh, busy: cpuHigh, waiting: false, asking: false, telemetryUnknown: false };
     sessions.push({
       id: `m:${launch.screen}`,
       kind: "managed",
@@ -1043,11 +1110,12 @@ export async function listSessions(): Promise<SessionInfo[]> {
       pid: proc.pid,
       uptimeSec: proc.etimes,
       cpu: proc.pcpu,
-      active: proc.pcpu >= ACTIVE_CPU_PCT,
-      busy: proc.pcpu >= ACTIVE_CPU_PCT,
-      waiting: false,
-      asking: false,
-      telemetryUnknown: false,
+      active: act.active,
+      busy: act.busy,
+      waiting: act.waiting,
+      asking: act.asking,
+      telemetryUnknown: act.telemetryUnknown,
+      turnState,
       claudeUrl: null,
       remoteControl: false,
       resumeId: null,
@@ -1141,7 +1209,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       });
       continue;
     }
-    archiveRow(row);
+    archiveRow(row, "vanished");
   }
 
   const livePids = new Set(sessions.map((s) => s.pid).filter(Boolean));
@@ -1345,6 +1413,10 @@ export interface ManagedCodexRuntime {
   dbPath: string;
   preflight: () => ReturnType<typeof preflightCodex>;
   execute: (command: string[], env?: Record<string, string>) => Promise<{ code: number; out: string; err: string }>;
+  /** herdr has no argv form for a launch: it goes through mux.spawn, env over the socket. */
+  spawn?: typeof mux.spawn;
+  /** Backend for this launch; absent means mux.newSessionBackend(). */
+  backend?: () => mux.MuxBackend;
   uuid: () => string;
   now: () => number;
   connectors?: Pick<Connectors, "available" | "prepare" | "revoke">;
@@ -1420,7 +1492,12 @@ export async function startManagedCodex(
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
     const secrets = await runtime.secretEnv?.() ?? {};
-    result = await runtime.execute(mux.spawnArgv(mux.newSessionBackend(), options.screen, `${options.setupPrefix ?? ""}${command}`), { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken) });
+    const env = { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken) };
+    const inner = `${options.setupPrefix ?? ""}${command}`;
+    const backend = runtime.backend?.() ?? mux.newSessionBackend();
+    result = backend === "herdr"
+      ? await (runtime.spawn ?? mux.spawn)(options.screen, inner, { env, backend })
+      : await runtime.execute(mux.spawnArgv(backend, options.screen, inner), env);
   } catch { result = { code: 1, out: "", err: "Could not start Codex with its session communicator." }; }
   if (result.code !== 0) {
     launchCommunicator.revoke(launchId);
@@ -1765,7 +1842,7 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     if (pid && !force) await gracefulKill(pid);
     await mux.quit(screenName);
     const chatUrl = (pid ? urlCache.get(pid) : undefined) ?? launch?.claude_url ?? null;
-    if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, chatUrl);
+    if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, "ended", chatUrl);
     else if (launch) db.query("DELETE FROM launches WHERE screen = ?").run(screenName);
     if (deleteChat && provider === "claude") queueChatDeletion(chatUrl);
     if (deleteWorkspace && launch) {
@@ -1783,7 +1860,7 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     const target = procs.find((p) => p.pid === pid && isClaudeProc(p.args));
     if (!target) return { ok: false, error: "That session is already gone." };
     try { process.kill(pid, force ? "SIGKILL" : "SIGTERM"); } catch { return { ok: false, error: "Failed to signal process." }; }
-    db.query("INSERT INTO archive (name, project_path, claude_url, started_at, ended_at, provider) VALUES (?, ?, ?, ?, ?, 'claude')")
+    db.query("INSERT INTO archive (name, project_path, claude_url, started_at, ended_at, provider, end_reason) VALUES (?, ?, ?, ?, ?, 'claude', 'ended')")
       .run(extractRemoteControlName(target.args) ?? "unnamed", procCwd(pid), urlCache.get(pid) ?? null,
            Date.now() - target.etimes * 1000, Date.now());
     if (deleteChat) queueChatDeletion(urlCache.get(pid) ?? null);

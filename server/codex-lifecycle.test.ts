@@ -219,7 +219,9 @@ test("launch ownership exists before screen starts and advances only to awaiting
     resumeId,
   }, runtime)).toEqual({ ok: true });
   // Whichever holder this machine launches with, the session is `cs-demo` running `bash -lc`.
-  expect(screenCommand?.slice(0, -1)).toEqual(mux.spawnArgv(mux.newSessionBackend(), "cs-demo", "").slice(0, -1));
+  // herdr launches over its socket, so it has no command line to compare.
+  const backend = mux.newSessionBackend();
+  if (backend !== "herdr") expect(screenCommand?.slice(0, -1)).toEqual(mux.spawnArgv(backend, "cs-demo", "").slice(0, -1));
   expect(screenCommand?.at(-1)).toContain(`'resume' '${resumeId}'`);
   expect(screenCommand?.at(-1)).not.toContain("--last");
   expect(database.query("SELECT phase FROM launches WHERE screen = 'cs-demo'").get()).toEqual({
@@ -312,6 +314,29 @@ test("archiving Codex captures the hook-confirmed exact UUID and final model bef
   database.close();
 });
 
+test("the archive records whether the user ended a session or its screen vanished", () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  applyDatabaseSchema(database);
+  const insert = database.query(
+    "INSERT INTO launches (screen, name, project_path, created_at, provider, phase) VALUES (?, ?, '/srv/demo', 10, 'claude', 'ready')",
+  );
+  const launch = (screen: string) => database.query(
+    "SELECT screen, name, project_path, created_at, claude_url, resume_id, remote_control, provider, launch_id, phase, error_message, resume_archive_id " +
+    "FROM launches WHERE screen = ?",
+  ).get(screen) as LaunchRow;
+  insert.run("cs-gone", "gone");
+  insert.run("cs-ended", "ended");
+
+  expect(archiveManagedLaunch(database, launch("cs-gone"), 30)).toBe(true);
+  expect(archiveManagedLaunch(database, launch("cs-ended"), 40, null, "ended")).toBe(true);
+  expect(database.query("SELECT name, end_reason, boot_resume_at FROM archive ORDER BY id").all()).toEqual([
+    { name: "gone", end_reason: "vanished", boot_resume_at: null },
+    { name: "ended", end_reason: "ended", boot_resume_at: null },
+  ]);
+  database.close();
+});
+
 test("archiving a managed launch rolls back its deletion when history persistence fails", () => {
   const database = new Database(":memory:");
   applyDatabaseSchema(database);
@@ -383,4 +408,30 @@ test("only positive bound startup evidence can recover a legacy timeout failure"
     expect(reconcileCodexStartup(database, row(), "input").phase).toBe("failed");
     expect(reconcileCodexStartup(database, row(), "input").inputReady).toBe(false);
   } finally { database.close(); }
+});
+
+test("under herdr, Codex launches through mux.spawn with secrets in its env, never in the command", async () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  let seen: { screen: string; inner: string; opts: { env?: Record<string, string>; backend?: mux.MuxBackend } } | null = null;
+  const runtime: ManagedCodexRuntime = {
+    database,
+    dbPath: "/var/lib/coding-sessions/app.db",
+    preflight: async () => ({ ok: true, bin: "/usr/bin/codex", version: "0.166.0" }),
+    secretEnv: async () => ({ OPENAI_API_KEY: "stored-openai" }),
+    execute: async () => { throw new Error("herdr launches have no argv form"); },
+    backend: () => "herdr",
+    spawn: async (screen, inner, opts = {}) => { seen = { screen, inner, opts }; return { code: 0, out: "", err: "" }; },
+    uuid: () => launchId,
+    now: () => 2,
+  };
+  expect(await startManagedCodex({ screen: "cs-demo", name: "demo", projectPath: "/srv/demo" }, runtime)).toEqual({ ok: true });
+  expect(seen!.screen).toBe("cs-demo");
+  expect(seen!.opts.backend).toBe("herdr");
+  expect(seen!.opts.env!.OPENAI_API_KEY).toBe("stored-openai");
+  expect(seen!.opts.env!.CS_COMMUNICATOR_TOKEN).toStartWith("cscomm_");
+  expect(seen!.inner).not.toContain("stored-openai");
+  expect(seen!.inner).not.toContain(seen!.opts.env!.CS_COMMUNICATOR_TOKEN!);
+  expect(database.query("SELECT phase FROM launches WHERE screen = 'cs-demo'").get()).toEqual({ phase: "awaiting_session_start" });
+  database.close();
 });

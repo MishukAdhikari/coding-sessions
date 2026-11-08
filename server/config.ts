@@ -1,5 +1,5 @@
 import { readCsSetting } from "./environment";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { isIP } from "node:net";
 import { parseTrustedProxies } from "./http-security";
 
@@ -38,7 +38,19 @@ export function readConfig(env: Environment) {
   if (activityPort !== null && (!Number.isInteger(activityPort) || activityPort < 1 || activityPort > 65535 || activityPort === port)) {
     throw new Error("CS_ACTIVITY_PORT must be an integer from 1 to 65535, different from PORT.");
   }
-  return { port, listenHost, activityPort, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
+  // Opt-in: after a reboot, resume the sessions it killed (server/boot-resume.ts).
+  const resumeAfterBoot = readCsSetting(env, "CS_RESUME_AFTER_BOOT") === "1";
+  // Optional local control socket (server/control-socket.ts): a Unix socket, never TCP.
+  const socketSwitch = readCsSetting(env, "CS_SOCKET");
+  if (socketSwitch !== undefined && !["", "0", "1"].includes(socketSwitch)) throw new Error("CS_SOCKET must be 1 or 0.");
+  const socketValue = readCsSetting(env, "CS_SOCKET_PATH");
+  if (socketValue && !isAbsolute(socketValue)) throw new Error("CS_SOCKET_PATH must be an absolute path.");
+  const socketPath = socketValue ? resolve(socketValue) : socketSwitch === "1" ? join(resolve(dataDir), "cs.sock") : null;
+  // A Unix socket path must fit sun_path (104 bytes on macOS, 108 on Linux).
+  if (socketPath && Buffer.byteLength(socketPath) >= 100) {
+    throw new Error("The control socket path is too long (it must be under 100 bytes): set CS_SOCKET_PATH to a shorter path.");
+  }
+  return { port, listenHost, activityPort, resumeAfterBoot, socketPath, origin: origin.origin, rpId, cookieSecure, dataDir: resolve(dataDir),
     unrestrictedAgents: permissions === "unrestricted", repository, repoOwners, trustProxy: readCsSetting(env, "CS_TRUST_PROXY") === "1",
     trustedProxies: parseTrustedProxies(readCsSetting(env, "CS_TRUSTED_PROXIES")) };
 }
