@@ -22,6 +22,7 @@
   --action-hover: #173d9b;
   --action-tint: #e8eefb;
   --status-positive: #226447;
+  --pr-merged: #7a4cc2;
   --status-working: #925119;
   --status-danger: #b12c3e;
   --status-danger-tint: #fbe9eb;
@@ -83,6 +84,7 @@
   --action-text: #141b20;
   --action-tint: #253957;
   --status-positive: #8ed5b0;
+  --pr-merged: #c4a7f2;
   --status-working: #efbd86;
   --status-working-tint: #403326;
   --status-danger: #ff9da9;
@@ -111,6 +113,7 @@
   --action-text: #141b20;
   --action-tint: #253957;
   --status-positive: #8ed5b0;
+  --pr-merged: #c4a7f2;
   --status-working: #efbd86;
   --status-working-tint: #403326;
   --status-danger: #ff9da9;

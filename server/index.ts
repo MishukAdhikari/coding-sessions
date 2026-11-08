@@ -34,7 +34,8 @@ import { ConnectorOAuth } from "./connector-oauth";
 import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
 import { defaultTranscriptRoots, resolveTranscript } from "./transcript";
-import { createPrLinkTracker } from "./pr-links";
+import { createPrLinkTracker, type PrLink } from "./pr-links";
+import { createPrStatusCache, type PrStatus } from "./pr-status";
 import { handleTranscriptRoute } from "./transcript-route";
 import { cliUpdates } from "./cli-updates";
 import { consumeSetupToken } from "./setup-token";
@@ -65,16 +66,18 @@ const agentInstaller = createAgentInstaller({ onFinished: () => { void cliUpdate
 const COOKIE_NAME = "xs_auth";
 const transcriptRoots = defaultTranscriptRoots();
 const prLinks = createPrLinkTracker();
+const prStatus = createPrStatusCache();
 
 /** Each managed Claude Code or Codex session's PR links, read from its own transcript. */
-function withPrLinks<T extends { id: string; kind?: string; provider?: string }>(sessions: T[]): Array<T & { prs: ReturnType<typeof prLinks.linksFor> }> {
+function withPrLinks<T extends { id: string; kind?: string; provider?: string }>(sessions: T[]): Array<T & { prs: Array<PrLink & PrStatus> }> {
   const paths = new Set<string>();
   const out = sessions.map(session => {
     if (session.kind !== "managed" || (session.provider !== "claude" && session.provider !== "codex")) return { ...session, prs: [] };
     const resolved = resolveTranscript(db, session.id, transcriptRoots);
     const path = resolved.ok ? resolved.value.path : null;
     if (path) paths.add(path);
-    return { ...session, prs: prLinks.linksFor(path) };
+    // GitHub's state comes from the cache at once; a missing or old one refreshes in the background.
+    return { ...session, prs: prLinks.linksFor(path).map(link => ({ ...link, ...prStatus.get(link.url) })) };
   });
   prLinks.keepOnly(paths);
   return out;

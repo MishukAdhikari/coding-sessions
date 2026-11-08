@@ -109,6 +109,13 @@ test("fetchPull returns the head branch a fresh workspace should check out", asy
   expect(result.data.branch).toBe("fix/site-disk-monitoring");
   expect(result.data.crossRepo).toBe(false);
   expect(result.data.title).toBe("Fix the monitoring card");
+  expect(result.data.draft).toBe(false);
+});
+
+test("fetchPull reports a draft PR", async () => {
+  const payload = JSON.stringify({ number: 8, title: "WIP", headRefName: "wip", state: "OPEN", headRepositoryOwner: { login: "o" }, isCrossRepository: false, isDraft: true });
+  const result = await fetchPull(parsePullRef("o/r#8")!, ok(payload));
+  expect(result.ok && result.data.draft).toBe(true);
 });
 
 test("a fork PR is flagged, because its branch is not in the target repo", async () => {
