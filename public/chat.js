@@ -49,9 +49,15 @@
 
   /* ---------- polling ---------- */
 
+  // One poll at a time: two reading from the same cursor would append the same streamed text twice.
+  // A schedule asked for while a poll runs waits for it; the soonest one asked for wins.
+  let polling = false;
+  let pending = null;
   function schedule(ms) {
+    if (gone) return;
+    if (polling) { pending = pending === null ? ms : Math.min(pending, ms); return; }
     clearTimeout(timer);
-    if (!gone) timer = setTimeout(poll, ms);
+    timer = setTimeout(poll, ms);
   }
 
   function end(title, body, linkText) {
@@ -66,6 +72,19 @@
   }
 
   async function poll() {
+    if (polling) { pending = pending === null ? 0 : Math.min(pending, 0); return; }
+    clearTimeout(timer);
+    polling = true;
+    pending = null;
+    try { await pollOnce(); } finally {
+      polling = false;
+      const next = pending;
+      pending = null;
+      if (next !== null) schedule(next);
+    }
+  }
+
+  async function pollOnce() {
     const path = acp ? "acp" : "transcript";
     let res;
     try {

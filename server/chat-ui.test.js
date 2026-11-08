@@ -8,13 +8,15 @@ const page = read("chat.html");
 const scripts = ["chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
 
 /** The real chat page (its markup and its three scripts) against scripted server replies. */
-function harness({ responses = [], id = "m:cs-demo", query = "" } = {}) {
+function harness({ responses = [], id = "m:cs-demo", query = "", hold = false } = {}) {
   const document = loadBody(createDocument(), page);
   const timers = [];
   const requests = [];
+  const held = []; // with hold, each GET waits until release() answers it
   const fetch = async (url, options = {}) => {
     requests.push({ url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
     if (options.method === "POST") return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    if (hold) await new Promise((resolve) => held.push(resolve));
     const next = responses.shift() ?? { status: 200, body: { messages: [], cursor: 0, state: "unknown" } };
     return { ok: next.status >= 200 && next.status < 300, status: next.status, json: async () => next.body };
   };
@@ -37,7 +39,8 @@ function harness({ responses = [], id = "m:cs-demo", query = "" } = {}) {
     await t.fn();
     await settle();
   };
-  return { document, $, rows, timers, requests, tick };
+  const release = async () => { held.shift()?.(); await settle(); await settle(); };
+  return { document, $, rows, timers, requests, tick, release, held };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -279,4 +282,29 @@ test("starting and failed ACP sessions say so in the composer", async () => {
   expect(text(failed.$("chat-status-text"))).toBe("Failed");
   expect(failed.$("chat-input").disabled).toBe(true);
   expect(failed.rows().some((r) => r.className.includes("is-error") && text(r) === "codex-acp is not installed.")).toBe(true);
+});
+
+test("a poll asked for while one is still running waits for it, so streamed text is never added twice", async () => {
+  const h = harness({ query: "&mode=acp", hold: true, responses: [
+    acp("working", [ev(1, "user", { text: "go" }), up(2, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } })]),
+    acp("working", [up(3, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: " world" } })]),
+  ] });
+  await settle();
+  expect(h.held).toHaveLength(1); // the first poll is in flight
+  h.$("chat-stop").click(); // asks for a poll in 150 ms while the first one runs
+  await settle();
+  const gets = () => h.requests.filter((r) => r.method === "GET");
+  expect(gets()).toHaveLength(1); // no second poll started on the same cursor
+  await h.release();
+  expect(h.timers.filter((t) => t.live).at(-1).ms).toBe(150); // the soonest request wins once the poll ends
+  const next = h.tick();
+  await settle();
+  expect(gets()).toHaveLength(2);
+  expect(gets()[1].url).toContain("after=");
+  await h.release();
+  await next;
+  const all = h.rows().map(text).join("\n");
+  expect(all).toContain("Hello world");
+  expect(all.split("Hello").length - 1).toBe(1);
+  expect(all.split(" world").length - 1).toBe(1);
 });
