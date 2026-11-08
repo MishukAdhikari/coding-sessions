@@ -275,3 +275,22 @@ test("MCP never submits an initial prompt into trust, unknown startup, failed st
     expect(sent).toEqual([]);
   }
 });
+
+test("launch_session passes mode through: terminal by default, acp when asked", async () => {
+  const modes: unknown[] = [];
+  const { deps } = harness({ launch: async ({ name, mode }) => { modes.push(mode); return { ok: true, id: `m:cs-${name}` }; } });
+  await call(deps, "launch_session", { name: "a", project_id: 1 });
+  await call(deps, "launch_session", { name: "b", project_id: 1, mode: "acp" });
+  expect(modes).toEqual(["terminal", "acp"]);
+  expect((await call(deps, "launch_session", { name: "c", project_id: 1, mode: "chat" })).isError).toBe(true);
+});
+
+test("an ACP session's prompt goes out once its bridge is ready, with no screen to settle", async () => {
+  const { deps, sent } = harness({
+    listSessions: async () => [session({ mode: "acp", provider: "codex", status: "running", waiting: true, turnState: true })],
+    readScreen: async () => ({ ok: true, value: `changing ${Math.random()}` }),
+  });
+  const r = await call(deps, "launch_session", { name: "demo", project_id: 1, mode: "acp", prompt: "go" });
+  expect(r.structuredContent).toMatchObject({ prompt_sent: true });
+  expect(sent).toEqual([["m:cs-demo", "go", true]]);
+});

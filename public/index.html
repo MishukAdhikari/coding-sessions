@@ -12,7 +12,7 @@
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=47">
+<link rel="stylesheet" href="/app.css?v=48">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -140,6 +140,22 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         </label>
       </div>
       <p id="provider-capability-note" class="provider-note" aria-live="polite">Checking Codex support…</p>
+    </fieldset>
+    <fieldset id="launch-mode" class="mode-fieldset">
+      <legend class="label">Open as</legend>
+      <div class="mode-seg">
+        <label class="mode-opt">
+          <input type="radio" id="launch-mode-terminal" name="launch-mode" value="terminal" checked>
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.25 3.25h11.5v9.5H2.25z M4.75 6.25 6.75 8l-2 1.75 M8.5 10h2.75"/></svg>
+          <span>Terminal</span>
+        </label>
+        <label class="mode-opt">
+          <input type="radio" id="launch-mode-acp" name="launch-mode" value="acp" aria-describedby="launch-mode-note" disabled>
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.75 3.25h10.5v7.5H7.5l-3 2.5v-2.5H2.75z"/></svg>
+          <span>Chat <span class="mode-tag">ACP</span></span>
+        </label>
+      </div>
+      <p id="launch-mode-note" class="provider-note" aria-live="polite" hidden></p>
     </fieldset>
     <label class="label" for="input-name">Name</label>
     <input id="input-name" class="field" type="text" placeholder="e.g. billing-fix"
@@ -781,6 +797,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/connection-status.js?v=5"></script>
 <script src="/connectors.js?v=6"></script>
 <script src="/secrets.js?v=1"></script>
-<script src="/app.js?v=60"></script>
+<script src="/launch-mode.js?v=1"></script>
+<script src="/app.js?v=61"></script>
 </body>
 </html>

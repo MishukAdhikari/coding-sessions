@@ -24,7 +24,7 @@ Scripts and agents on the server itself can call the same tools without a token 
 | `wait_for_session` | Waits (≤ 90 s per call) until the agent stops working, asks, or the Session ends; returns the screen. |
 | `list_projects` | Project allowlist (by id) and the agents this server runs. |
 | `list_repos` | Repos a Fresh Launch can clone. |
-| `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, sends it once the agent is ready. If the agent is still starting when the call returns, `prompt_queued` is true and the server sends the prompt as soon as the agent is up. |
+| `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, sends it once the agent is ready. If the agent is still starting when the call returns, `prompt_queued` is true and the server sends the prompt as soon as the agent is up. `mode`: `terminal` (default) or `acp` for [Chat (ACP) mode](agents.md#chat-acp-mode), project launches only. |
 | `resume_session` | Reopen an archived conversation. |
 | `end_session` | End a Session (archives it); `delete_workspace` also removes its folder. |
 
@@ -37,6 +37,12 @@ never reports `asking` (its transcript can't show a pending question), so for a
 
 Only Managed Sessions (`m:cs-*`) can be read or typed into; an External Session has
 no holder to reach.
+
+A Chat (ACP) session always reports its turn state. `send_message` sends a prompt
+through its bridge instead of typing. While it is `asking` (a permission request is
+pending), `read_session` ends with the request and its options, and `send_message`
+with one option's name or id (for example `Allow once`) answers it; other text is
+refused with the list. `press_keys` is refused for chat sessions.
 
 ## Connect
 

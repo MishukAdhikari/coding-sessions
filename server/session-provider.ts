@@ -136,7 +136,7 @@ export function parseSessionProvider(value: unknown): SessionProvider | null {
 }
 
 export type LaunchOptionsResult =
-  | { ok: true; provider: SessionProvider; remoteControl: boolean }
+  | { ok: true; provider: SessionProvider; remoteControl: boolean; mode: "terminal" | "acp" }
   | { ok: false; error: string };
 
 /** Validate provider-specific launch options while preserving legacy Claude defaults. */
@@ -148,13 +148,24 @@ export function launchOptionsFromRequest(body: unknown): LaunchOptionsResult {
     return { ok: false, error: "Provider must be “claude”, “codex”, “command-code”, or a registered command." };
   }
 
+  // Chat (ACP) mode is opt-in per session; anything missing stays a terminal session.
+  const rawMode = request.mode;
+  if (rawMode !== undefined && rawMode !== null && rawMode !== "terminal" && rawMode !== "acp") {
+    return { ok: false, error: "Mode must be “terminal” or “acp”." };
+  }
+  const mode = rawMode === "acp" ? "acp" : "terminal";
+  if (mode === "acp") return { ok: true, provider, remoteControl: false, mode };
+
   if (!capabilitiesFor(provider).remoteControl) {
     const hasRemoteControl = Object.prototype.hasOwnProperty.call(request, "remoteControl");
     if (hasRemoteControl && request.remoteControl !== false) {
       return { ok: false, error: "Remote Control is only available for Claude sessions." };
     }
-    return { ok: true, provider, remoteControl: false };
+    return { ok: true, provider, remoteControl: false, mode };
   }
 
-  return { ok: true, provider, remoteControl: request.remoteControl !== false };
+  return { ok: true, provider, remoteControl: request.remoteControl !== false, mode };
 }
+
+/** Chat (ACP) mode runs in a registered project folder; fresh workspaces stay terminal-only for now. */
+export const ACP_WORKSPACE_ERROR = "Chat (ACP) mode is available for project launches. Pick a project, or start a terminal session for a fresh workspace.";

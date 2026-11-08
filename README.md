@@ -17,6 +17,7 @@ never sleeps. Drive them from your phone, your terminal, or another agent.
 - **Hand off a branch in one command.** `cs --server "fix the flaky checkout test"` sends your branch, uncommitted work included, to a session on the server.
 - **Answer from anywhere.** See which session is waiting on you, read its screen and reply from your phone.
 - **Chat instead of a terminal.** Open a Codex or Claude Code session as a chat: your prompts, its replies and its tool calls as messages, a reply box, and a banner when it's waiting on you. Menu-style approvals still open the terminal.
+- **Or start it as a chat.** Pick **Chat (ACP)** when you start a session and Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode or Kimi Code run over the [Agent Client Protocol](https://agentclientprotocol.com): streamed replies, tool calls with diffs, the agent's plan, and permission requests you answer with one tap. It survives restarts like any session. See [agents](docs/agents.md#chat-acp-mode).
 - **Let agents team up.** Ask a Claude session to get a second opinion from a Codex session. Sessions find and message each other over a built-in MCP, with no setup.
 - **Connect a tool once.** Sign in to an MCP server one time and every agent shares it.
 - **Bring more agents.** One-click presets add Gemini CLI, Kimi Code, Qwen Code and opencode, with the same built-in MCP. They're third-party tools; see [agents](docs/agents.md).

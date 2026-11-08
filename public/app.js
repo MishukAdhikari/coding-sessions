@@ -638,6 +638,9 @@
 
   const launchProviderInputs = () => [...document.querySelectorAll('input[name="provider"]')];
   const selectedLaunchProvider = () => document.querySelector('input[name="provider"]:checked')?.value || null;
+  // Terminal or Chat (ACP): launch-mode.js decides when Chat can be chosen.
+  const launchMode = window.LaunchMode.create(document, { load: () => api("/api/acp/agents"), onChange: () => updateProviderSelection() });
+  const launchIsWorkspace = () => !!(chosenRepo || $("input-repo").value.trim() || selectedProject === FRESH_DEFAULT);
 
   /* Registered Commands join the picker beside the built-ins. They are rebuilt from
      capabilities rather than hardcoded, so registering one in Settings is enough. */
@@ -687,8 +690,9 @@
     else note.textContent = "";
 
     const isCommand = isCommandProvider(provider);
+    const chatLaunch = launchMode.update({ provider, workspace: launchIsWorkspace() }) && launchMode.value() === "acp";
     const supportsRemoteControl = provider === "claude" && providerHas(provider, "remoteControl");
-    const hideRemoteControl = (!!provider && provider !== "claude") || (provider === "claude" && !supportsRemoteControl);
+    const hideRemoteControl = chatLaunch || (!!provider && provider !== "claude") || (provider === "claude" && !supportsRemoteControl);
     $("remote-control-row").hidden = hideRemoteControl;
     $("chk-remote-control").disabled = hideRemoteControl;
     const unavailable = isCommand
@@ -747,8 +751,10 @@
     renderPicker();
     $("chk-remote-control").checked = true; // remote control is the default every time
     for (const input of launchProviderInputs()) input.checked = false;
+    launchMode.reset();
     updateProviderAvailability();
     openSheet("sheet-new");
+    launchMode.refresh();
     const request = ++launchDrawerRequest;
     const current = () => request === launchDrawerRequest && openSheetEl?.id === "sheet-new";
     $("project-load-status").textContent = projects.length ? "Refreshing shared folders…" : "Loading shared folders…";
@@ -959,6 +965,7 @@
   $("input-repo").addEventListener("input", () => {
     const text = repoQuery();
     if (chosenRepo && text !== chosenRepo) clearRepo();
+    launchMode.update({ workspace: launchIsWorkspace() });
     if (PR_RE.test(text)) { resolvePullRequest(text); return; }
     setRepoNote("");
     renderRepoResults();
@@ -1004,13 +1011,16 @@
       more.addEventListener("click", () => { showSharedFolders = true; renderPicker(); renderRepoResults(); });
       picker.appendChild(more);
     }
+    launchMode.update({ workspace: launchIsWorkspace() });
   }
 
   // The two modes are reached in completely different ways — say which one the
   // Launch button is about to give you.
   function updateLaunchHint() {
     const provider = selectedLaunchProvider();
-    if (isCommandProvider(provider)) {
+    if (provider && launchMode.value() === "acp") {
+      $("launch-hint").textContent = `${providerName(provider)} runs as a chat. Open it from its session card to follow its work and answer its requests.`;
+    } else if (isCommandProvider(provider)) {
       const label = providerName(provider);
       $("launch-hint").textContent = `${label} runs with its configured permissions. Continue in its web terminal.`;
     } else if (provider === "codex") {
@@ -1048,11 +1058,14 @@
     launchPending = true;
     btn.disabled = true;
     try {
-      const remoteControl = providerHas(provider, "remoteControl") && $("chk-remote-control").checked;
-      const body = repo ? { name, repo, provider, remoteControl } : { name, projectId: selectedProject, provider, remoteControl };
+      const chat = !repo && launchMode.value() === "acp";
+      const remoteControl = !chat && providerHas(provider, "remoteControl") && $("chk-remote-control").checked;
+      const body = repo ? { name, repo, provider, remoteControl } : { name, projectId: selectedProject, provider, remoteControl, ...(chat ? { mode: "acp" } : {}) };
       await api("/api/sessions", { method: "POST", body: JSON.stringify(body) });
       closeSheet();
-      showToast(repo
+      showToast(chat
+        ? `“${name}” is starting as a chat — open it from its session card`
+        : repo
         ? `Preparing a fresh ${providerName(provider)} workspace for “${name}” — this can take a minute`
         : remoteControl
           ? `“${name}” is starting — open the Claude app to talk to it`
@@ -1165,6 +1178,13 @@
   // title bar, a Close button and a key row (ttyd alone is unusable on a phone).
   // Pop the tab synchronously BEFORE the async POST so iOS Safari doesn't treat
   // the later navigation as a non-gesture popup and block it.
+  // A Chat (ACP) session's chat reads the bridge's event log; any other chat reads the transcript.
+  function chatUrl(s, provider) {
+    const query = new URLSearchParams({ id: s.id, name: s.name });
+    if (s.mode === "acp") { query.set("mode", "acp"); query.set("agent", providerName(provider)); }
+    return `/chat.html?${query}`;
+  }
+
   async function openWebTerminal(body, okLabel) {
     const tab = window.open("about:blank", "_blank");
     try {
@@ -1229,12 +1249,15 @@
 
     // The same conversation as a chat, read from the agent's own transcript.
     const chat = $("btn-chat");
-    const canChat = providerHas(provider, "chatView") && typeof s.id === "string" && s.id.startsWith("m:") && s.status === "running";
+    const acpChat = s.mode === "acp";
+    const canChat = (acpChat || providerHas(provider, "chatView")) && typeof s.id === "string" && s.id.startsWith("m:") && (s.status === "running" || (acpChat && s.status === "starting"));
     chat.hidden = !canChat;
+    chat.classList.toggle("btn-primary", acpChat);
+    chat.classList.toggle("btn-ghost", !acpChat);
     if (canChat) {
       chat.onclick = () => {
         closeSheet();
-        window.open(`/chat.html?id=${encodeURIComponent(s.id)}&name=${encodeURIComponent(s.name)}`, "_blank");
+        window.open(chatUrl(s, provider), "_blank");
       };
     }
 

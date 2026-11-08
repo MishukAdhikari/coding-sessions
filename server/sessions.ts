@@ -3,7 +3,7 @@ import { Communicator } from "./communicator";
 import { communicator, connectors } from "./communicator-runtime";
 import type { Connectors } from "./connectors";
 import { installCollaborationSkill } from "./collaboration-skill";
-import { communicatorEnvironment, providerCommunicatorArgs } from "./communicator-config";
+import { communicatorEnvironment, entry as communicatorEntry, gatewayEntry, providerCommunicatorArgs } from "./communicator-config";
 import { CODEX_READINESS_TIMEOUT_ERROR, createStartupProbe, type CodexStartupObservation } from "./codex-startup";
 import { childEnvironment } from "./child-env";
 import { DB_PATH, db, getMeta, setMeta } from "./db";
@@ -38,6 +38,13 @@ import * as mux from "./mux";
 import { onServerSettingChange, serverSettings } from "./server-settings-instance";
 import { agentStatePaths, isInsideWorkspace } from "./workspace-cleanup";
 import { sessionActivity, type SessionActivity } from "./session-activity";
+import { acpCommand, defaultAcpResolveDeps } from "./acp/agents";
+import { acpHolderCommand, buildAcpLaunch } from "./acp/launch";
+import { readState } from "./acp/event-log";
+import { acpSessionFields } from "./acp/state-map";
+import { acpPaths, clearSessionFiles, removeSessionDir } from "./acp/paths";
+
+export type LaunchMode = "terminal" | "acp";
 
 const SCREEN_PREFIX = "cs-";
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}$/;
@@ -72,6 +79,7 @@ export interface SessionInfo {
   asking: boolean;         // Claude asked a question and is blocked on your reply (a stronger "waiting")
   telemetryUnknown: boolean; // Activity evidence is stale or absent while the process is live
   activity?: SessionActivity;
+  mode?: LaunchMode;       // "acp": Chat mode through the ACP bridge; absent or "terminal" otherwise
   startupInputReady?: boolean; // Live input evidence; SessionStart still owns conversation readiness.
   startupWaitingForTrust?: boolean; // A live pre-hook Codex TUI needs a folder-trust decision.
   turnComplete?: boolean; // Codex Stop, distinct from its initial SessionStart readiness
@@ -634,7 +642,7 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
     "INSERT INTO launches (screen, name, project_path, created_at, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, 0, ?, ?, 'ready', NULL, NULL) " +
     "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, " +
     "created_at = excluded.created_at, remote_control = 0, provider = excluded.provider, " +
-    "launch_id = excluded.launch_id, phase = 'ready', error_message = NULL, resume_archive_id = NULL",
+    "launch_id = excluded.launch_id, phase = 'ready', error_message = NULL, resume_archive_id = NULL, mode = 'terminal'",
   ).run(options.screen, options.name, options.projectPath, Date.now(), options.provider, randomUUID());
   return { ok: true };
 }
@@ -643,8 +651,10 @@ export interface CommunicatingSessionOptions {
   screen: string;
   name: string;
   projectPath: string;
-  provider: "claude" | "command-code" | CommandProvider;
+  provider: "claude" | "command-code" | "codex" | CommandProvider;
   providerBin?: string;
+  /** Written with the launch row; every launch states its mode so a stale "acp" row never carries over. */
+  mode?: LaunchMode;
   /** Agent presets configure MCP themselves; returns environment to add to the launch. */
   mcp?: (withConnectors: boolean) => Promise<Record<string, string>>;
   remoteControl: number;
@@ -682,7 +692,7 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
   const withConnectors = runtime.connectors?.available() ?? false;
   try {
     if (options.mcp) mcpEnv = await options.mcp(withConnectors);
-    else if (!isCommandProvider(options.provider)) args = await runtime.configure(options.provider, options.projectPath, options.providerBin, withConnectors);
+    else if (options.provider === "claude" || options.provider === "command-code") args = await runtime.configure(options.provider, options.projectPath, options.providerBin, withConnectors);
   }
   catch (error) { return { ok: false, error: safeLaunchError((error as Error).message, "Could not configure session communication.") }; }
   const database = runtime.database;
@@ -702,6 +712,7 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
       claude_url=excluded.claude_url,resume_id=excluded.resume_id,remote_control=excluded.remote_control,provider=excluded.provider,
       launch_id=excluded.launch_id,phase=excluded.phase,error_message=NULL,resume_archive_id=excluded.resume_archive_id`)
       .run(options.screen,options.name,options.projectPath,runtime.now(),options.claudeUrl??null,options.resumeId??null,options.remoteControl,options.provider,launchId,options.resumeArchiveId??null);
+    database.query("UPDATE launches SET mode=? WHERE launch_id=?").run(options.mode ?? "terminal", launchId);
     const { token } = runtime.communicator.prepare(launchId);
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
@@ -763,6 +774,53 @@ export async function startManagedCommandCode(options: ManagedCommandCodeStart):
   });
 }
 
+export interface AcpSessionStart {
+  screen: string;
+  name: string;
+  projectPath: string;
+  provider: SessionProvider;
+  /** An ACP session id to reopen with session/load, when the agent supports it. */
+  resumeId?: string | null;
+  resumeArchiveId?: number | null;
+}
+
+/**
+ * Launch a session in Chat (ACP) mode: the holder runs the ACP bridge, which runs the
+ * agent's ACP command. Credentials, the communicator token and the bridge's own
+ * settings reach it through the holder's environment, as for a terminal launch.
+ */
+export async function startAcpSession(options: AcpSessionStart): Promise<{ ok: true } | { ok: false; error: string }> {
+  const command = await acpCommand(options.provider, defaultAcpResolveDeps(async () => {
+    const preflight = await preflightCommandCode();
+    return preflight.ok ? { ok: true, bin: preflight.bin } : { ok: false, message: preflight.message };
+  }));
+  if (!command.ok) return command;
+  // The bridge's paths are checked before anything is reserved, so a bad name or a long
+  // CS_DATA_DIR is a clear launch error rather than a session that dies at once.
+  const paths = acpPaths(config.dataDir, options.screen);
+  if (!paths.ok) return paths;
+  const slug = commandSlug(options.provider);
+  const credentials = options.provider === "command-code" ? commandCodeEnv() : slug ? commandEnv(slug) : {};
+  return startCommunicatingSession({
+    screen: options.screen, name: options.name, projectPath: options.projectPath,
+    provider: options.provider as CommunicatingSessionOptions["provider"], remoteControl: 0, mode: "acp",
+    resumeId: options.resumeId ?? null, resumeArchiveId: options.resumeArchiveId ?? null,
+    env: credentials,
+    mcp: async (withConnectors) => {
+      const built = buildAcpLaunch({
+        dataDir: config.dataDir, screen: options.screen, cwd: options.projectPath, argv: command.argv,
+        mcp: withConnectors ? [communicatorEntry(), gatewayEntry()] : [communicatorEntry()],
+        resumeId: options.resumeId ?? null, autoAllow: serverSettings.unrestricted(),
+      });
+      if (!built.ok) throw new Error(built.error);
+      return built.env;
+    },
+    // Called only once this launch holds the name and no holder runs under it, so an old
+    // conversation's files are cleared here and never a live session's.
+    command: () => { clearSessionFiles(paths.paths); return acpHolderCommand(options.projectPath); },
+  });
+}
+
 export function screenlessLaunchAction(
   provider: SessionProvider,
   phase: string | null,
@@ -802,9 +860,10 @@ export function archiveManagedLaunch(
       ? database.query("SELECT session_id, model FROM codex_launch_state WHERE launch_id = ?").get(row.launch_id) as
           { session_id: string | null; model: string | null } | null
       : null;
+    const mode = (database.query("SELECT mode FROM launches WHERE screen = ?").get(row.screen) as { mode: string } | null)?.mode === "acp" ? "acp" : "terminal";
     const gone = database.query("DELETE FROM launches WHERE screen = ?").run(row.screen);
     if (gone.changes === 0) return false; // someone else already archived it
-    database.query("INSERT INTO archive (name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider, end_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    database.query("INSERT INTO archive (name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider, end_reason, mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(
         row.name,
         row.project_path,
@@ -816,6 +875,7 @@ export function archiveManagedLaunch(
         rowProvider(row.provider) === "codex" ? 0 : (row.remote_control ?? 1),
         rowProvider(row.provider),
         endReason,
+        mode,
       );
     return true;
   });
@@ -865,6 +925,51 @@ export async function listSessions(): Promise<SessionInfo[]> {
   const sessions: SessionInfo[] = [];
   const claimedScreens = new Set<string>();
 
+  // Chat (ACP) sessions first: their holder runs the bridge, and the agent under it can look
+  // like any provider's process (`cmd acp`, a preset binary), so no provider pass may adopt them.
+  const acpLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE mode = 'acp'`).all() as LaunchRow[];
+  for (const launch of acpLaunches) {
+    const holderPid = [...screens.entries()].find(([, name]) => name === launch.screen)?.[0];
+    if (holderPid === undefined) continue;
+    claimedScreens.add(launch.screen);
+    const paths = acpPaths(config.dataDir, launch.screen);
+    const state = paths.ok ? readState(paths.paths.state) : null;
+    if (state?.acpSessionId && state.acpSessionId !== launch.resume_id) {
+      db.query("UPDATE launches SET resume_id = ? WHERE screen = ? AND mode = 'acp'").run(state.acpSessionId, launch.screen);
+    }
+    const fields = acpSessionFields(state, launch);
+    const proc = holderPid > 0 ? byPid.get(holderPid) : undefined;
+    sessions.push({
+      id: `m:${launch.screen}`,
+      kind: "managed",
+      provider: rowProvider(launch.provider),
+      launchId: launch.launch_id,
+      phase: fields.phase,
+      errorMessage: fields.errorMessage,
+      name: launch.name,
+      status: fields.status,
+      workspace: isWorkspacePath(launch.project_path),
+      project: launch.project_path,
+      projectLabel: projectLabelFor(launch.project_path),
+      pid: proc?.pid ?? null,
+      uptimeSec: proc?.etimes ?? null,
+      cpu: proc?.pcpu ?? null,
+      active: fields.busy,
+      busy: fields.busy,
+      waiting: fields.waiting,
+      asking: fields.asking,
+      telemetryUnknown: false,
+      turnState: true,
+      turnComplete: true, // idle means the turn ended (the Codex "ready" distinction is a terminal-mode hook signal)
+      mode: "acp",
+      claudeUrl: null,
+      remoteControl: false,
+      resumeId: state?.acpSessionId ?? launch.resume_id,
+      model: state?.agent?.title ?? state?.agent?.name ?? null,
+      initial: displayInitial(launch.name),
+    });
+  }
+
   for (const proc of claudeProcs) {
     const screenName = holderScreenFor(proc, screens, byPid);
 
@@ -878,6 +983,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
     const project = procCwd(proc.pid);
     const cliName = extractRemoteControlName(proc.args);
 
+    if (screenName && claimedScreens.has(screenName)) continue;
     if (screenName) {
       const launch = db.query(`SELECT ${launchColumns} FROM launches WHERE screen = ?`).get(screenName) as
         LaunchRow | null;
@@ -968,6 +1074,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
   // inspect, then process ancestry proves that the interactive TUI is live.
   const codexLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider = 'codex'`).all() as LaunchRow[];
   for (const launch of codexLaunches) {
+    if (claimedScreens.has(launch.screen)) continue; // a Chat (ACP) session
     const screenEntry = [...screens.entries()].find(([, name]) => name === launch.screen);
     if (!screenEntry) continue;
     const proc = findProviderProcess(procs, screenEntry[0], "codex");
@@ -1033,6 +1140,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
   const commandCodeLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider = 'command-code'`).all() as LaunchRow[];
   const commandCodeIds = new Set(commandCodeLaunches.map(row => row.resume_id?.toLowerCase()).filter((id): id is string => !!id));
   for (const launch of commandCodeLaunches) {
+    if (claimedScreens.has(launch.screen)) continue; // a Chat (ACP) session
     const screenEntry = [...screens.entries()].find(([, name]) => name === launch.screen);
     if (!screenEntry) continue;
     const proc = findProviderProcess(procs, screenEntry[0], "command-code");
@@ -1081,6 +1189,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
   // liveness, never a guess from CPU.
   const commandLaunches = db.query(`SELECT ${launchColumns} FROM launches WHERE provider LIKE 'cmd:%'`).all() as LaunchRow[];
   for (const launch of commandLaunches) {
+    if (claimedScreens.has(launch.screen)) continue; // a Chat (ACP) session
     const provider = rowProvider(launch.provider);
     const screenEntry = [...screens.entries()].find(([, name]) => name === launch.screen);
     if (!screenEntry) continue;
@@ -1220,7 +1329,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
   const order = { running: 0, starting: 1, ended: 2 } as const;
   sessions.sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : order[a.status] - order[b.status]));
-  return sessions.map(session => ({ ...session, activity: sessionActivity(session) }));
+  return sessions.map(session => ({ ...session, mode: session.mode ?? "terminal", activity: sessionActivity(session) }));
 }
 
 /**
@@ -1711,7 +1820,7 @@ function ensureTrusted(path: string): void {
   }
 }
 
-export async function launchSession(name: string, projectId: number, remoteControl = true, provider: SessionProvider = DEFAULT_SESSION_PROVIDER): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function launchSession(name: string, projectId: number, remoteControl = true, provider: SessionProvider = DEFAULT_SESSION_PROVIDER, mode: LaunchMode = "terminal"): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!NAME_RE.test(name)) {
     return { ok: false, error: "Name must be 1-31 chars: letters, numbers, dashes." };
   }
@@ -1726,6 +1835,10 @@ export async function launchSession(name: string, projectId: number, remoteContr
   const screens = await listScreens();
   if ([...screens.values()].includes(screenName)) {
     return { ok: false, error: `A session named “${name}” is already running.` };
+  }
+
+  if (mode === "acp") {
+    return startAcpSession({ screen: screenName, name, projectPath: project.path, provider });
   }
 
   if (provider === "codex") {
@@ -1883,12 +1996,13 @@ export interface ArchivedInfo {
   endedAt: number;
   workspacePresent: boolean; // its folder still exists on disk
   canResume: boolean;        // its folder still exists, so the conversation can be reopened
+  mode: LaunchMode;
 }
 
 export function listArchive(): ArchivedInfo[] {
   const rows = db.query(
-    "SELECT id, name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider FROM archive ORDER BY ended_at DESC LIMIT 200",
-  ).all() as Array<{ id: number; name: string; project_path: string | null; claude_url: string | null; resume_id: string | null; model: string | null; started_at: number | null; ended_at: number; remote_control: number; provider: SessionProvider }>;
+    "SELECT id, name, project_path, claude_url, resume_id, model, started_at, ended_at, remote_control, provider, mode FROM archive ORDER BY ended_at DESC LIMIT 200",
+  ).all() as Array<{ id: number; name: string; project_path: string | null; claude_url: string | null; resume_id: string | null; model: string | null; started_at: number | null; ended_at: number; remote_control: number; provider: SessionProvider; mode: string }>;
   return rows.map((r) => ({
     id: r.id,
     provider: rowProvider(r.provider),
@@ -1902,7 +2016,10 @@ export function listArchive(): ArchivedInfo[] {
     startedAt: r.started_at,
     endedAt: r.ended_at,
     workspacePresent: isWorkspacePath(r.project_path) && existsSync(r.project_path!),
-    canResume: archiveCanResume(rowProvider(r.provider), r.project_path, r.name, r.resume_id),
+    canResume: r.mode === "acp"
+      ? FULL_NAME_RE.test(r.name) && !!r.project_path && existsSync(r.project_path)
+      : archiveCanResume(rowProvider(r.provider), r.project_path, r.name, r.resume_id),
+    mode: r.mode === "acp" ? "acp" : "terminal",
   }));
 }
 
@@ -1923,11 +2040,20 @@ function archiveCanResume(provider: SessionProvider, projectPath: string | null,
  * must still exist. Moves the row back out of the archive.
  */
 export async function resumeArchived(id: number, expectedProvider: SessionProvider = DEFAULT_SESSION_PROVIDER): Promise<{ ok: true } | { ok: false; error: string }> {
-  const row = db.query("SELECT name, project_path, claude_url, resume_id, remote_control, provider FROM archive WHERE id = ?").get(id) as
-    { name: string; project_path: string | null; claude_url: string | null; resume_id: string | null; remote_control: number; provider: SessionProvider } | null;
+  const row = db.query("SELECT name, project_path, claude_url, resume_id, remote_control, provider, mode FROM archive WHERE id = ?").get(id) as
+    { name: string; project_path: string | null; claude_url: string | null; resume_id: string | null; remote_control: number; provider: SessionProvider; mode: string } | null;
   if (!row) return { ok: false, error: "That session is no longer in history." };
   const provider = rowProvider(row.provider);
   if (provider !== expectedProvider) return { ok: false, error: `That archive belongs to ${providerDisplayName(provider)}.` };
+  if (row.mode === "acp") {
+    // Chat sessions resume through the bridge: session/load when the agent supports it,
+    // otherwise a new conversation in the same folder, which the chat says plainly.
+    if (!FULL_NAME_RE.test(row.name)) return { ok: false, error: "That session name can't be resumed." };
+    if (!row.project_path || !existsSync(row.project_path)) return { ok: false, error: "Its folder is gone — nothing to resume into." };
+    const screenName = SCREEN_PREFIX + row.name.toLowerCase();
+    if ([...(await listScreens()).values()].includes(screenName)) return { ok: false, error: `A session named “${row.name}” is already running.` };
+    return startAcpSession({ screen: screenName, name: row.name, projectPath: row.project_path, provider, resumeId: row.resume_id, resumeArchiveId: id });
+  }
   if (isCommandProvider(provider)) {
     return { ok: false, error: `${providerDisplayName(provider)} has no conversation to resume — start a new session instead.` };
   }
@@ -1994,8 +2120,8 @@ export async function resumeArchived(id: number, expectedProvider: SessionProvid
 }
 
 export async function deleteArchived(id: number, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string }> {
-  const row = db.query("SELECT project_path, claude_url, provider FROM archive WHERE id = ?").get(id) as
-    { project_path: string | null; claude_url: string | null; provider: SessionProvider } | null;
+  const row = db.query("SELECT name, project_path, claude_url, provider, mode FROM archive WHERE id = ?").get(id) as
+    { name: string; project_path: string | null; claude_url: string | null; provider: SessionProvider; mode: string } | null;
   if (!row) return { ok: true };
   if (deleteChat && rowProvider(row.provider) !== "claude") {
     return { ok: false, error: "Chat deletion is only available for Claude sessions." };
@@ -2008,6 +2134,11 @@ export async function deleteArchived(id: number, deleteWorkspace = false, delete
     if (!removed.ok && deleteWorkspace) return removed;
   }
   if (deleteChat) queueChatDeletion(row.claude_url);
+  // A chat session's conversation log goes with its history row, unless a live session reuses the name.
+  const acpScreen = SCREEN_PREFIX + row.name.toLowerCase();
+  if (row.mode === "acp" && !db.query("SELECT 1 FROM launches WHERE screen = ?").get(acpScreen)) {
+    removeSessionDir(config.dataDir, acpScreen);
+  }
   db.query("DELETE FROM archive WHERE id = ?").run(id);
   return { ok: true };
 }

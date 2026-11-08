@@ -20,7 +20,8 @@ Typical loop: list_sessions (or launch_session with a prompt) → send_message �
 Session ids look like "m:cs-name". A session's state is one of: starting, working, asking (blocked on a question — read_session, then press_keys or send_message to answer), waiting (finished its turn, ready for the next message), running (alive; this agent reports no turn state), ended.
 When startup_waiting_for_trust is true, Codex is waiting for the operator to review folder trust before its managed startup hook can run. Report this decision to the operator; do not accept trust automatically.
 The additive activity field matches the web UI: running, waiting (needs input), finished (turn complete; session still open), ready, connected (no reliable turn signal), starting, ended, or failed.
-Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.`;
+Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.
+A session launched with mode "acp" (Chat mode) talks to its agent over the Agent Client Protocol: send_message sends a prompt; when it is asking, read_session lists the agent's permission request with its options, and send_message with one option's name (or id) answers it; press_keys does not apply.`;
 
 export interface McpDeps {
   accounts?: {
@@ -34,7 +35,7 @@ export interface McpDeps {
   listRepos(): Promise<string[]>;
   /** `asking: false` — the agent reports working/finished but cannot show that it waits on a question. */
   providers(): Array<{ id: SessionProvider; name: string; remoteControl: boolean; turnState: boolean; asking?: boolean }>;
-  launch(opts: { name: string; provider: SessionProvider; projectId: number | null; repo: string | null; remoteControl: boolean }):
+  launch(opts: { name: string; provider: SessionProvider; projectId: number | null; repo: string | null; remoteControl: boolean; mode?: "terminal" | "acp" }):
     Promise<{ ok: true; id: string } | { ok: false; error: string }>;
   end(id: string, deleteWorkspace: boolean): Promise<{ ok: boolean; error?: string }>;
   resume(archiveId: number): Promise<{ ok: true } | { ok: false; error: string }>;
@@ -54,7 +55,8 @@ export function sessionState(s: SessionInfo | undefined, turnState: boolean): Se
   if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupWaitingForTrust) return "asking";
   if (s.provider === "codex" && s.phase === "awaiting_session_start" && s.startupInputReady) return "running";
   if (s.status === "starting") return "starting";
-  if (!turnState || s.telemetryUnknown) return "running";
+  // A Chat (ACP) session always reports its turn: the bridge sees every prompt, update and permission request.
+  if (!(turnState || s.mode === "acp") || s.telemetryUnknown) return "running";
   if (s.asking) return "asking";
   if (s.busy) return "working";
   if (s.waiting) return "waiting";
@@ -202,6 +204,7 @@ export const TOOLS = [
         project_id: { type: "integer", description: "A project from list_projects." },
         repo: { type: "string", description: "Instead of project_id: a repo to clone into a fresh workspace." },
         remote_control: { type: "boolean", description: "Claude only: also open it in the Claude app's Remote Control. Default true." },
+        mode: { type: "string", enum: ["terminal", "acp"], description: "terminal (default): the agent's own terminal UI, as today. acp: Chat mode — the agent speaks the Agent Client Protocol and the app shows a chat with permission prompts. Project launches only; for Claude Code, Codex, Command Code and the Gemini, Qwen, opencode and Kimi presets." },
         prompt: { type: "string", description: "First message for the agent." },
       },
       required: ["name"],
@@ -314,6 +317,12 @@ async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Pr
   while (deps.now() < deadline) {
     const s = await findSession(deps, id);
     if (s?.status === "ended" || s?.phase === "failed") return false;
+    // A Chat (ACP) session is ready once its bridge has a session; there is no screen to settle.
+    if (s?.mode === "acp") {
+      if (s.status === "running") return true;
+      await deps.sleep(1000);
+      continue;
+    }
     const preHookCodex = s?.provider === "codex" && s.phase !== "ready";
     if (s?.status === "running" && s.phase !== "failed" && !s.startupWaitingForTrust
       && (!preHookCodex || (s.phase === "awaiting_session_start" && s.startupInputReady))) {
@@ -394,7 +403,9 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       const repo = str(args.repo).trim() || null;
       const projectId = args.project_id == null ? null : Number(args.project_id);
       if (!repo && !Number.isInteger(projectId)) return fail("Give project_id (from list_projects) or repo.");
-      const r = await deps.launch({ name: str(args.name), provider, projectId: repo ? null : projectId, repo, remoteControl: args.remote_control !== false });
+      const mode = args.mode === undefined || args.mode === null || args.mode === "" ? "terminal" : args.mode;
+      if (mode !== "terminal" && mode !== "acp") return fail('mode must be "terminal" or "acp".');
+      const r = await deps.launch({ name: str(args.name), provider, projectId: repo ? null : projectId, repo, remoteControl: args.remote_control !== false, mode });
       if (!r.ok) return fail(r.error);
       const prompt = str(args.prompt);
       if (!prompt.trim()) return ok({ session_id: r.id, launched: true, next: "send_message" });

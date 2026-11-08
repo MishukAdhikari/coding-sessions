@@ -22,11 +22,13 @@ test("legacy launch bodies default to Claude and preserve Remote Control default
     ok: true,
     provider: "claude",
     remoteControl: true,
+    mode: "terminal",
   });
   expect(launchOptionsFromRequest({ remoteControl: false })).toEqual({
     ok: true,
     provider: "claude",
     remoteControl: false,
+    mode: "terminal",
   });
 });
 
@@ -35,6 +37,7 @@ test("Codex normalizes omitted Remote Control off and rejects Claude-only option
     ok: true,
     provider: "codex",
     remoteControl: false,
+    mode: "terminal",
   });
   expect(launchOptionsFromRequest({ provider: "codex", remoteControl: true })).toEqual({
     ok: false,
@@ -94,6 +97,7 @@ test("Command Code launches without Remote Control, and refuses to pretend other
     ok: true,
     provider: "command-code",
     remoteControl: false,
+    mode: "terminal",
   });
   expect(launchOptionsFromRequest({ provider: "command-code", remoteControl: true })).toEqual({
     ok: false,

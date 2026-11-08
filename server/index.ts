@@ -55,6 +55,13 @@ import { recordAccountLogin } from "./account-history";
 import { countActivity, createActivitySignal, handleActivityRequest } from "./activity-signal";
 import { readBootTime, runBootResume } from "./boot-resume";
 import { startControlSocket } from "./control-socket";
+import { handleAcpRoute } from "./acp/route";
+import { acpAwareIo } from "./acp/io";
+import { listAcpAgents } from "./acp/agents";
+import { ACP_WORKSPACE_ERROR } from "./session-provider";
+
+// MCP and the control socket reach Chat (ACP) sessions through their bridge, not by typing.
+const chatAwareIo = acpAwareIo(sessionIo, { database: db, dataDir: config.dataDir });
 
 const PORT = config.port;
 const COOKIE_SECURE = config.cookieSecure;
@@ -176,14 +183,15 @@ const mcpDeps: McpDeps = {
     })),
     ...listCommands().map((c) => ({ id: commandProviderId(c.slug), name: c.label, remoteControl: false, turnState: presetReadsTurnState(c.preset) })),
   ],
-  async launch({ name, provider, projectId, repo, remoteControl }) {
-    const options = launchOptionsFromRequest({ provider, remoteControl: PROVIDER_CAPABILITIES[provider as keyof typeof PROVIDER_CAPABILITIES]?.remoteControl ? remoteControl : false });
+  async launch({ name, provider, projectId, repo, remoteControl, mode }) {
+    const options = launchOptionsFromRequest({ provider, mode, remoteControl: PROVIDER_CAPABILITIES[provider as keyof typeof PROVIDER_CAPABILITIES]?.remoteControl ? remoteControl : false });
     if (!options.ok) return options;
     const unknown = unregisteredCommand(options.provider);
     if (unknown) return { ok: false, error: unknown };
+    if (repo && options.mode === "acp") return { ok: false, error: ACP_WORKSPACE_ERROR };
     const r = repo
       ? await launchWorkspaceSession(name, repo, options.remoteControl, options.provider)
-      : await launchSession(name, Number(projectId), options.remoteControl, options.provider);
+      : await launchSession(name, Number(projectId), options.remoteControl, options.provider, options.mode);
     return r.ok ? { ok: true, id: managedSessionId(name) } : r;
   },
   end: (id, deleteWorkspace) => killSession(id, false, deleteWorkspace, false),
@@ -192,9 +200,9 @@ const mcpDeps: McpDeps = {
     if (!entry) return { ok: false, error: "No archived session with that id." };
     return resumeArchived(archiveId, entry.provider);
   },
-  readScreen: sessionIo.readScreen,
-  sendText: sessionIo.sendText,
-  sendKeys: sessionIo.sendKeys,
+  readScreen: chatAwareIo.readScreen,
+  sendText: chatAwareIo.sendText,
+  sendKeys: chatAwareIo.sendKeys,
   sleep: (ms) => Bun.sleep(ms),
   now: () => Date.now(),
 };
@@ -417,6 +425,12 @@ const server = Bun.serve({
     /* ----- everything below requires auth ----- */
 
     if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
+
+    const acpResponse = await handleAcpRoute(req, {
+      database: db, dataDir: config.dataDir,
+      agents: () => listAcpAgents(mcpDeps.providers(), undefined, Bun.which("command-code")),
+    });
+    if (acpResponse) return acpResponse;
 
     if (path === "/api/capabilities" && method === "GET") {
       // Never the token itself — hasToken is all any client needs to render state.
@@ -663,9 +677,11 @@ const server = Bun.serve({
       if (!options.ok) return json({ error: options.error }, 422);
       const unknown = unregisteredCommand(options.provider);
       if (unknown) return json({ error: unknown }, 422);
-      const result = typeof body.repo === "string" && body.repo.trim()
+      const workspace = typeof body.repo === "string" && body.repo.trim();
+      if (workspace && options.mode === "acp") return json({ error: ACP_WORKSPACE_ERROR }, 422);
+      const result = workspace
         ? await launchWorkspaceSession(String(body.name ?? ""), body.repo, options.remoteControl, options.provider)
-        : await launchSession(String(body.name ?? ""), Number(body.projectId), options.remoteControl, options.provider);
+        : await launchSession(String(body.name ?? ""), Number(body.projectId), options.remoteControl, options.provider, options.mode);
       return result.ok ? json({ ok: true }) : json({ error: result.error }, 422);
     }
 

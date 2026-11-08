@@ -108,6 +108,9 @@ export function applyDatabaseSchema(database: Database): void {
   // it is tried once (see server/boot-resume.ts).
   addColumn(database, "ALTER TABLE archive ADD COLUMN end_reason TEXT");
   addColumn(database, "ALTER TABLE archive ADD COLUMN boot_resume_at INTEGER");
+  // Launch mode: "terminal" (the agent's TUI) or "acp" (Chat mode through the ACP bridge).
+  addColumn(database, "ALTER TABLE launches ADD COLUMN mode TEXT NOT NULL DEFAULT 'terminal'");
+  addColumn(database, "ALTER TABLE archive ADD COLUMN mode TEXT NOT NULL DEFAULT 'terminal'");
 
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS launches_launch_id_idx ON launches (launch_id);
