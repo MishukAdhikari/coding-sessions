@@ -68,6 +68,8 @@ export interface PullDetail {
   branch: string;
   repo: string;
   state: string;
+  /** A draft PR (GitHub reports its state as OPEN). */
+  draft: boolean;
   /** True when the PR comes from a fork, whose head branch is not in this repo. */
   crossRepo: boolean;
 }
@@ -76,7 +78,7 @@ export function parsePullPayload(raw: string, ref: PullRef): PullDetail | null {
   try {
     const pr = JSON.parse(raw) as {
       number?: number; title?: string; headRefName?: string; state?: string;
-      headRepositoryOwner?: { login?: string } | null; isCrossRepository?: boolean;
+      headRepositoryOwner?: { login?: string } | null; isCrossRepository?: boolean; isDraft?: boolean;
     };
     if (!pr.headRefName) return null;
     const headOwner = pr.headRepositoryOwner?.login ?? null;
@@ -86,6 +88,7 @@ export function parsePullPayload(raw: string, ref: PullRef): PullDetail | null {
       branch: pr.headRefName,
       repo: ref.slug,
       state: typeof pr.state === "string" ? pr.state : "UNKNOWN",
+      draft: pr.isDraft === true,
       crossRepo: pr.isCrossRepository === true || (!!headOwner && headOwner.toLowerCase() !== ref.owner.toLowerCase()),
     };
   } catch {
@@ -119,7 +122,7 @@ export async function fetchBranches(ref: RepoRef, run: Run = defaultRun): Promis
 export async function fetchPull(ref: PullRef, run: Run = defaultRun): Promise<{ ok: true; data: PullDetail } | { ok: false; error: string }> {
   const { code, out, err } = await run([
     ghBin(), "pr", "view", String(ref.number), "--repo", ref.slug,
-    "--json", "number,title,headRefName,state,headRepositoryOwner,isCrossRepository",
+    "--json", "number,title,headRefName,state,headRepositoryOwner,isCrossRepository,isDraft",
   ]);
   if (code !== 0) return { ok: false, error: ghError(err, `Could not read pull request #${ref.number}.`) };
   const parsed = parsePullPayload(out, ref);

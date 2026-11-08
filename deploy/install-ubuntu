@@ -136,6 +136,9 @@ if [[ ! -f /etc/apt/sources.list.d/github-cli.list ]]; then
 fi
 apt-get update
 apt-get install -y --no-install-recommends ca-certificates curl unzip git gh rsync openssh-client screen procps lsof sudo bash coreutils grep sed libc-bin openssl systemd util-linux
+# GitHub release downloads now and then answer 502/504 for a while: retry them before giving up.
+# Every file is still checked against its pinned SHA-256 afterwards.
+gh_retry=(--retry 6 --retry-delay 10 --retry-all-errors --connect-timeout 20)
 # The web terminal needs ttyd 1.7+ (--writable). Debian 12 has no package and Ubuntu 22.04's
 # is 1.6, so those get the pinned upstream build, checked against its published digest.
 ttyd_ok() { [[ -n $1 ]] && printf '1.7.0\n%s\n' "$1" | sort -VC; }
@@ -150,7 +153,7 @@ if ! ttyd_ok "$ttyd_have"; then
       *) ttyd_file=ttyd.aarch64 ttyd_sum=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165;;
     esac
     ttyd_tmp=$(mktemp)
-    curl --fail --location --proto '=https' --tlsv1.2 -o "$ttyd_tmp" "https://github.com/tsl0922/ttyd/releases/download/1.7.7/$ttyd_file"
+    curl --fail --location --proto '=https' --tlsv1.2 "${gh_retry[@]}" -o "$ttyd_tmp" "https://github.com/tsl0922/ttyd/releases/download/1.7.7/$ttyd_file"
     printf '%s  %s\n' "$ttyd_sum" "$ttyd_tmp" | sha256sum --check --status || { rm -f "$ttyd_tmp"; fail 'ttyd checksum mismatch'; }
     install -o root -g root -m 0755 "$ttyd_tmp" /usr/local/bin/ttyd
     rm -f "$ttyd_tmp"
@@ -163,7 +166,7 @@ if ((herdr)) && [[ $(/usr/local/bin/herdr --version 2>/dev/null || true) != 'her
     *) herdr_file=herdr-linux-aarch64 herdr_sum=17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c;;
   esac
   herdr_tmp=$(mktemp)
-  curl --fail --location --proto '=https' --tlsv1.2 -o "$herdr_tmp" "https://github.com/herdrdev/herdr/releases/download/v0.9.5/$herdr_file"
+  curl --fail --location --proto '=https' --tlsv1.2 "${gh_retry[@]}" -o "$herdr_tmp" "https://github.com/herdrdev/herdr/releases/download/v0.9.5/$herdr_file"
   printf '%s  %s\n' "$herdr_sum" "$herdr_tmp" | sha256sum --check --status || { rm -f "$herdr_tmp"; fail 'herdr checksum mismatch'; }
   install -o root -g root -m 0755 "$herdr_tmp" /usr/local/bin/herdr
   rm -f "$herdr_tmp"
@@ -173,7 +176,7 @@ stage=$(mktemp -d /tmp/cs-install.XXXXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
 if [[ -z $bun_path ]]; then
   archive=$stage/bun.zip
-  curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-$bun_arch.zip" -o "$archive"
+  curl --fail --location --proto '=https' --tlsv1.2 "${gh_retry[@]}" "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-$bun_arch.zip" -o "$archive"
   printf '%s  %s\n' "$bun_sha256" "$archive" | sha256sum --check --status || fail 'Bun archive checksum mismatch'
   unzip -q "$archive" -d "$stage/bun"
   bun_path=$stage/bun/bun-linux-$bun_arch/bun
