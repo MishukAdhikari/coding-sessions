@@ -53,11 +53,11 @@ test("asking for remote control on a command is a 422-shaped refusal", () => {
   expect(launchOptionsFromRequest({ provider: "cmd:gemini", remoteControl: true }))
     .toEqual({ ok: false, error: "Remote Control is only available for Claude sessions." });
   expect(launchOptionsFromRequest({ provider: "cmd:gemini" }))
-    .toEqual({ ok: true, provider: "cmd:gemini", remoteControl: false });
+    .toEqual({ ok: true, provider: "cmd:gemini", remoteControl: false, mode: "terminal" });
 });
 
 test("an omitted provider still means Claude with remote control", () => {
-  expect(launchOptionsFromRequest({})).toEqual({ ok: true, provider: "claude", remoteControl: true });
+  expect(launchOptionsFromRequest({})).toEqual({ ok: true, provider: "claude", remoteControl: true, mode: "terminal" });
 });
 
 test("a command archives on end — it has no hook phase to wait for", () => {
