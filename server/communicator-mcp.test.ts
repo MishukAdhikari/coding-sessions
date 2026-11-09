@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { applyDatabaseSchema } from "./db-schema";
 import { Communicator } from "./communicator";
-import { handleCommunicatorRequest } from "./communicator-mcp";
+import { handleCommunicatorRequest, SECRET_TOOLS } from "./communicator-mcp";
+import { SecretRequests } from "./secret-requests";
+import { createSecretStore } from "./secret-store";
+import { createSecretCodec } from "./secrets";
+import { randomBytes } from "node:crypto";
 
 function fixture() {
   const db = new Database(":memory:"); applyDatabaseSchema(db);
@@ -59,5 +63,69 @@ test("protocol errors and notifications cannot produce mailbox side effects", as
     expect((await f.communicator.read(f.b)).messages).toHaveLength(0);
     const invalid = await run(rpc("tools/call", { name: "session_identity", arguments: { token: "spoof" } }));
     expect((await invalid.json() as any).result.isError).toBe(true);
+  } finally { f.db.close(); }
+});
+
+function secretsFixture() {
+  const f = fixture();
+  const store = createSecretStore({ database: f.db, codec: createSecretCodec(randomBytes(32)), sources: { fetch: fetch, runBws: async () => ({ code: 127, out: "" }) }, now: () => 5 });
+  const requests = new SecretRequests({ database: f.db, origin: "https://cs.example", secrets: () => store, now: () => 10,
+    secretsFile: id => `/run/cs/${id}.env`, inLaunchEnvironment: async (launch, name) => launch === "a" && name === "BEFORE" ? "current" : "missing" });
+  const call = async (token: string, name: string, args: Record<string, unknown> = {}) =>
+    (await (await handleCommunicatorRequest(f.communicator, request(rpc("tools/call", { name, arguments: args }), token), { requests })).json() as any).result;
+  return { ...f, store, requests, call };
+}
+
+test("secret tools list names and say where a session finds the value, never the value itself", async () => {
+  const f = secretsFixture();
+  try {
+    const init = await (await handleCommunicatorRequest(f.communicator, request(rpc("initialize"), f.a), { requests: f.requests })).json() as any;
+    expect(init.result.instructions).toContain("Never ask for a value in chat");
+    expect(init.result.instructions).toContain("list_secrets");
+    const listed = (await (await handleCommunicatorRequest(f.communicator, request(rpc("tools/list"), f.a), { requests: f.requests })).json() as any).result.tools.map((t: any) => t.name);
+    expect(listed).toEqual(["session_identity", "list_peers", "send_message", "read_messages", "wait_for_messages", ...SECRET_TOOLS.map(t => t.name)]);
+    for (const tool of SECRET_TOOLS) expect(tool.description.length).toBeGreaterThan(40);
+    expect(SECRET_TOOLS.find(t => t.name === "request_secret")!.description).toContain("instead of asking in chat");
+
+    f.store.set("BEFORE", "value-one-secret");
+    const list = (await f.call(f.a, "list_secrets")).structuredContent;
+    expect(list.secrets).toEqual([{ name: "BEFORE", source: "Coding Sessions", updated_at: new Date(5).toISOString(), in_launch_environment: "current" }]);
+    expect(list.secrets_file).toBe("/run/cs/a.env");
+    const status = (await f.call(f.b, "secret_status", { name: "BEFORE" })).structuredContent;
+    expect(status).toMatchObject({ set: true, in_launch_environment: "missing", secrets_file: "/run/cs/b.env", available_in_secrets_file: true });
+    expect(JSON.stringify([list, status])).not.toContain("value-one-secret");
+  } finally { f.db.close(); }
+});
+
+test("a session's requests are bound to its own launch and invisible to other sessions", async () => {
+  const f = secretsFixture();
+  try {
+    const created = (await f.call(f.a, "request_secret", { name: "KAZTRACK_TOKEN", reason: "Read the sprint board" })).structuredContent;
+    expect(created.url).toStartWith("https://cs.example/#secret-request=csreq_");
+    expect(created.next).toContain("Do not ask for the value in chat");
+    const row = f.db.query("SELECT launch_id, screen, session_name, agent, requested_by FROM secret_requests").get();
+    expect(row).toEqual({ launch_id: "a", screen: "cs-a", session_name: "a", agent: "claude", requested_by: "session" });
+    expect((await f.call(f.a, "secret_status", { name: "KAZTRACK_TOKEN" })).structuredContent.request).toMatchObject({ state: "pending" });
+    expect((await f.call(f.b, "secret_status", { name: "KAZTRACK_TOKEN" })).structuredContent.request).toBeNull();
+    // Arguments cannot claim another identity.
+    const spoof = await f.call(f.b, "request_secret", { name: "X_TOKEN", reason: "Read it", session_id: "m:cs-a" });
+    expect(spoof.isError).toBe(true);
+    expect((await f.call(f.a, "request_secret", { name: "path", reason: "bad name" })).isError).toBe(true);
+    const connector = (await f.call(f.a, "request_connector", { name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", reason: "Sprint tools", auth: "oauth" })).structuredContent;
+    expect(connector.url).toContain("#secret-request=");
+    expect((await f.call(f.b, "connector_status", { name: "KazTrack" })).structuredContent).toMatchObject({ exists: false, request: null });
+    expect((await f.call(f.a, "connector_status", { name: "KazTrack" })).structuredContent).toMatchObject({ exists: false, request: { state: "pending" } });
+  } finally { f.db.close(); }
+});
+
+test("secret tools are absent without the secrets service, and need a live session", async () => {
+  const f = secretsFixture();
+  try {
+    const bare = await (await handleCommunicatorRequest(f.communicator, request(rpc("tools/call", { name: "list_secrets" }), f.a))).json() as any;
+    expect(bare.error.code).toBe(-32602);
+    const dead = new (f.communicator.constructor as any)(f.db, { isLive: async () => false });
+    const res = await (await handleCommunicatorRequest(dead, request(rpc("tools/call", { name: "request_secret", arguments: { name: "A_TOKEN", reason: "needed now" } }), f.a), { requests: f.requests })).json() as any;
+    expect(res.result.isError).toBe(true);
+    expect(f.db.query("SELECT COUNT(*) AS n FROM secret_requests").get()).toEqual({ n: 0 });
   } finally { f.db.close(); }
 });

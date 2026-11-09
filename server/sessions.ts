@@ -1942,7 +1942,30 @@ async function removeWorkspace(path: string | null, endingScreen: string | null 
   return { ok: true };
 }
 
-export async function killSession(id: string, force = false, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Why ending and resuming this session would lose it, or null when it can come back.
+ * Checked before "Restart with new secrets" ends anything.
+ */
+export function restartBlocker(id: string): string | null {
+  if (!id.startsWith("m:")) return "Only sessions this app started can restart.";
+  const launch = db.query(`SELECT ${launchColumns}, mode FROM launches WHERE screen = ?`).get(id.slice(2)) as (LaunchRow & { mode: string | null }) | null;
+  if (!launch) return "That session is not running.";
+  const provider = rowProvider(launch.provider);
+  if (launch.mode === "acp") return existsSync(launch.project_path) ? null : "Its folder is gone, so it could not come back.";
+  if (isCommandProvider(provider)) return `${providerDisplayName(provider)} has no conversation to resume, so a restart would lose it. End it and start a new session instead.`;
+  if (!existsSync(launch.project_path)) return "Its folder is gone, so it could not come back.";
+  if (!canArchiveManagedLaunch(provider, launch.phase)) return "It is still starting. Try again once it is ready.";
+  if (provider === "codex") {
+    const state = launch.launch_id ? db.query("SELECT session_id FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id) as { session_id: string | null } | null : null;
+    return normalizeCodexResumeId(state?.session_id ?? launch.resume_id) ? null : "This Codex session has no conversation id yet, so it could not be resumed.";
+  }
+  if (provider === "command-code") return normalizeCommandCodeSessionId(launch.resume_id) ? null : "This Command Code session has no conversation id yet, so it could not be resumed.";
+  const rid = launch.resume_id && RESUME_ID_RE.test(launch.resume_id) ? launch.resume_id : null;
+  return (rid && existsSync(transcriptPathFor(launch.project_path, rid))) || projectHasAnyTranscript(launch.project_path)
+    ? null : "This Claude session has no saved conversation yet, so it could not be resumed.";
+}
+
+export async function killSession(id: string, force = false, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string; archiveId?: number | null }> {
   if (id.startsWith("m:")) {
     const screenName = id.slice(2);
     if (!screenName.startsWith(SCREEN_PREFIX) || !/^[a-zA-Z0-9_-]+$/.test(screenName.slice(SCREEN_PREFIX.length))) {
@@ -1964,14 +1987,19 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     if (pid && !force) await gracefulKill(pid);
     await mux.quit(screenName);
     const chatUrl = (pid ? urlCache.get(pid) : undefined) ?? launch?.claude_url ?? null;
-    if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, "ended", chatUrl);
+    let archiveId: number | null = null;
+    if (launch && canArchiveManagedLaunch(provider, launch.phase)) {
+      archiveRow(launch, "ended", chatUrl);
+      // Synchronous, straight after the insert: nothing else can write in between.
+      archiveId = (db.query("SELECT id FROM archive WHERE name = ? ORDER BY id DESC LIMIT 1").get(launch.name) as { id: number } | null)?.id ?? null;
+    }
     else if (launch) db.query("DELETE FROM launches WHERE screen = ?").run(screenName);
     if (deleteChat && provider === "claude") queueChatDeletion(chatUrl);
     if (deleteWorkspace && launch) {
       const removed = await removeWorkspace(launch.project_path, screenName);
       if (!removed.ok) return { ok: false, error: `The session ended, but its folder was kept: ${removed.error}` };
     }
-    return { ok: true };
+    return { ok: true, archiveId };
   }
   if (id.startsWith("e:")) {
     const pid = Number(id.slice(2));

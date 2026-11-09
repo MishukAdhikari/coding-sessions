@@ -11,6 +11,9 @@ import type { IoResult } from "./session-io";
 import { isCodexInputReady } from "./codex-startup";
 import { sessionActivity } from "./session-activity";
 import type { SessionProvider } from "./session-provider";
+import { SecretRequestError, type SecretRequests } from "./secret-requests";
+import type { RestartResult } from "./session-restart";
+import { SECRETS_GUIDANCE } from "./communicator-mcp";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version: "1.0.0" };
@@ -21,7 +24,9 @@ Session ids look like "m:cs-name". A session's state is one of: starting, workin
 When startup_waiting_for_trust is true, Codex is waiting for the operator to review folder trust before its managed startup hook can run. Report this decision to the operator; do not accept trust automatically.
 The additive activity field matches the web UI: running, waiting (needs input), finished (turn complete; session still open), ready, connected (no reliable turn signal), starting, ended, or failed.
 Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.
-A session launched with mode "acp" (Chat mode) talks to its agent over the Agent Client Protocol: send_message sends a prompt; when it is asking, read_session lists the agent's permission request with its options, and send_message with one option's name (or id) answers it; press_keys does not apply.`;
+A session launched with mode "acp" (Chat mode) talks to its agent over the Agent Client Protocol: send_message sends a prompt; when it is asking, read_session lists the agent's permission request with its options, and send_message with one option's name (or id) answers it; press_keys does not apply.
+${SECRETS_GUIDANCE}
+A secret saved after a session started is already in that session's $CS_SECRETS_FILE; restart_session (end and resume the same conversation) is only for programs that read their environment once at start.`;
 
 export interface McpDeps {
   accounts?: {
@@ -44,6 +49,13 @@ export interface McpDeps {
   sendKeys(id: string, keys: string[]): Promise<IoResult<true>>;
   sleep(ms: number): Promise<void>;
   now(): number;
+  /** Secret and connector requests; absent in tests and deployments that predate them. */
+  secrets?: {
+    requests: SecretRequests;
+    /** A live managed session's identity, for binding a request or a status to it. */
+    session(id: string): Promise<{ launchId: string | null; screen: string; sessionName: string; agent: string } | null>;
+  };
+  restart?(id: string): Promise<RestartResult>;
 }
 
 /* ---------- session state, as the tools describe it ---------- */
@@ -219,6 +231,58 @@ export const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
+    name: "list_secrets",
+    title: "List secrets",
+    description: "Names of the secrets (API keys, tokens) stored in Coding Sessions, with their source and when they changed. Never returns values. Every session receives them as environment variables at launch and in its $CS_SECRETS_FILE, which the app rewrites whenever they change. Check here before asking anyone for a key.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "secret_status",
+    title: "Secret status",
+    description: "Whether a secret exists, where it comes from and when it changed, and the latest request for it. With session_id, also whether that session's environment has the current value and its secrets file path. Never returns the value.",
+    inputSchema: { type: "object", properties: { name: { type: "string", description: "Environment variable name." }, session_id: { ...sessionId, description: "Optional: a live session to check against." } }, required: ["name"] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "request_secret",
+    title: "Ask the member for a secret",
+    description: "Create a one-time link (15 minutes) where the member pastes a secret into Coding Sessions; it is stored as a Secret for every session. Never ask for secret values in chat and never pass them to any tool. Give the member the returned url, then poll secret_status. session_id (optional) names the session the value is for; the page shows the request came through this operator connection.",
+    inputSchema: { type: "object", properties: {
+      name: { type: "string", description: "Environment variable name, e.g. KAZTRACK_API_TOKEN." },
+      reason: { type: "string", description: "One or two plain sentences the member will read." },
+      session_id: { ...sessionId, description: "Optional: the session that needs it." },
+    }, required: ["name", "reason"] },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "request_connector",
+    title: "Ask the member to connect an MCP server",
+    description: "Create a one-time link (15 minutes) where the member connects a remote MCP server: they paste its token, or sign in with OAuth in their own browser (callback on this app's HTTPS address, not localhost). The credential stays in Coding Sessions; agents reach the tools through the connectors gateway. Poll connector_status.",
+    inputSchema: { type: "object", properties: {
+      name: { type: "string", description: "Connector name, e.g. KazTrack." },
+      url: { type: "string", description: "The server's https:// MCP URL." },
+      reason: { type: "string", description: "One or two plain sentences the member will read." },
+      auth: { type: "string", enum: ["bearer", "oauth"], description: "Default bearer." },
+      session_id: { ...sessionId, description: "Optional: the session that needs it; its agent type is granted the connector." },
+    }, required: ["name", "url", "reason"] },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "connector_status",
+    title: "Connector status",
+    description: "Whether a connector exists, its state, auth mode and granted tool count, and the latest request for it. With session_id, whether that session can use it now. Never returns credentials.",
+    inputSchema: { type: "object", properties: { name: { type: "string" }, session_id: { ...sessionId, description: "Optional." } }, required: ["name"] },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "restart_session",
+    title: "Restart a session with new secrets",
+    description: "End a session and resume the same conversation, so it starts again with the current secrets and connectors. Everything running in it stops and the agent restarts; the conversation continues. Refused, with nothing ended, when the session could not come back (registered commands, missing folder, no saved conversation). Most agents do not need this: $CS_SECRETS_FILE already has new values.",
+    inputSchema: { type: "object", properties: { session_id: sessionId }, required: ["session_id"] },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  },
+  {
     name: "end_session",
     title: "End a session",
     description: "Stop a session's agent and archive it (it can be resumed). delete_workspace also removes a fresh workspace's folder, with any unpushed work in it.",
@@ -340,6 +404,41 @@ async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Pr
   return false;
 }
 
+/**
+ * The operator surface for requests. The operator may name any live session; the request is
+ * still labelled as coming through this connection, and creating one grants nothing: only
+ * the member, signed in to the app, can fulfil it.
+ */
+async function secretTool(deps: McpDeps, name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  if (!deps.secrets) return fail("Secret requests are unavailable on this server.");
+  const { requests } = deps.secrets;
+  let session: Awaited<ReturnType<NonNullable<McpDeps["secrets"]>["session"]>> = null;
+  if (args.session_id !== undefined && args.session_id !== null && args.session_id !== "") {
+    session = await deps.secrets.session(str(args.session_id));
+    if (!session) return fail(`No live managed session ${str(args.session_id)}. list_sessions shows the live ones.`);
+  }
+  const caller = session ? { launchId: session.launchId, screen: session.screen } : null;
+  try {
+    switch (name) {
+      case "list_secrets": return ok(await requests.listSecrets(null));
+      case "secret_status": return ok(await requests.secretStatus(args.name, caller));
+      case "connector_status": return ok(requests.connectorStatus(args.name, caller));
+      case "request_secret":
+      case "request_connector": {
+        const created = await requests.create({
+          kind: name === "request_connector" ? "connector" : "secret",
+          name: args.name, reason: args.reason, url: args.url, auth: args.auth,
+        }, { by: "operator", launchId: session?.launchId ?? null, screen: session?.screen ?? null, sessionName: session?.sessionName ?? null, agent: session?.agent ?? null });
+        return ok({ ...created, next: "Give the member this link. Do not ask for the value in chat. Then poll " + (name === "request_connector" ? "connector_status." : "secret_status.") });
+      }
+    }
+  } catch (error) {
+    if (error instanceof SecretRequestError) return fail(error.message);
+    throw error;
+  }
+  return fail(`Unknown tool ${name}.`);
+}
+
 export async function callTool(deps: McpDeps, name: string, args: Record<string, unknown>): Promise<ToolResult> {
   switch (name) {
     case "agent_accounts":
@@ -429,6 +528,20 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       if (!Number.isInteger(id)) return fail("archive_id must be an integer.");
       const r = await deps.resume(id);
       return r.ok ? ok({ resumed: true, next: "list_sessions" }) : fail(r.error);
+    }
+
+    case "list_secrets":
+    case "secret_status":
+    case "request_secret":
+    case "request_connector":
+    case "connector_status":
+      return secretTool(deps, name, args);
+
+    case "restart_session": {
+      if (!deps.restart) return fail("Restart is unavailable on this server.");
+      const id = str(args.session_id);
+      const r = await deps.restart(id);
+      return r.ok ? ok({ ...r, restarted: true, next: "wait_for_session" }) : fail(r.error);
     }
 
     case "end_session": {

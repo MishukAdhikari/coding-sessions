@@ -5,7 +5,9 @@ import { applyDatabaseSchema } from "./db-schema";
 import { createSecretCodec } from "./secrets";
 import { createSecretStore, type SourceDependencies } from "./secret-store";
 import { cleanReason, REQUEST_TTL_MS, SecretRequestError, SecretRequests, type ConnectorPort, type Requester } from "./secret-requests";
-import type { ConnectorView } from "./connectors";
+import { Connectors, type ConnectorView } from "./connectors";
+import { handleSecretRequestsRoute } from "./secret-requests-route";
+import { createStepUpGrants } from "./step-up";
 
 const VALUE = "sk-live-VERY-SECRET-value-123";
 const noSources: SourceDependencies = {
@@ -267,4 +269,91 @@ test("invalid connector requests are refused before anything is stored", async (
     { kind: "connector", name: "X", url: "https://ok.example/mcp", reason: "needed", auth: "basic" },
   ]) await expect(f.requests.create(input, session())).rejects.toThrow(SecretRequestError);
   expect((f.database.query("SELECT COUNT(*) AS n FROM secret_requests").get() as { n: number }).n).toBe(0);
+});
+
+test("with the real connector store, a bearer token is sealed in the connector row and an unreachable server keeps the request open", async () => {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  const codec = createSecretCodec(randomBytes(32));
+  const connectors = new Connectors({
+    database, isLive: async () => true, codec: () => codec,
+    resolver: async () => [{ address: "93.184.216.34", family: 4 }],
+    fetch: (async () => { throw new Error("offline"); }) as unknown as typeof fetch,
+  });
+  const store = createSecretStore({ database, codec, sources: noSources, now: () => 1 });
+  const requests = new SecretRequests({ database, origin: "https://cs.example", secrets: () => store, connectors });
+  const { url } = await requests.create({ kind: "connector", name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", reason: "Sprint tools" }, session());
+  const result = await requests.connectorBearer({ token: tokenOf(url) }, VALUE, { stepUp: () => true });
+  expect(result).toMatchObject({ ok: false, state: "pending" });
+  const row = database.query("SELECT credential, auth_mode FROM mcp_connectors").get() as { credential: string; auth_mode: string };
+  expect(row.auth_mode).toBe("bearer");
+  expect(row.credential).toStartWith("cs:secret:v1:");
+  expect(row.credential).not.toContain(VALUE);
+  expect(JSON.stringify(connectors.list())).not.toContain(VALUE);
+  expect(requests.lookup({ token: tokenOf(url) }).connector).toMatchObject({ credential_set: true, url_matches: true });
+});
+
+/* ---------- route ---------- */
+
+function routeFixture() {
+  const f = fixture();
+  const grants = createStepUpGrants();
+  const deps = (browser = true, bearer = false) => ({
+    cookieName: "cs", origin: "https://cs.example.com", checkBrowserSession: () => browser,
+    isAuthenticated: () => browser || bearer, requests: () => f.requests, grants,
+  });
+  const post = (path: string, body: unknown, options: { origin?: string; browser?: boolean; bearer?: boolean } = {}) =>
+    handleSecretRequestsRoute(new Request(`https://cs.example.com/api/secret-requests/${path}`, {
+      method: "POST", body: JSON.stringify(body),
+      headers: { cookie: "cs=session-token", origin: options.origin ?? "https://cs.example.com", "content-type": "application/json" },
+    }), deps(options.browser ?? true, options.bearer ?? false));
+  return { ...f, grants, deps, post };
+}
+
+test("the route answers only a browser session from this origin, and never returns a value", async () => {
+  const r = routeFixture();
+  const { url } = await r.requests.create({ name: "ROUTE_TOKEN", reason: "Route test" }, session());
+  const token = tokenOf(url);
+  expect((await r.post("lookup", { token }, { browser: false }))!.status).toBe(401);
+  expect((await r.post("lookup", { token }, { browser: false, bearer: true }))!.status).toBe(403);
+  expect((await r.post("fulfil", { token, value: VALUE }, { origin: "https://evil.example" }))!.status).toBe(403);
+  expect(await handleSecretRequestsRoute(new Request("https://cs.example.com/api/other"), r.deps())).toBeNull();
+
+  const looked = await r.post("lookup", { token });
+  expect((await looked!.json() as any).request).toMatchObject({ name: "ROUTE_TOKEN", reason: "Route test" });
+  const listed = await handleSecretRequestsRoute(new Request("https://cs.example.com/api/secret-requests", { headers: { cookie: "cs=session-token" } }), r.deps());
+  expect((await listed!.json() as any).requests).toHaveLength(1);
+
+  const saved = await r.post("fulfil", { token, value: VALUE });
+  expect(saved!.status).toBe(200);
+  const text = await saved!.text();
+  expect(text).not.toContain(VALUE);
+  expect(JSON.parse(text)).toEqual({ ok: true, name: "ROUTE_TOKEN", state: "fulfilled" });
+  const again = await r.post("fulfil", { token, value: VALUE });
+  expect(again!.status).toBe(410);
+});
+
+test("Replace through the route spends a step-up grant bound to this browser session", async () => {
+  const r = routeFixture();
+  r.store.set("REPLACE_ME", "old");
+  const { url } = await r.requests.create({ name: "REPLACE_ME", reason: "Rotate the key" }, session());
+  const token = tokenOf(url);
+  expect((await r.post("fulfil", { token, value: VALUE }))!.status).toBe(409);
+  expect((await (await r.post("fulfil", { token, value: VALUE, replace: true }))!.json() as any).code).toBe("step_up");
+  const otherSessionGrant = r.grants.issue("another-session");
+  expect((await r.post("fulfil", { token, value: VALUE, replace: true, grant: otherSessionGrant }))!.status).toBe(403);
+  const grant = r.grants.issue("session-token");
+  expect((await r.post("fulfil", { token, value: VALUE, replace: true, grant }))!.status).toBe(200);
+  expect(await r.store.sessionEnv()).toEqual({ REPLACE_ME: VALUE });
+});
+
+test("decline and connector auth choice go through the route; settings can act by id", async () => {
+  const r = routeFixture();
+  const { url } = await r.requests.create({ name: "DECLINED", reason: "Not today" }, session());
+  const id = (r.database.query("SELECT id FROM secret_requests").get() as { id: string }).id;
+  expect((await r.post("lookup", { id }))!.status).toBe(200);
+  expect(await (await r.post("decline", { id }))!.json()).toEqual({ ok: true, state: "declined" });
+  expect((await r.post("lookup", { token: tokenOf(url) }))!.status).toBe(410);
+  expect((await r.post("connector", { id, auth: "basic" }))!.status).toBe(400);
+  expect((await r.post("unknown", { id }))!.status).toBe(404);
 });

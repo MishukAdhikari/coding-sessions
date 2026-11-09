@@ -3,7 +3,7 @@ import { loadTokenKey } from "./secrets";
 import { resolvePublicFile, requestClientIp, allowsApiMutation } from "./http-security";
 import { db, deleteMeta, getMeta, setMeta } from "./db";
 import * as auth from "./auth";
-import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, managedSessionId } from "./sessions";
+import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, managedSessionId, restartBlocker } from "./sessions";
 import * as claudeAuth from "./claude-auth";
 import { codexAuth } from "./codex-auth";
 import * as claudeChat from "./claude-chat";
@@ -51,6 +51,10 @@ import { agentAccounts } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 import { handleSecretsRoute } from "./secrets-route";
 import { secretStore } from "./secret-store";
+import { SecretRequests } from "./secret-requests";
+import { handleSecretRequestsRoute } from "./secret-requests-route";
+import { currentLaunchIds, launchSecrets, refreshLaunchSecrets } from "./launch-secrets";
+import { restartSession } from "./session-restart";
 import { recordAccountLogin } from "./account-history";
 import { countActivity, createActivitySignal, handleActivityRequest } from "./activity-signal";
 import { readBootTime, runBootResume } from "./boot-resume";
@@ -94,6 +98,42 @@ const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
 loadTokenKey(); // Reject a missing/malformed configured encryption key before serving requests.
 // The redirect URI and client metadata derive from the configured ORIGIN, never a request's Host.
 const connectorOAuth = new ConnectorOAuth({ connectors, origin: auth.ORIGIN });
+
+/* ---------- secrets for running sessions, and requests for new ones ---------- */
+
+// One snapshot-only build per second at most: status tools compare many names at once.
+let snapshotEnv: { at: number; env: Promise<Record<string, string>> } | null = null;
+function currentSecretEnv(): Promise<Record<string, string>> {
+  if (!snapshotEnv || Date.now() - snapshotEnv.at > 1000) {
+    snapshotEnv = { at: Date.now(), env: secretStore().sessionEnv({ fetch: false }).catch(() => ({})) };
+  }
+  return snapshotEnv.env;
+}
+/** Rewrite every running session's $CS_SECRETS_FILE and drop the files of ended ones. */
+function refreshSecretsFiles(): void {
+  snapshotEnv = null;
+  void refreshLaunchSecrets({ database: db, dir: launchSecrets.dir, env: currentSecretEnv })
+    .then(() => launchSecrets.fingerprints.forget(currentLaunchIds(db)));
+}
+const secretRequests = new SecretRequests({
+  database: db, origin: auth.ORIGIN, secrets: secretStore, connectors,
+  log: line => console.log(line),
+  onSecretsChanged: refreshSecretsFiles,
+  secretsFile: id => launchSecrets.path(id),
+  inLaunchEnvironment: async (launchId, name) => launchSecrets.fingerprints.compare(launchId, name, (await currentSecretEnv())[name]),
+});
+const restart = (id: string) => restartSession(id, {
+  blocker: restartBlocker,
+  provider: (sessionId) => {
+    const row = db.query("SELECT provider FROM launches WHERE screen = ?").get(sessionId.slice(2)) as { provider: SessionProvider } | null;
+    return row?.provider ?? null;
+  },
+  end: (sessionId) => killSession(sessionId),
+  gone: async (sessionId) => !await mux.find(sessionId.slice(2)),
+  resume: resumeArchived,
+  sleep: (ms) => Bun.sleep(ms),
+});
+
 const bootstrapPath = await auth.ensureAdminPassword();
 if (bootstrapPath) console.log(`Initial admin credential is in the protected file: ${bootstrapPath}`);
 
@@ -205,6 +245,14 @@ const mcpDeps: McpDeps = {
   sendKeys: chatAwareIo.sendKeys,
   sleep: (ms) => Bun.sleep(ms),
   now: () => Date.now(),
+  secrets: {
+    requests: secretRequests,
+    async session(id) {
+      const session = (await listSessions()).find((s) => s.id === id && s.kind === "managed" && s.status !== "ended");
+      return session ? { launchId: session.launchId, screen: id.slice(2), sessionName: session.name, agent: session.provider } : null;
+    },
+  },
+  restart,
 };
 
 /* ---------- server ---------- */
@@ -269,7 +317,7 @@ const server = Bun.serve({
     });
     if (oauthResponse) return oauthResponse;
 
-    if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req);
+    if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req, { requests: secretRequests });
     if (path === "/mcp/connectors") return handleConnectorRequest(connectors, req);
 
     if (path === "/mcp") {
@@ -367,9 +415,15 @@ const server = Bun.serve({
 
     const secretsResponse = await handleSecretsRoute(req, {
       cookieName: COOKIE_NAME, origin: auth.ORIGIN, checkBrowserSession: auth.checkAuthSession,
-      isAuthenticated: isAuthed, store: secretStore,
+      isAuthenticated: isAuthed, store: secretStore, onChanged: refreshSecretsFiles,
     });
     if (secretsResponse) return secretsResponse;
+
+    const secretRequestsResponse = await handleSecretRequestsRoute(req, {
+      cookieName: COOKIE_NAME, origin: auth.ORIGIN, checkBrowserSession: auth.checkAuthSession,
+      isAuthenticated: isAuthed, requests: () => secretRequests, grants: stepUpGrants,
+    });
+    if (secretRequestsResponse) return secretRequestsResponse;
 
     const cliUpdatesResponse = await handleCliUpdatesRoute(req, {
       cookieName: COOKIE_NAME,
@@ -406,7 +460,7 @@ const server = Bun.serve({
 
     const connectorsResponse = await handleConnectorsRoute(req, {
       cookieName: COOKIE_NAME, checkBrowserSession: auth.checkAuthSession, isAuthenticated: isAuthed, connectors,
-      oauth: connectorOAuth, origin: auth.ORIGIN,
+      oauth: connectorOAuth, origin: auth.ORIGIN, onOAuthConnected: (id) => secretRequests.oauthConnected(id),
     });
     if (connectorsResponse) return connectorsResponse;
 
@@ -608,7 +662,10 @@ const server = Bun.serve({
     }
 
     if (path === "/api/sessions" && method === "GET") {
-      return json({ sessions: withPrLinks(await listSessions()), archived: listArchive(), host: hostStats() });
+      // Which sessions wait on the member for a secret or a connector (names and ids only).
+      const waiting = secretRequests.pendingByScreen();
+      const sessions = withPrLinks(await listSessions()).map((s) => ({ ...s, requests: s.id.startsWith("m:") ? waiting.get(s.id.slice(2)) ?? [] : [] }));
+      return json({ sessions, archived: listArchive(), host: hostStats() });
     }
 
     const transcriptResponse = await handleTranscriptRoute(req, { database: db, roots: transcriptRoots, sendText: sessionIo.sendText });
@@ -692,6 +749,13 @@ const server = Bun.serve({
     if (path.startsWith("/api/sessions/") && path.endsWith("/ws-state") && method === "GET") {
       const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/ws-state".length));
       return json(await workspaceState(id));
+    }
+
+    // Restart with new secrets: end and resume the same conversation (server/session-restart.ts).
+    if (path.startsWith("/api/sessions/") && path.endsWith("/restart") && method === "POST") {
+      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/restart".length));
+      const result = await restart(id);
+      return result.ok ? json(result) : json(result, result.ended ? 500 : 422);
     }
 
     if (path.startsWith("/api/sessions/") && method === "DELETE") {
@@ -878,6 +942,11 @@ if (config.resumeAfterBoot) {
   // next boot and that boot leaves it ended, even when nobody has the app open.
   setInterval(() => { void listSessions().catch(() => {}); }, 60_000).unref();
 }
+
+// Secrets files: rebuilt for running sessions at start (the runtime directory may have been
+// cleared), and swept every minute so a file never outlives its session for long.
+refreshSecretsFiles();
+setInterval(refreshSecretsFiles, 60_000).unref();
 
 // Live agents survive service restarts; retain their credentials until their launch ends.
 setInterval(() => {
