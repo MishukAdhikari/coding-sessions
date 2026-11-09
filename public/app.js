@@ -2310,7 +2310,8 @@
     const token = readSecretRequest();
     if (!token) return;
     secretRequestToken = token;
-    if (me?.authed && !$("app").hidden) openSecretRequestLink();
+    // The app shows only when signed in; `me` is the boot answer and stays stale after an in-page sign-in.
+    if (!$("app").hidden) openSecretRequestLink();
   });
 
   const secretsUI = window.createSecretsUI({ $, api, openSheet, showToast, agoStr, escapeHtml,
