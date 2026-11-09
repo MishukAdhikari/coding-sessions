@@ -2,11 +2,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
-html { background: var(--surface-page); scrollbar-color: var(--border-default) var(--surface-page); }
-body { min-height: 100dvh; color: var(--text-primary); background: var(--surface-page); font: 400 16px/1.5 var(--font-body); }
+html { background: var(--surface-page); scrollbar-color: var(--border-default) var(--surface-page); touch-action: manipulation; overscroll-behavior: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { min-height: 100dvh; overflow-x: clip; overscroll-behavior: none; color: var(--text-primary); background: var(--surface-page); font: 400 16px/1.5 var(--font-body); }
 body.sheet-open { overflow: hidden; }
 ::selection { background: var(--action-primary); color: var(--action-text); }
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { border: 0; background: none; color: inherit; cursor: pointer; touch-action: manipulation; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 .btn.is-busy:disabled { opacity: .8; cursor: progress; }
@@ -39,7 +39,10 @@ h1, h2 { text-wrap: balance; line-height: 1.1; }
 #btn-menu { margin-left: auto; }
 .host:not([hidden]) + #btn-menu { margin-left: 4px; }
 .icon-btn:hover { background: var(--surface-muted); }
-.tabs { display: flex; gap: 24px; margin: 0 24px; border-bottom: 1px solid var(--border-default); }
+.tabs { --tabs-gutter: 24px; position: sticky; top: env(safe-area-inset-top); z-index: 4; display: flex; gap: 24px; padding-inline: var(--tabs-gutter); background: linear-gradient(var(--border-default), var(--border-default)) bottom center / calc(100% - 2 * var(--tabs-gutter)) 1px no-repeat, var(--bar-bg); -webkit-backdrop-filter: var(--bar-blur); backdrop-filter: var(--bar-blur); }
+/* The status bar is see-through in the installed app: the list scrolls under a
+   strip of the same frosted material as the sticky tabs, never under bare text. */
+#app::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 6; height: env(safe-area-inset-top); background: var(--bar-bg); -webkit-backdrop-filter: var(--bar-blur); backdrop-filter: var(--bar-blur); pointer-events: none; }
 .tab { position: relative; min-height: 48px; padding: 8px 0 14px; color: var(--text-secondary); font-size: 14px; font-weight: 600; }
 .tab.selected { color: var(--action-primary); }
 .tab.selected::after { content: ''; position: absolute; height: 2px; bottom: -1px; left: 0; right: 0; background: var(--action-primary); }
@@ -92,7 +95,7 @@ h1, h2 { text-wrap: balance; line-height: 1.1; }
 .empty-halo { display: none; }
 .empty h2 { font-size: 28px; font-weight: 500; letter-spacing: -.025em; }
 .empty p { margin-top: 12px; color: var(--text-secondary); font-size: 15px; }
-.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; padding: 16px 24px calc(env(safe-area-inset-bottom) + 16px); border-top: 1px solid var(--border-default); background: var(--surface-page); }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; padding: 16px max(24px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 16px) max(24px, env(safe-area-inset-left)); border-top: 1px solid var(--border-default); background: var(--bar-bg); -webkit-backdrop-filter: var(--bar-blur); backdrop-filter: var(--bar-blur); }
 
 .btn { border-radius: var(--radius-control); padding: 13px 20px; min-height: 48px; font-size: 15px; font-weight: 600; line-height: 1.4; transition: background var(--duration-fast), color var(--duration-fast); }
 a.btn { display: block; text-align: center; text-decoration: none; }
@@ -194,7 +197,7 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .copy-chip { position: absolute; right: 8px; top: 8px; padding: 6px 10px; border-radius: 4px; background: var(--action-primary); color: var(--action-text); font-size: 12px; font-weight: 600; }
 .toast { position: fixed; z-index: 20; bottom: calc(env(safe-area-inset-bottom) + 96px); left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 32px); padding: 12px 18px; border-radius: var(--radius-control); box-shadow: var(--shadow-overlay); background: var(--text-primary); color: var(--surface-panel); font-size: 14px; }
 
-#login { align-items: center; justify-content: center; padding: 24px; }
+#login, #offline { align-items: center; justify-content: center; padding: 24px; }
 .login-wrap { width: min(380px,100%); }
 .wordmark { width: 48px; height: 48px; margin-bottom: 40px; color: var(--action-primary); }
 .wordmark-halo, .wordmark-dot { display: none; }
@@ -224,7 +227,7 @@ a.btn { display: block; text-align: center; text-decoration: none; }
   .title { font-size: 32px; }
   .host { font-size: 10px; }
   .host-row { grid-template-columns: 24px 28px 62px; gap: 4px; }
-  .tabs { margin-inline: 20px; }
+  .tabs { --tabs-gutter: 20px; }
   .list { margin-inline: 20px; padding-inline: 12px; }
   .card { gap: 12px; align-items: flex-start; }
   .avatar { width: 32px; height: 32px; margin-top: 3px; }
@@ -401,3 +404,58 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .mode-opt:has(input:disabled) { color: var(--text-muted); cursor: not-allowed; }
 .mode-tag { margin-left: 2px; padding: 1px 5px; border-radius: 4px; background: var(--surface-muted); color: var(--text-secondary); font-family: var(--font-data); font-size: 10px; font-weight: 600; letter-spacing: .04em; vertical-align: 1px; }
 .mode-opt:has(input:disabled) .mode-tag { color: var(--text-muted); }
+
+/* ---------- installed-app feel ---------- */
+
+/* Bars and controls are for tapping, not selecting: no text selection or long-press
+   callout on them. Content (sheet text, tokens, paths, chat) stays selectable. */
+.topbar, .tabs, .dock, .card, button, .grab, .term-bar, .term-keys, .wordmark, .ptr, .install-hint { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+img, svg { -webkit-user-drag: none; }
+
+/* A press answers at once, the way a native control does. */
+.btn, .icon-btn, .term-btn, .key, .sheet-close, .sheet-back, .row-btn, .tab, .pick, .provider-pick, .repo-opt, .branch-btn, .card { transition: transform 120ms var(--ease-out), opacity 120ms var(--ease-out), background var(--duration-fast), color var(--duration-fast); }
+.btn:active:not(:disabled), .icon-btn:active, .term-btn:active, .key:active, .sheet-close:active { transform: scale(.96); }
+.card:active, .row-btn:active, .pick:active, .provider-pick:active, .repo-opt:active, .branch-btn:active { background: var(--surface-muted); }
+.tab:active, .sheet-back:active { opacity: .6; }
+@media (prefers-reduced-motion: reduce) {
+  .btn:active:not(:disabled), .icon-btn:active, .term-btn:active, .key:active, .sheet-close:active { transform: none; opacity: .7; }
+}
+
+@media (pointer: coarse) {
+  /* Touch scrolling shows its own indicator; a desktop scrollbar track is a web tell. */
+  html, .sheet, .term-keys { scrollbar-width: none; }
+  html::-webkit-scrollbar, .sheet::-webkit-scrollbar, .term-keys::-webkit-scrollbar { display: none; }
+  /* iOS zooms into any field under 16px when it takes focus. */
+  input, select, textarea { font-size: max(16px, 1em); }
+}
+
+/* Coming back from another app can leave iOS with a stale, blank frame; native.js
+   toggles this for one frame to force a repaint. */
+html.repaint body { opacity: .999; }
+
+/* Pull to refresh: the content follows the finger and a spinner fills in above it. */
+#app { --pull: 0px; --pull-progress: 0; }
+#app > .topbar, #app > .tabs, #app > .session-search, #app > .search-status, #app > .install-hint, #app > .list, #app > .empty { transform: translateY(var(--pull)); transition: transform var(--duration-panel) var(--ease-out); }
+#app.ptr-pulling > * { transition: none; }
+.ptr { position: fixed; z-index: 7; top: calc(env(safe-area-inset-top) + 10px); left: 50%; width: 32px; height: 32px; margin-left: -16px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-panel); box-shadow: var(--shadow-list); opacity: var(--pull-progress); transform: translateY(calc(var(--pull) - 44px)) scale(calc(.6 + var(--pull-progress) * .4)); transition: transform var(--duration-panel) var(--ease-out), opacity var(--duration-panel) var(--ease-out); pointer-events: none; }
+#app.ptr-pulling .ptr { transition: none; }
+.ptr-spinner { width: 18px; height: 18px; border: 2px solid var(--border-default); border-top-color: var(--action-primary); border-radius: 50%; transform: rotate(calc(var(--pull-progress) * 300deg)); }
+#app.ptr-armed .ptr-spinner { border-color: var(--action-primary); border-top-color: transparent; }
+#app.ptr-refreshing .ptr-spinner { border-color: var(--border-default); border-top-color: var(--action-primary); animation: btn-spin .7s linear infinite; }
+@media (prefers-reduced-motion: reduce) { #app.ptr-refreshing .ptr-spinner { animation: btn-spin 2.4s linear infinite !important; } }
+
+/* A sheet under the finger moves with it, without easing. */
+.sheet.dragging { transition: none; }
+
+/* Install hint: quiet, above the list, gone once dismissed. */
+.install-hint { display: flex; align-items: center; gap: 12px; margin: 0 24px 16px; padding: 10px 6px 10px 14px; border: 1px solid var(--border-default); border-radius: var(--radius-panel); background: var(--surface-panel); }
+.install-icon { flex: none; color: var(--action-primary); }
+.install-copy { flex: 1; min-width: 0; }
+.install-title { font-size: 14px; font-weight: 600; line-height: 1.35; }
+.install-body { margin-top: 2px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; text-wrap: pretty; }
+.install-action { flex: none; min-height: 44px; padding: 0 12px; border-radius: var(--radius-control); color: var(--action-primary); font-size: 14px; font-weight: 600; }
+.install-action:hover { background: var(--action-tint); }
+.install-dismiss { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: var(--radius-control); color: var(--text-secondary); }
+.install-dismiss:hover { background: var(--surface-muted); }
+@media (max-width: 420px) { .install-hint { margin-inline: 20px; } }
+@media (min-width: 760px) { .install-hint { display: none; } }

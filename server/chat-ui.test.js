@@ -5,11 +5,12 @@ import { createDocument, loadBody, text } from "./chat-test-dom.js";
 
 const read = (path) => readFileSync(new URL(`../public/${path}`, import.meta.url), "utf8");
 const page = read("chat.html");
-const scripts = ["chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
+const scripts = ["native.js", "chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
 
 /** The real chat page (its markup and its three scripts) against scripted server replies. */
-function harness({ responses = [], id = "m:cs-demo", query = "", hold = false } = {}) {
+function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, keyboard = false } = {}) {
   const document = loadBody(createDocument(), page);
+  document.documentElement.style.setProperty = (name, value) => { document.documentElement.style[name] = value; };
   const timers = [];
   const requests = [];
   const held = []; // with hold, each GET waits until release() answers it
@@ -25,6 +26,8 @@ function harness({ responses = [], id = "m:cs-demo", query = "", hold = false } 
     location: { search: `?id=${encodeURIComponent(id)}&name=demo${query}`, href: "" },
     navigator: {},
     open: () => null, close() {}, closed: false, addEventListener() {},
+    // An on-screen keyboard covering the bottom 344px of an 844px phone.
+    innerHeight: 844, visualViewport: keyboard ? { height: 500, addEventListener() {} } : undefined, scrollY: 0,
     setTimeout: (fn, ms) => { const t = { fn, ms, live: true }; timers.push(t); return timers.length; },
     clearTimeout: (n) => { if (timers[n - 1]) timers[n - 1].live = false; },
   };
@@ -307,4 +310,19 @@ test("a poll asked for while one is still running waits for it, so streamed text
   expect(all).toContain("Hello world");
   expect(all.split("Hello").length - 1).toBe(1);
   expect(all.split(" world").length - 1).toBe(1);
+});
+
+test("with an on-screen keyboard up, Enter starts a new line and the send button sends", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [])], keyboard: true });
+  await settle();
+  expect(h.document.documentElement.style["--chat-vh"]).toBe("500px");
+  h.$("chat-input").value = "first line";
+  h.$("chat-input").dispatch("input");
+  h.$("chat-input").dispatch("keydown", { key: "Enter", shiftKey: false });
+  await settle();
+  expect(h.requests.filter((r) => r.method === "POST")).toEqual([]);
+  h.$("chat-send").click();
+  h.$("chat-form").dispatch("submit");
+  await settle();
+  expect(h.requests.filter((r) => r.method === "POST").map((r) => r.body)).toEqual([{ op: "prompt", text: "first line" }]);
 });

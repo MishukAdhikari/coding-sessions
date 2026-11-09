@@ -480,9 +480,12 @@
 
     $("chat-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
     input.addEventListener("input", () => { fit(); syncComposer(); });
-    // Enter sends; Shift+Enter adds a line; an IME composing a character keeps Enter for itself.
+    // Enter sends; Shift+Enter adds a line; an IME composing a character keeps Enter
+    // for itself. The page may say otherwise (an on-screen keyboard, where Enter is
+    // the only way to start a new line).
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      if (handlers.enterSends && !handlers.enterSends(e)) return;
       e.preventDefault();
       submit();
     });

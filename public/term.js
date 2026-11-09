@@ -233,6 +233,8 @@
     if (doc && (doc.getElementById("login") || doc.getElementById("app"))) { showSignedOut(); return; }
 
     // `load` fires before ttyd has constructed its Terminal, so window.term is
+    // Pinch and double-tap inside the terminal would zoom the whole app on iOS.
+    if (doc) window.NativeShell.guardZoom(doc);
     // still undefined here — poll for it rather than configuring nothing.
     let tries = 0;
     const wait = setInterval(() => {
@@ -265,8 +267,8 @@
       // Only take over while something is actually covering the page. A small
       // delta is just browser chrome collapsing, and overriding for that would
       // fight the CSS on every scroll.
-      const covered = window.innerHeight - vv.height;
-      if (covered > 120) height = `${vv.height}px`;
+      const covered = window.NativeShell.keyboardViewport({ innerHeight: window.innerHeight, vvHeight: vv.height });
+      if (covered) height = `${covered}px`;
     }
     document.documentElement.style.setProperty("--term-vh", height);
     refit();

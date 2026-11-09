@@ -9,8 +9,9 @@
   function apply() {
     const dark = preference === "dark" || (preference === "system" && system.matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = dark ? "#141b20" : "#f3f2ed";
+    // One color per scheme for the browser before this runs; then the chosen one,
+    // so a forced theme also colors the status bar and Android's task switcher.
+    for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.content = dark ? "#141b20" : "#f3f2ed";
     const picker = document.getElementById("theme-preference");
     if (picker) picker.value = preference;
   }

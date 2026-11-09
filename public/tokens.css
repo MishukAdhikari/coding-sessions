@@ -33,7 +33,7 @@
   --type-menu-action: 1rem;
   --type-menu-helper: .875rem;
   --type-menu-label: .8125rem;
-  --font-body: "Instrument Sans", sans-serif;
+  --font-body: "Instrument Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-data: ui-monospace, SFMono-Regular, Menlo, monospace;
   --space-1: 4px;
   --space-2: 8px;
@@ -49,6 +49,8 @@
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   --duration-fast: 150ms;
   --duration-panel: 280ms;
+  --bar-bg: color-mix(in srgb, var(--surface-page) 84%, transparent);
+  --bar-blur: blur(18px) saturate(1.4);
   --bg: var(--surface-page);
   --bg-elev: var(--surface-panel);
   --bg-elev2: var(--surface-muted);

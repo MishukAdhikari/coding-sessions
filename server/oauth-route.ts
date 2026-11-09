@@ -31,7 +31,7 @@ function page(title: string, body: string, status = 200): Response {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="referrer" content="same-origin">
 <title>${esc(title)} · Coding Sessions</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">

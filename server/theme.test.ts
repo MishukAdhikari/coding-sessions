@@ -16,7 +16,7 @@ function themeHarness(stored: string | null, dark = false, blocked = false) {
       setItem: (key: string, value: string) => { if (blocked) throw Error(); storage.set(key, value); },
       removeItem: (key: string) => { if (blocked) throw Error(); storage.delete(key); },
     },
-    document: { documentElement: root, querySelector: () => meta, getElementById: () => picker,
+    document: { documentElement: root, querySelectorAll: () => [meta], getElementById: () => picker,
       addEventListener: (name: string, fn: () => void) => events.set(name, fn) },
   });
   return { root, meta, media, storage, picker,

@@ -4,10 +4,10 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
-html { background: var(--surface-page); scrollbar-color: var(--border-default) transparent; }
-body { color: var(--text-primary); background: var(--surface-page); font: 400 16px/1.5 var(--font-body); font-kerning: normal; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+html { background: var(--surface-page); scrollbar-color: var(--border-default) transparent; touch-action: manipulation; overscroll-behavior: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { overscroll-behavior: none; color: var(--text-primary); background: var(--surface-page); font: 400 16px/1.5 var(--font-body); font-kerning: normal; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
 ::selection { background: var(--action-tint); color: var(--text-primary); }
-button, input, textarea { font: inherit; color: inherit; }
+button, input, textarea, select { font: inherit; color: inherit; }
 button { border: 0; background: none; cursor: pointer; touch-action: manipulation; }
 button:disabled { cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--action-primary); outline-offset: 2px; }
@@ -21,7 +21,8 @@ button:disabled { cursor: not-allowed; }
   --cv-add: color-mix(in srgb, var(--status-positive) 13%, transparent);
   --cv-del: color-mix(in srgb, var(--status-danger) 12%, transparent);
   --cv-code-bg: color-mix(in srgb, var(--surface-muted) 55%, var(--surface-panel));
-  height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  /* --chat-vh is the room left above an on-screen keyboard (native.js). */
+  height: var(--chat-vh, 100dvh); min-height: 0; display: flex; flex-direction: column; overflow: hidden;
 }
 .cv-column { width: 100%; max-width: calc(var(--cv-measure) + var(--cv-gutter) + var(--cv-gutter-r)); margin-inline: auto; padding-inline: var(--cv-gutter) var(--cv-gutter-r); }
 
@@ -32,6 +33,7 @@ button:disabled { cursor: not-allowed; }
   padding: calc(env(safe-area-inset-top) + 6px) calc(var(--cv-gutter-r) - 6px) 6px calc(var(--cv-gutter) - 10px);
   border-bottom: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
   background: var(--surface-page);
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 .cv-icon-btn { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border-radius: var(--radius-control); color: var(--text-secondary); }
 .cv-icon-btn .cv-icon { width: 20px; height: 20px; }
@@ -233,6 +235,8 @@ summary.cv-tool-row:hover { background: var(--surface-muted); }
 /* ---------- dock: permission card and composer ---------- */
 
 .cv-dock { position: relative; flex: none; padding: 8px 0 calc(env(safe-area-inset-bottom) + 12px); background: var(--surface-page); }
+/* The keyboard covers the home indicator, so its inset is not room the dock needs. */
+.keyboard-up .cv-dock { padding-bottom: 8px; }
 .cv-dock::before { content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 20px; background: linear-gradient(to bottom, transparent, var(--surface-page)); pointer-events: none; }
 .cv-dock > .cv-column { display: grid; gap: 8px; }
 .cv-jump { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px 0 11px; border: 1px solid var(--border-default); border-radius: 999px; background: var(--surface-panel); box-shadow: var(--shadow-overlay); font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
@@ -304,6 +308,16 @@ summary.cv-tool-row:hover { background: var(--surface-muted); }
   .cv-time { display: none; }
 }
 @media (hover: none) { .cv-time { display: none; } }
+
+/* A press answers at once, the way a native control does. */
+button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.cv-icon-btn, .cv-text-btn, .cv-round, .cv-perm-btn, .cv-jump, .cv-gone-link { transition: transform 120ms var(--ease-out), background var(--duration-fast), color var(--duration-fast), opacity var(--duration-fast); }
+.cv-icon-btn:active, .cv-text-btn:active, .cv-round:active:not(:disabled), .cv-perm-btn:active:not(:disabled), .cv-gone-link:active { transform: scale(.94); }
+@media (pointer: coarse) {
+  html, .cv-main { scrollbar-width: none; }
+  .cv-main::-webkit-scrollbar { display: none; }
+}
+html.repaint body { opacity: .999; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }

@@ -113,13 +113,23 @@
   };
   let cliLoginCode = readCliLoginCode();
 
+  // Never a blank page: until the server answers, the offline screen says so and
+  // offers a retry, and coming back online or to the app retries on its own.
+  let booting = false;
   async function boot() {
+    if (booting) return;
+    booting = true;
+    $("btn-retry").disabled = true;
     try {
       me = await api("/api/me");
     } catch {
-      showToast("Can't reach the server.");
+      showOffline();
       return;
+    } finally {
+      booting = false;
+      $("btn-retry").disabled = false;
     }
+    $("offline").hidden = true;
     me.authed ? enterApp() : showLogin();
     if (setupToken && me.authed) setupToken = null; // already signed in; leave the link unused
   }
@@ -138,6 +148,12 @@
       loginError(e.message);
     }
   });
+
+  function showOffline() {
+    if (!$("login").hidden || !$("app").hidden) return; // already running: the list says "Connection lost · retrying…"
+    $("offline").hidden = false;
+  }
+  $("btn-retry").addEventListener("click", boot);
 
   /* ---------- login ---------- */
 
@@ -238,12 +254,16 @@
       }
     }
     if (cliLoginCode) openCliLogin();
-    refresh(true);
+    // Back from chat or the terminal on a page iOS had discarded: return to where
+    // the list was (saved in its history entry before leaving).
+    refresh(true).then(() => {
+      const y = Number(history.state?.scrollY);
+      if (y > 0) requestAnimationFrame(() => window.scrollTo(0, y));
+    });
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 4000);
   }
 
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && me?.authed !== false && !$("app").hidden) refresh(); });
 
   async function refresh(force = false) {
     const version = ++refreshVersion;
@@ -540,7 +560,9 @@
       return `<span class="pr-link" role="link" tabindex="0" data-state="${state}" data-href="${escapeHtml(pr.url)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${prIcon(state)}<span class="pr-num">${escapeHtml(text)}</span></span>`;
     }).join("")}</span>`;
   };
-  const openPrLink = (href) => { if (PR_URL_RE.test(href || "")) window.open(href, "_blank", "noopener,noreferrer"); };
+  // Through a real anchor: in the installed app iOS opens it over the app and the
+  // app stays mounted underneath, instead of coming back to a blank page.
+  const openPrLink = (href) => { if (PR_URL_RE.test(href || "")) window.NativeShell.openExternal(href); };
   const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   // Long paths truncate in the MIDDLE so both the root and the folder name stay visible
@@ -556,6 +578,32 @@
     .filter((node) => node.getClientRects().length > 0);
   function openSheet(id, { back = false, returnFocus = null, scrollTop = 0 } = {}) {
     if (openSheetEl?.id === id) return;
+  // Each open sheet level owns one history entry, so the system back gesture (iOS
+  // edge swipe, Android back) closes a sheet instead of leaving the app.
+  // sheetDepth counts the entries this page pushed; popstate is the one path that
+  // steps back through them.
+  let sheetDepth = 0;
+  let ignoredPops = 0;
+  let unwound = Promise.resolve();
+  let finishUnwind = null;
+  const sheetState = (depth) => ({ ...(history.state && typeof history.state === "object" ? history.state : {}), sheet: depth });
+  function pushSheetEntry(replace) {
+    unwound.then(() => {
+      if (replace) history.replaceState(sheetState(sheetDepth), "");
+      else history.pushState(sheetState(++sheetDepth), "");
+    });
+  }
+  function unwindSheetEntries() {
+    if (!sheetDepth) return;
+    const steps = sheetDepth;
+    sheetDepth = 0;
+    ignoredPops++;
+    unwound = new Promise((resolve) => {
+      finishUnwind = resolve;
+      setTimeout(resolve, 600); // a traversal the browser drops must not hold later sheets
+    });
+    history.go(-steps);
+  }
     if (!openSheetEl) sheetTrigger = document.activeElement;
     if (!back && openSheetEl && (openSheetEl.id === "sheet-menu" || sheetHistory.length)) {
       sheetHistory.push({ id: openSheetEl.id, focus: document.activeElement, scrollTop: openSheetEl.scrollTop });
@@ -564,6 +612,7 @@
     openSheetEl = $(id);
     const sheet = openSheetEl;
     const backButton = sheet.querySelector(".sheet-back");
+    if (!back) pushSheetEntry(!!openSheetEl && !(sheetHistory.length && sheetHistory.at(-1).id === openSheetEl.id));
     backButton.hidden = sheetHistory.length === 0;
     if (sheetHistory.length) {
       const parent = $(sheetHistory.at(-1).id);
@@ -584,8 +633,11 @@
       (returnFocus?.isConnected && sheet.contains(returnFocus) ? returnFocus : sheet).focus({ preventScroll: true });
     });
   }
-  function closeSheet(restoreFocus = true, keepHistory = false) {
-    if (!keepHistory) sheetHistory = [];
+  function closeSheet(restoreFocus = true, keepHistory = false, fromHistory = false) {
+    if (!keepHistory) {
+      sheetHistory = [];
+      if (!fromHistory) unwindSheetEntries();
+    }
     if (!openSheetEl) return;
     const el = openSheetEl;
     if (el.id === "sheet-server-settings") cancelServerConfirm?.();
@@ -612,7 +664,7 @@
       if (restoreFocus && !openSheetEl && sheetTrigger?.isConnected) sheetTrigger.focus({ preventScroll: true });
     }, 300);
   }
-  function backSheet() {
+  function stepBackSheet() {
     const previous = sheetHistory.pop();
     if (previous) openSheet(previous.id, { back: true, returnFocus: previous.focus, scrollTop: previous.scrollTop });
   }
@@ -620,6 +672,19 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = "sheet-back";
+  // The in-sheet Back button goes through history too, so the next system back
+  // still closes exactly one level.
+  function backSheet() {
+    if (sheetDepth > 1) history.back();
+    else stepBackSheet();
+  }
+  window.addEventListener("popstate", (event) => {
+    if (ignoredPops > 0) { ignoredPops--; finishUnwind?.(); return; }
+    const target = Number(event.state?.sheet) || 0;
+    const step = window.NativeShell.historyTarget(sheetDepth, target);
+    if (step.action === "close") { sheetDepth = 0; closeSheet(true, false, true); }
+    else if (step.action === "back") { sheetDepth = target; for (let i = 0; i < step.steps; i++) stepBackSheet(); }
+  });
     button.hidden = true;
     button.innerHTML = '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7M5 12h14"/></svg>Back';
     button.addEventListener("click", backSheet);
@@ -1182,13 +1247,15 @@
     };
   }
 
-  // Open a live, writable web terminal in its own tab. It runs inside a session
+  // Open a live, writable web terminal: in the installed app, in this window (back
+  // returns to the list); in a browser, in its own tab. It runs inside a session
   // holder (zmx, or screen for older sessions) on the server and is proxied through this (already-gated) origin — so
   // closing the tab just detaches and whatever's running keeps going in the
   // background. The tab gets term.html, which wraps ttyd's bare xterm.js UI in a
   // title bar, a Close button and a key row (ttyd alone is unusable on a phone).
-  // Pop the tab synchronously BEFORE the async POST so iOS Safari doesn't treat
-  // the later navigation as a non-gesture popup and block it.
+  // screenOpener pops the tab synchronously BEFORE the async POST so iOS Safari
+  // doesn't treat the later navigation as a non-gesture popup and block it. Nothing
+  // navigates until the terminal exists, so a failed attach is a toast, not a blank page.
   // A Chat (ACP) session's chat reads the bridge's event log; any other chat reads the transcript.
   function chatUrl(s, provider) {
     const query = new URLSearchParams({ id: s.id, name: s.name });
@@ -1197,15 +1264,15 @@
   }
 
   async function openWebTerminal(body, okLabel) {
-    const tab = window.open("about:blank", "_blank");
+    const screen = window.NativeShell.screenOpener();
     try {
       const { id, mux } = await api("/api/terminal", { method: "POST", body: JSON.stringify(body) });
       const label = body.kind === "attach" ? body.screen.replace(/^cs-/, "") : "Server shell";
       const url = `/term.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(label)}&mux=${encodeURIComponent(mux ?? "screen")}`;
-      if (tab) tab.location = url; else window.location.href = url;
-      showToast(okLabel);
+      if (!window.NativeShell.standalone) showToast(okLabel);
+      await screen.go(url);
     } catch (e) {
-      if (tab) tab.close();
+      screen.cancel();
       showToast(e.message || "Couldn’t open the terminal");
     }
   }
@@ -1268,7 +1335,7 @@
     if (canChat) {
       chat.onclick = () => {
         closeSheet();
-        window.open(chatUrl(s, provider), "_blank");
+        window.NativeShell.openScreen(chatUrl(s, provider));
       };
     }
 
@@ -2198,3 +2265,168 @@
 
   boot();
 })();
+  /* ---------- touch gestures ---------- */
+
+  const native = window.NativeShell;
+  const sideSheets = window.matchMedia("(min-width: 760px)");
+
+  // A bottom sheet follows a downward drag from its top and closes past the
+  // threshold (native.js decides), like the system sheets it imitates.
+  document.querySelectorAll(".sheet").forEach((sheet) => {
+    let drag = null;
+    sheet.addEventListener("touchstart", (e) => {
+      drag = null;
+      if (sideSheets.matches || sheet !== openSheetEl || e.touches.length !== 1 || sheet.scrollTop > 0) return;
+      if (e.target.closest("input, textarea, select, .browser-live, .cmd")) return;
+      drag = { y: e.touches[0].clientY, dy: 0, at: e.timeStamp, velocity: 0, active: false };
+    }, { passive: true });
+    sheet.addEventListener("touchmove", (e) => {
+      if (!drag) return;
+      const dy = e.touches[0].clientY - drag.y;
+      if (!drag.active) {
+        if (dy < -6) { drag = null; return; } // scrolling up: the sheet's own content
+        if (dy < 6) return;
+        drag.active = true;
+        sheet.classList.add("dragging");
+      }
+      e.preventDefault();
+      const dt = Math.max(1, e.timeStamp - drag.at);
+      drag.velocity = (dy - drag.dy) / dt;
+      drag.dy = dy;
+      drag.at = e.timeStamp;
+      // Past the top it resists, the way an overscrolled native sheet does.
+      sheet.style.transform = `translateY(${dy > 0 ? dy : dy / 4}px)`;
+      $("scrim").style.opacity = String(Math.max(0, 1 - Math.max(0, dy) / sheet.offsetHeight));
+    }, { passive: false });
+    const end = () => {
+      const done = drag;
+      drag = null;
+      if (!done?.active) return;
+      sheet.classList.remove("dragging");
+      sheet.style.transform = "";
+      $("scrim").style.opacity = "";
+      if (native.sheetShouldDismiss({ dy: done.dy, velocity: done.velocity, height: sheet.offsetHeight })) {
+        native.haptic();
+        closeSheet();
+      }
+    };
+    sheet.addEventListener("touchend", end);
+    sheet.addEventListener("touchcancel", end);
+  });
+
+  // Pull to refresh on the sessions list: the installed app has no browser
+  // refresh, and the list is the one thing worth refreshing by hand.
+  {
+    // State lives on #app: the indicator and the content it pulls down both read it.
+    const ptr = $("app");
+    let pull = null;
+    let refreshing = false;
+    const show = (distance) => {
+      ptr.style.setProperty("--pull", `${distance}px`);
+      ptr.style.setProperty("--pull-progress", String(Math.min(1, distance / native.PULL_TRIGGER)));
+    };
+    document.addEventListener("touchstart", (e) => {
+      pull = null;
+      if (refreshing || openSheetEl || $("app").hidden || e.touches.length !== 1 || window.scrollY > 0) return;
+      if (e.target.closest("input, textarea, select, .sheet, .dock")) return;
+      pull = { y: e.touches[0].clientY, distance: 0, armed: false };
+    }, { passive: true });
+    document.addEventListener("touchmove", (e) => {
+      if (!pull) return;
+      const raw = e.touches[0].clientY - pull.y;
+      if (raw <= 0 || window.scrollY > 0) {
+        if (pull.distance) show(0);
+        pull.distance = 0;
+        ptr.classList.remove("ptr-pulling", "ptr-armed");
+        return;
+      }
+      e.preventDefault();
+      ptr.classList.add("ptr-pulling");
+      pull.distance = native.pullDistance(raw);
+      const armed = native.pullTriggered(pull.distance);
+      if (armed && !pull.armed) native.haptic(6);
+      pull.armed = armed;
+      ptr.classList.toggle("ptr-armed", armed);
+      show(pull.distance);
+    }, { passive: false });
+    const release = async () => {
+      const done = pull;
+      pull = null;
+      if (!done) return;
+      ptr.classList.remove("ptr-pulling", "ptr-armed");
+      if (!native.pullTriggered(done.distance)) { show(0); return; }
+      refreshing = true;
+      ptr.classList.add("ptr-refreshing");
+      show(native.PULL_TRIGGER * 0.75);
+      // Long enough to read as a refresh even when the server answers at once.
+      await Promise.all([refresh(true), new Promise((resolve) => setTimeout(resolve, 450))]);
+      ptr.classList.remove("ptr-refreshing");
+      show(0);
+      refreshing = false;
+    };
+    document.addEventListener("touchend", release);
+    document.addEventListener("touchcancel", release);
+  }
+
+  // Installing: Android offers its own dialog; iOS Safari only has Share, then
+  // Add to Home Screen, so say that. Shown on the list until dismissed, once.
+  {
+    const KEY = "xs_install_hint";
+    const hint = $("install-hint");
+    let deferredPrompt = null;
+    const dismissed = () => { try { return localStorage.getItem(KEY) === "dismissed"; } catch { return false; } };
+    const dismiss = () => { try { localStorage.setItem(KEY, "dismissed"); } catch {} };
+    const sync = () => {
+      const kind = native.installHintKind({
+        standalone: native.standalone, dismissed: dismissed(), hasPrompt: !!deferredPrompt,
+        iosSafari: native.isIosSafari(navigator.userAgent, navigator.maxTouchPoints),
+      });
+      hint.hidden = !kind;
+      if (!kind) return;
+      $("btn-install").hidden = kind !== "prompt";
+      $("install-body").textContent = kind === "prompt"
+        ? "Opens from your home screen, full screen, like any app."
+        : "Tap Share, then “Add to Home Screen” to open it full screen, like any app.";
+    };
+    window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; sync(); });
+    window.addEventListener("appinstalled", () => { deferredPrompt = null; dismiss(); sync(); });
+    $("btn-install").addEventListener("click", async () => {
+      const prompt = deferredPrompt;
+      deferredPrompt = null;
+      if (!prompt) return sync();
+      prompt.prompt();
+      const { outcome } = await prompt.userChoice.catch(() => ({ outcome: "dismissed" }));
+      if (outcome === "accepted") dismiss();
+      sync();
+    });
+    $("btn-install-dismiss").addEventListener("click", () => { dismiss(); sync(); });
+    sync();
+  }
+
+  /* ---------- coming back ---------- */
+
+  // Back from GitHub, another app, or the back-forward cache: whatever the page was
+  // in the middle of may have frozen with it. Retry a boot that never finished,
+  // re-sync the list, and drop any sheet chrome that outlived its sheet.
+  window.NativeShell.onResume(() => {
+    if (!$("offline").hidden) { boot(); return; }
+    if ($("app").hidden) return;
+    if (!openSheetEl) {
+      $("scrim").hidden = true;
+      $("scrim").classList.remove("show");
+      document.body.classList.remove("sheet-open");
+      $("app").inert = false;
+    }
+    refresh(true);
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 4000);
+  });
+
+  // The list's scroll survives a trip to chat or the terminal even when iOS
+  // discarded the page meanwhile: it rides in the list's history entry.
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  window.NativeShell.setBeforeLeave(async () => {
+    await unwound;
+    history.replaceState({ ...(history.state && typeof history.state === "object" ? history.state : {}), scrollY: Math.round(window.scrollY) }, "");
+  });
+
