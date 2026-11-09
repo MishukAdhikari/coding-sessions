@@ -24,7 +24,11 @@
       if (response.ok) {
         const who = data.connector?.auth?.oauth?.identity;
         const account = who ? ` as ${who.email || who.name || who.subject}` : "";
-        show("ok", "Signed in", `${data.connector?.name ?? "The connector"} is signed in${account}. Choose which tools agents may use in its settings.`, data.connector?.id);
+        // Started from a session's request (secret-request.js): this tab has done its job.
+        let fromRequest = false;
+        try { fromRequest = sessionStorage.getItem("cs.connectorRequestDone") === "1"; sessionStorage.removeItem("cs.connectorRequestDone"); } catch {}
+        if (fromRequest) show("ok", "Connected", "You can close this tab.", data.connector?.id);
+        else show("ok", "Signed in", `${data.connector?.name ?? "The connector"} is signed in${account}. Choose which tools agents may use in its settings.`, data.connector?.id);
         back.textContent = "Open connector settings";
       } else show("error", "Sign-in not completed", data.error || "Start the sign-in again from connector settings.");
     })
