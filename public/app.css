@@ -440,9 +440,6 @@ img, svg { -webkit-user-drag: none; }
   input, select, textarea { font-size: max(16px, 1em); }
 }
 
-/* Coming back from another app can leave iOS with a stale, blank frame; native.js
-   toggles this for one frame to force a repaint. */
-html.repaint body { opacity: .999; }
 
 /* Pull to refresh: the content follows the finger and a spinner fills in above it. */
 #app { --pull: 0px; --pull-progress: 0; }
@@ -455,10 +452,8 @@ html.repaint body { opacity: .999; }
 #app.ptr-refreshing .ptr-spinner { border-color: var(--border-default); border-top-color: var(--action-primary); animation: btn-spin .7s linear infinite; }
 @media (prefers-reduced-motion: reduce) { #app.ptr-refreshing .ptr-spinner { animation: btn-spin 2.4s linear infinite !important; } }
 
-/* A sheet under the finger moves with it, without easing. */
 .sheet.dragging { transition: none; }
 
-/* Install hint: quiet, above the list, gone once dismissed. */
 .install-hint { display: flex; align-items: center; gap: 12px; margin: 0 24px 16px; padding: 10px 6px 10px 14px; border: 1px solid var(--border-default); border-radius: var(--radius-panel); background: var(--surface-panel); }
 .install-icon { flex: none; color: var(--action-primary); }
 .install-copy { flex: 1; min-width: 0; }
@@ -471,12 +466,3 @@ html.repaint body { opacity: .999; }
 @media (max-width: 420px) { .install-hint { margin-inline: 20px; } }
 @media (min-width: 760px) { .install-hint { display: none; } }
 
-/* Moving between the list, a chat and a terminal slides like a pushed screen.
-   Back skips it (native.js): the system back gesture already animated the move. */
-@media (prefers-reduced-motion: no-preference) {
-  @view-transition { navigation: auto; }
-  ::view-transition-old(root) { animation: 240ms var(--ease-out) both screen-leave; }
-  ::view-transition-new(root) { animation: 300ms var(--ease-out) both screen-enter; }
-}
-@keyframes screen-enter { from { transform: translateX(32%); opacity: 0; } }
-@keyframes screen-leave { to { transform: translateX(-12%); opacity: .5; } }

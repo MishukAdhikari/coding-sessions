@@ -647,7 +647,7 @@
       sheetHistory.push({ id: openSheetEl.id, focus: document.activeElement, scrollTop: openSheetEl.scrollTop });
     }
     if (!back) pushSheetEntry(!!openSheetEl && !(sheetHistory.length && sheetHistory.at(-1).id === openSheetEl.id));
-    closeSheet(false, true);
+    closeSheet({ restoreFocus: false, keepHistory: true });
     openSheetEl = $(id);
     const sheet = openSheetEl;
     const backButton = sheet.querySelector(".sheet-back");
@@ -671,7 +671,7 @@
       (returnFocus?.isConnected && sheet.contains(returnFocus) ? returnFocus : sheet).focus({ preventScroll: true });
     });
   }
-  function closeSheet(restoreFocus = true, keepHistory = false, fromHistory = false) {
+  function closeSheet({ restoreFocus = true, keepHistory = false, fromHistory = false } = {}) {
     if (!keepHistory) {
       sheetHistory = [];
       if (!fromHistory) unwindSheetEntries();
@@ -716,7 +716,7 @@
     if (ignoredPops > 0) { ignoredPops--; finishUnwind?.(); return; }
     const target = Number(event.state?.sheet) || 0;
     const step = window.NativeShell.historyTarget(sheetDepth, target);
-    if (step.action === "close") { sheetDepth = 0; closeSheet(true, false, true); }
+    if (step.action === "close") { sheetDepth = 0; closeSheet({ fromHistory: true }); }
     else if (step.action === "back") { sheetDepth = target; for (let i = 0; i < step.steps; i++) stepBackSheet(); }
   });
   document.querySelectorAll(".sheet").forEach(sheet => {
@@ -2482,5 +2482,10 @@
     history.replaceState({ ...(history.state && typeof history.state === "object" ? history.state : {}), scrollY: Math.round(window.scrollY) }, "");
   });
 
+  // Coming back often fires two or three of these at once (pageshow, visible,
+  // online): one re-sync is enough.
+  let lastResume = 0;
   boot();
+    if (Date.now() - lastResume < 1000) return;
+    lastResume = Date.now();
 })();

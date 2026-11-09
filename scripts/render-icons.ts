@@ -26,7 +26,7 @@ const maskable = svg.replace(/<rect([^>]*?) rx="\d+"/, "<rect$1");
 if (maskable === svg) throw new Error("icon.svg: expected a rounded <rect> to flatten");
 
 /** iPhone portrait screens in CSS pixels, with their device pixel ratio. */
-export const STARTUP_SCREENS = [
+const STARTUP_SCREENS = [
   { width: 375, height: 812, dpr: 3 },  // X, XS, 11 Pro, 12 mini, 13 mini
   { width: 414, height: 896, dpr: 2 },  // XR, 11
   { width: 390, height: 844, dpr: 3 },  // 12, 13, 14

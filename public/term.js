@@ -184,7 +184,6 @@
 
   /* ---------- close ---------- */
 
-  // Back to wherever it was opened from, close its own tab, or load the list.
   $("btn-term-close").addEventListener("click", () => window.NativeShell.closeScreen());
 
   /* ---------- fitting ---------- */
@@ -263,34 +262,9 @@
   // — the cursor line, and the key row — end up behind the keyboard. Android
   // Chrome takes the `interactive-widget` hint in term.html; iOS ignores it, and
   // neither is worth trusting alone, so drive the height from visualViewport too.
-  const vv = window.visualViewport;
-  let pending = false;
-
-  function syncViewport() {
-    pending = false;
-    let height = "";
-    if (vv) {
-      // Only take over while something is actually covering the page. A small
-      // delta is just browser chrome collapsing, and overriding for that would
-      // fight the CSS on every scroll.
-      const covered = window.NativeShell.keyboardViewport({ innerHeight: window.innerHeight, vvHeight: vv.height });
-      if (covered) height = `${covered}px`;
-    }
-    document.documentElement.style.setProperty("--term-vh", height);
-    refit();
-  }
-
-  // visualViewport fires a burst of events per keyboard animation frame.
-  function queueSync() {
-    if (pending) return;
-    pending = true;
-    requestAnimationFrame(syncViewport);
-  }
-
-  window.addEventListener("resize", queueSync);
-  vv?.addEventListener("resize", queueSync);
-  vv?.addEventListener("scroll", queueSync);
-  window.addEventListener("orientationchange", () => setTimeout(queueSync, 250));
+  // native.js keeps --term-vh at the room above the keyboard (only while one
+  // really covers the page) and calls back so xterm re-fits.
+  window.NativeShell.trackKeyboard("term-vh", () => refit());
 
   function showGone(title, body) {
     frame.hidden = true;

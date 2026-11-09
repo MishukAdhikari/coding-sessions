@@ -185,7 +185,6 @@
       failed: { status: "Failed", tone: "failed" },
     }[state];
     view.setHeader({ ...header, agent: agent?.title || agent?.name || agentParam || null, version: agent?.version });
-    // The agent's advertised slash commands for the composer's "/" menu (only these).
     view.setCommands(Array.isArray(data.commands) ? data.commands : []);
 
     const pending = model.pending();
