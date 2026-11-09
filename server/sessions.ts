@@ -647,6 +647,8 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
     "created_at = excluded.created_at, remote_control = 0, provider = excluded.provider, " +
     "launch_id = excluded.launch_id, phase = 'ready', error_message = NULL, resume_archive_id = NULL, mode = 'terminal'",
   ).run(options.screen, options.name, options.projectPath, Date.now(), options.provider, launchId);
+  // A refresh that ran while spawn was in flight saw no row for this launch and removed its file.
+  launchSecrets.prepare(launchId, secrets);
   return { ok: true };
 }
 
@@ -1955,11 +1957,15 @@ export function restartBlocker(id: string): string | null {
   if (isCommandProvider(provider)) return `${providerDisplayName(provider)} has no conversation to resume, so a restart would lose it. End it and start a new session instead.`;
   if (!existsSync(launch.project_path)) return "Its folder is gone, so it could not come back.";
   if (!canArchiveManagedLaunch(provider, launch.phase)) return "It is still starting. Try again once it is ready.";
+  // The same checks resumeArchived applies to the archive row this end will write.
   if (provider === "codex") {
     const state = launch.launch_id ? db.query("SELECT session_id FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id) as { session_id: string | null } | null : null;
-    return normalizeCodexResumeId(state?.session_id ?? launch.resume_id) ? null : "This Codex session has no conversation id yet, so it could not be resumed.";
+    return canResumeCodexArchive(launch.project_path, launch.name, state?.session_id ?? launch.resume_id) ? null : "This Codex session has no conversation id yet, so it could not be resumed.";
   }
-  if (provider === "command-code") return normalizeCommandCodeSessionId(launch.resume_id) ? null : "This Command Code session has no conversation id yet, so it could not be resumed.";
+  if (provider === "command-code") {
+    return canResumeCommandCodeArchive(launch.project_path, launch.name, launch.resume_id) ? null : "This Command Code session has no saved conversation yet, so it could not be resumed.";
+  }
+  if (launch.project_path.includes("'")) return "That project path can't be resumed safely.";
   const rid = launch.resume_id && RESUME_ID_RE.test(launch.resume_id) ? launch.resume_id : null;
   return (rid && existsSync(transcriptPathFor(launch.project_path, rid))) || projectHasAnyTranscript(launch.project_path)
     ? null : "This Claude session has no saved conversation yet, so it could not be resumed.";

@@ -18,6 +18,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { checkName, SecretStoreError } from "./secret-store";
 import { DestinationError, networkPolicy, validateServerUrl } from "./connector-net";
 import { ConnectorError, type ConnectorView } from "./connectors";
+import type { EnvironmentState } from "./launch-secrets";
 
 export type RequestKind = "secret" | "connector";
 export type RequestState = "pending" | "fulfilled" | "declined" | "expired";
@@ -73,7 +74,9 @@ export interface ConnectorPort {
   check(id: string): Promise<ConnectorView>;
 }
 
-export type EnvironmentState = "current" | "outdated" | "missing" | "unknown";
+export type { EnvironmentState };
+/** A request named by its link's token, or by id from Settings. */
+export type RequestRef = { token?: unknown; id?: unknown };
 
 export interface SecretRequestDependencies {
   database: Database;
@@ -123,6 +126,12 @@ export function cleanReason(value: unknown): string {
   return text;
 }
 
+/** A Secrets name, with the store's own refusal message (reserved names, shape). */
+function secretName(value: unknown): string {
+  try { return checkName(value); }
+  catch (error) { throw new SecretRequestError(error instanceof SecretStoreError ? error.message : "Invalid name."); }
+}
+
 function connectorName(value: unknown): string {
   const name = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
   if (!name || name.length > 60 || new RegExp(UNSAFE_TEXT.source).test(name)) throw new SecretRequestError("Give the connector a name of 1–60 characters.");
@@ -163,8 +172,7 @@ export class SecretRequests {
     let url: string | null = null;
     let auth: ConnectorAuth | null = null;
     if (kind === "secret") {
-      try { name = checkName(input.name); }
-      catch (error) { throw new SecretRequestError(error instanceof SecretStoreError ? error.message : "Invalid name."); }
+      name = secretName(input.name);
     } else {
       name = connectorName(input.name);
       try { url = validateServerUrl(input.url, networkPolicy()).href; }
@@ -208,7 +216,7 @@ export class SecretRequests {
   /* ---------- the member's side (browser session only; see secret-requests-route.ts) ---------- */
 
   /** By the link's token, or by id from Settings. Anything not pending reads as gone. */
-  private pendingRow(ref: { token?: unknown; id?: unknown }): Row {
+  private pendingRow(ref: RequestRef): Row {
     this.expire();
     let row: Row | null = null;
     if (typeof ref.token === "string" && REQUEST_TOKEN.test(ref.token)) {
@@ -217,6 +225,13 @@ export class SecretRequests {
       row = this.db.query("SELECT * FROM secret_requests WHERE id=?").get(ref.id) as Row | null;
     }
     if (!row || row.state !== "pending") throw new SecretRequestError(GONE, 410, "gone");
+    return row;
+  }
+
+  /** A pending request of the expected kind; gone is checked first, as for every answer. */
+  private pendingOfKind(ref: RequestRef, kind: RequestKind): Row {
+    const row = this.pendingRow(ref);
+    if (row.kind !== kind) throw new SecretRequestError(kind === "secret" ? "This request is for a connector." : "This request is for a secret.", 400);
     return row;
   }
 
@@ -243,7 +258,7 @@ export class SecretRequests {
     };
   }
 
-  lookup(ref: { token?: unknown; id?: unknown }): RequestView {
+  lookup(ref: RequestRef): RequestView {
     return this.view(this.pendingRow(ref));
   }
 
@@ -274,9 +289,8 @@ export class SecretRequests {
    * (stored here or delivered by a secret manager) is replaced only with replace: true and a
    * spent step-up grant. stepUp is called only when it is needed, so a grant is not wasted.
    */
-  fulfilSecret(ref: { token?: unknown; id?: unknown }, value: unknown, options: { replace?: boolean; stepUp: () => boolean }): { ok: true; name: string; state: "fulfilled" } {
-    const row = this.pendingRow(ref);
-    if (row.kind !== "secret") throw new SecretRequestError("This request is for a connector.", 400);
+  fulfilSecret(ref: RequestRef, value: unknown, options: { replace?: boolean; stepUp: () => boolean }): { ok: true; name: string; state: "fulfilled" } {
+    const row = this.pendingOfKind(ref, "secret");
     const existing = this.deps.secrets().describe(row.name);
     if (existing.set) {
       if (options.replace !== true) throw new SecretRequestError(`${row.name} already has a value${existing.source ? ` from ${existing.source}` : ""}. Choose Replace to overwrite it.`, 409, "exists");
@@ -289,7 +303,7 @@ export class SecretRequests {
     return { ok: true, name: row.name, state: "fulfilled" };
   }
 
-  decline(ref: { token?: unknown; id?: unknown }): { ok: true; state: "declined" } {
+  decline(ref: RequestRef): { ok: true; state: "declined" } {
     const row = this.pendingRow(ref);
     this.resolve(row, "declined");
     return { ok: true, state: "declined" };
@@ -325,9 +339,8 @@ export class SecretRequests {
    * agent. The request is fulfilled only after the check succeeds; otherwise it stays
    * pending, so the member can fix the token and try again from the same link.
    */
-  async connectorBearer(ref: { token?: unknown; id?: unknown }, token: unknown, options: { stepUp: () => boolean }): Promise<Record<string, unknown>> {
-    const row = this.pendingRow(ref);
-    if (row.kind !== "connector") throw new SecretRequestError("This request is for a secret.", 400);
+  async connectorBearer(ref: RequestRef, token: unknown, options: { stepUp: () => boolean }): Promise<Record<string, unknown>> {
+    const row = this.pendingOfKind(ref, "connector");
     if (typeof token !== "string" || !token.trim()) throw new SecretRequestError("Paste the token.", 422);
     if (!options.stepUp()) throw new SecretRequestError(`Confirm it's you before sending a token to ${new URL(row.url!).host}.`, 403, "step_up");
     const { view, created } = await this.connectorFor(row, token);
@@ -346,13 +359,23 @@ export class SecretRequests {
    * starts the existing sign-in, whose callback is this app's own HTTPS origin. A connector
    * that is already connected is not switched (that would end its sign-in): it is granted.
    */
-  async connectorOAuth(ref: { token?: unknown; id?: unknown }): Promise<Record<string, unknown>> {
-    const row = this.pendingRow(ref);
-    if (row.kind !== "connector") throw new SecretRequestError("This request is for a secret.", 400);
-    const { view } = await this.connectorFor(row);
+  async connectorOAuth(ref: RequestRef, options: { stepUp: () => boolean } = { stepUp: () => false }): Promise<Record<string, unknown>> {
+    const row = this.pendingOfKind(ref, "connector");
+    const { view, created } = await this.connectorFor(row);
     this.db.query("UPDATE secret_requests SET connector_id=? WHERE id=?").run(view.id, row.id);
-    if (view.state === "connected") return this.finishConnector({ ...row, connector_id: view.id });
-    try { if (view.auth.mode !== "oauth") this.connectors().setAuthMode(view.id, "oauth"); }
+    let current = view;
+    if (!created) {
+      // An existing connector is tried as it is first: if it works, nothing needs replacing.
+      const done = await this.finishConnector({ ...row, connector_id: view.id });
+      if (done.ok) return done;
+      current = this.connectors().view(view.id);
+      // Switching to OAuth clears the stored token and tool grants for every session:
+      // that is replacing a credential, so it needs a step-up like the bearer path.
+      if (current.auth.mode !== "oauth" && current.credential.set && !options.stepUp()) {
+        throw new SecretRequestError(`Confirm it's you to replace ${current.name}'s token with a sign-in.`, 403, "step_up");
+      }
+    }
+    try { if (current.auth.mode !== "oauth") this.connectors().setAuthMode(view.id, "oauth"); }
     catch (error) { throw this.connectorFailure(error); }
     return { ok: true, state: "pending", connector_id: view.id, next: "oauth" };
   }
@@ -376,14 +399,17 @@ export class SecretRequests {
       this.db.query("UPDATE secret_requests SET detail=? WHERE id=?").run(detail, row.id);
       return { ok: false, state: "pending", connector_state: view.state, detail };
     }
+    // The check was a network wait: a request declined or expired meanwhile grants nothing.
+    const still = this.db.query("SELECT state FROM secret_requests WHERE id=? AND expires_at>?").get(row.id, this.now()) as { state: RequestState } | null;
+    if (still?.state !== "pending") throw new SecretRequestError(GONE, 410, "gone");
     try {
       const group = providerGroup(row.agent);
       if (group && !view.default_providers.includes(group as never)) connectors.setDefaultProviders(id, [...view.default_providers, group]);
       // A running session gets the grant only if it started with the connectors gateway.
       if (row.launch_id) { try { connectors.setLaunchGrant(id, row.launch_id, true); } catch {} }
+      // Tools are granted only when none are yet: a member who narrowed them keeps that choice.
       const exposable = view.tools.filter(tool => tool.offered && tool.exposed).map(tool => tool.name);
-      const tools = [...new Set([...view.granted_tools, ...exposable])];
-      if (tools.length) view = connectors.setTools(id, tools);
+      if (!view.granted_tools.length && exposable.length) view = connectors.setTools(id, exposable);
     } catch (error) { throw this.connectorFailure(error); }
     this.resolve(row, "fulfilled", { connectorId: id });
     return { ok: true, state: "fulfilled", connector: { name: view.name, host: view.host, tools: view.granted_tools.length } };
@@ -393,9 +419,8 @@ export class SecretRequests {
 
   private latest(kind: RequestKind, name: string, screen: string | null): { id: string; state: RequestState; expires_at: string | null; detail: string | null } | null {
     this.expire();
-    const row = (screen
-      ? this.db.query("SELECT * FROM secret_requests WHERE kind=? AND name=? AND screen=? ORDER BY created_at DESC LIMIT 1").get(kind, name, screen)
-      : this.db.query("SELECT * FROM secret_requests WHERE kind=? AND name=? ORDER BY created_at DESC LIMIT 1").get(kind, name)) as Row | null;
+    const row = this.db.query(`SELECT * FROM secret_requests WHERE kind=? AND name=?${screen ? " AND screen=?" : ""} ORDER BY created_at DESC LIMIT 1`)
+      .get(...(screen ? [kind, name, screen] : [kind, name])) as Row | null;
     return row ? { id: row.id, state: row.state, expires_at: row.state === "pending" ? iso(row.expires_at) : null, detail: row.detail } : null;
   }
 
@@ -406,9 +431,7 @@ export class SecretRequests {
   }
 
   async secretStatus(rawName: unknown, caller: { launchId: string | null; screen: string | null } | null): Promise<Record<string, unknown>> {
-    let name: string;
-    try { name = checkName(rawName); }
-    catch (error) { throw new SecretRequestError(error instanceof SecretStoreError ? error.message : "Invalid name."); }
+    const name = secretName(rawName);
     const found = this.deps.secrets().describe(name);
     const file = caller?.launchId ? this.deps.secretsFile?.(caller.launchId) ?? null : null;
     const environment = caller?.launchId && this.deps.inLaunchEnvironment ? await this.deps.inLaunchEnvironment(caller.launchId, name) : null;
@@ -424,10 +447,13 @@ export class SecretRequests {
 
   async listSecrets(caller: { launchId: string | null } | null): Promise<Record<string, unknown>> {
     const { secrets, sources } = this.deps.secrets().list();
-    const names = new Set<string>([...secrets.map(entry => entry.name), ...sources.flatMap(source => source.names)]);
+    // One read of the store, with describe()'s precedence: the app's own value, else the newest source.
+    const origin = new Map<string, { source: string; updatedAt: number | null }>();
+    for (const source of sources) for (const name of source.names) origin.set(name, { source: source.label, updatedAt: source.lastSyncAt });
+    for (const secret of secrets) origin.set(secret.name, { source: "Coding Sessions", updatedAt: secret.updatedAt });
     const entries = [];
-    for (const name of [...names].sort()) {
-      const found = this.deps.secrets().describe(name);
+    for (const name of [...origin.keys()].sort()) {
+      const found = origin.get(name)!;
       const environment = caller?.launchId && this.deps.inLaunchEnvironment ? await this.deps.inLaunchEnvironment(caller.launchId, name) : null;
       entries.push({ name, source: found.source, updated_at: iso(found.updatedAt), ...(environment ? { in_launch_environment: environment } : {}) });
     }

@@ -260,6 +260,40 @@ test("an OAuth connector request switches the connector to OAuth and finishes wh
   });
 });
 
+test("an OAuth request never wipes an existing connector's token without a step-up, and a stale connection falls through to sign-in", async () => {
+  const fake = fakeConnectors("auth_failed");
+  const f = fixture({ connectors: fake.port });
+  await fake.port.add({ name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", token: "existing" });
+  const { url } = await f.requests.create({ kind: "connector", name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", reason: "Sign in instead", auth: "oauth" }, session());
+  await expect(f.requests.connectorOAuth({ token: tokenOf(url) }, { stepUp: () => false })).rejects.toThrow(/Confirm it's you/);
+  expect(fake.calls.some(([name]) => name === "setAuthMode")).toBe(false);
+  const started = await f.requests.connectorOAuth({ token: tokenOf(url) }, { stepUp: () => true });
+  expect(started).toMatchObject({ ok: true, state: "pending", next: "oauth", connector_id: "11111111-1111-4111-8111-111111111111" });
+  expect(fake.calls).toContainEqual(["setAuthMode", "oauth"]);
+});
+
+test("a working existing connector is granted without switching modes, and keeps tools the member narrowed", async () => {
+  const fake = fakeConnectors("connected");
+  const f = fixture({ connectors: fake.port });
+  await fake.port.add({ name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", token: "existing" });
+  fake.port.setTools("x", ["only_this"]);
+  const { url } = await f.requests.create({ kind: "connector", name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", reason: "Use it", auth: "oauth" }, session());
+  const done = await f.requests.connectorOAuth({ token: tokenOf(url) }, { stepUp: () => { throw new Error("not needed"); } });
+  expect(done).toMatchObject({ ok: true, state: "fulfilled" });
+  expect(fake.calls.filter(([name]) => name === "setTools")).toEqual([["setTools", ["only_this"]]]);
+  expect(fake.calls.some(([name]) => name === "setAuthMode")).toBe(false);
+});
+
+test("a request that ends while the connection check runs grants nothing", async () => {
+  const fake = fakeConnectors("connected");
+  const f = fixture({ connectors: fake.port });
+  const { url } = await f.requests.create({ kind: "connector", name: "KazTrack", url: "https://mcp.kaztrack.example/mcp", reason: "Use it" }, session());
+  const check = fake.port.check;
+  fake.port.check = async (id) => { f.requests.decline({ token: tokenOf(url) }); return check(id); };
+  await expect(f.requests.connectorBearer({ token: tokenOf(url) }, VALUE, { stepUp: () => true })).rejects.toThrow(/expired or was already used/);
+  expect(fake.calls.some(([name]) => name === "setTools" || name === "setDefaultProviders" || name === "setLaunchGrant")).toBe(false);
+});
+
 test("invalid connector requests are refused before anything is stored", async () => {
   const f = fixture({ connectors: fakeConnectors().port });
   for (const input of [

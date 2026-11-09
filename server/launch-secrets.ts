@@ -14,7 +14,7 @@
  * and a file is removed as soon as its launch is gone.
  */
 import type { Database } from "bun:sqlite";
-import { chmodSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -57,13 +57,21 @@ function privateDir(dir: string): void {
   if ((stat.mode & 0o077) !== 0) chmodSync(dir, 0o700);
 }
 
-/** Atomic: a reader sees the old file or the new one, never half of either. */
-export function writeLaunchSecrets(dir: string, launchId: string, env: Record<string, string>): string {
+/**
+ * Atomic: a reader sees the old file or the new one, never half of either. A file that
+ * already holds exactly this text is left alone, so the minute sweep does not rewrite
+ * every file when nothing changed.
+ */
+export function writeLaunchSecrets(dir: string, launchId: string, env: Record<string, string>, text = renderSecretsFile(env)): string {
   const path = launchSecretsPath(dir, launchId);
   privateDir(dir);
+  try {
+    const stat = lstatSync(path);
+    if (stat.isFile() && (stat.mode & 0o777) === 0o600 && readFileSync(path, "utf8") === text) return path;
+  } catch {}
   const temporary = join(dir, `.${randomUUID()}.tmp`);
   try {
-    writeFileSync(temporary, renderSecretsFile(env), { mode: 0o600, flag: "wx" });
+    writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
     renameSync(temporary, path);
   } finally { rmSync(temporary, { force: true }); }
   return path;
@@ -72,6 +80,8 @@ export function writeLaunchSecrets(dir: string, launchId: string, env: Record<st
 export function removeLaunchSecrets(dir: string, launchId: string): void {
   try { rmSync(launchSecretsPath(dir, launchId), { force: true }); } catch {}
 }
+
+export type EnvironmentState = "current" | "outdated" | "missing" | "unknown";
 
 /**
  * What each launch's environment held when it started, as keyed hashes only, so a tool can
@@ -88,7 +98,7 @@ export function createLaunchFingerprints() {
       launches.set(launchId, new Map(Object.entries(env).map(([name, value]) => [name, digest(value)])));
     },
     /** current: same value; outdated: changed since launch; missing: not there at launch; unknown: not recorded. */
-    compare(launchId: string, name: string, value: string | undefined): "current" | "outdated" | "missing" | "unknown" {
+    compare(launchId: string, name: string, value: string | undefined): EnvironmentState {
       const recorded = launches.get(launchId);
       if (!recorded) return "unknown";
       const at = recorded.get(name);
@@ -160,9 +170,10 @@ async function refreshOnce(deps: RefreshDependencies): Promise<{ written: number
     }
     if (!live.size) return { written, removed };
     const env = await deps.env();
+    const text = renderSecretsFile(env);
     for (const id of live) {
       // A file that cannot be rewritten must not keep stale values.
-      try { writeLaunchSecrets(deps.dir, id, env); written++; } catch { removeLaunchSecrets(deps.dir, id); }
+      try { writeLaunchSecrets(deps.dir, id, env, text); written++; } catch { removeLaunchSecrets(deps.dir, id); }
     }
   } catch {}
   return { written, removed };

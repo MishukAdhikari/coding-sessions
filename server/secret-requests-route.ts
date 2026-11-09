@@ -52,7 +52,7 @@ export async function handleSecretRequestsRoute(request: Request, deps: SecretRe
       case "fulfil": return json(requests.fulfilSecret(ref, input.value, { replace: input.replace === true, stepUp }));
       case "decline": return json(requests.decline(ref));
       case "connector":
-        if (input.auth === "oauth") return json(await requests.connectorOAuth(ref));
+        if (input.auth === "oauth") return json(await requests.connectorOAuth(ref, { stepUp }));
         if (input.auth === "bearer") return json(await requests.connectorBearer(ref, input.value, { stepUp }));
         return json({ error: 'auth must be "bearer" or "oauth".' }, 400);
     }

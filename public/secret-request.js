@@ -17,9 +17,10 @@
   const isGone = (error) => error?.status === 410 || error?.code === "gone";
 
   window.createSecretRequestUI = ({ $, api, openSheet, closeSheet, showToast, agoStr, getGrant, onResolved, doc = document, win = window }) => {
-    let ref = null; // { token } from a link, or { id } from inside the app
+    let ref = null; // { token } from a link, or { id } from inside the app; set only once its lookup renders
     let viaLink = false;
     let busy = false;
+    let generation = 0; // a lookup that finishes after a newer open() is dropped
 
     const el = (tag, className, text) => {
       const node = doc.createElement(tag);
@@ -225,15 +226,17 @@
       if (!value) { showError(ctx, "Paste the value first."); ctx.input.focus(); return; }
       showError(ctx, "");
       setBusy(ctx.save, true);
+      const target = ref; // the request on screen now, whatever opens while this waits
       try {
-        const body = { ...ref, value };
+        const body = { ...target, value };
         if (ctx.replacing) {
           const grant = await confirmIdentity(ctx);
-          if (!grant) return;
+          if (!grant || target !== ref) return;
           Object.assign(body, { replace: true, grant });
         }
         await post("fulfil", body);
         ctx.input.value = "";
+        if (target !== ref) return;
         finish(ctx.view, "saved");
       } catch (error) {
         if (isGone(error)) { ctx.input.value = ""; gone(); return; }
@@ -254,11 +257,13 @@
       if (!value) { showError(ctx, "Paste the token first."); ctx.input.focus(); return; }
       showError(ctx, "");
       setBusy(ctx.save, true);
+      const target = ref; // bound before the step-up wait: the token goes only to this request's server
       try {
         // Sending a token to a server always takes the step-up: the address came from an agent.
         const grant = await confirmIdentity(ctx);
-        if (!grant) return;
-        const result = await post("connector", { ...ref, auth: "bearer", value, grant });
+        if (!grant || target !== ref) return;
+        const result = await post("connector", { ...target, auth: "bearer", value, grant });
+        if (target !== ref) return;
         if (result?.ok && result.state === "fulfilled") {
           ctx.input.value = "";
           finish(ctx.view, "connected");
@@ -278,11 +283,22 @@
       if (busy) return;
       showError(ctx, "");
       setBusy(control, true);
+      const target = ref;
       try {
         // The callback page reads this to say the tab can close.
         store((s) => s?.setItem(OAUTH_DONE_KEY, "1"));
-        const result = await post("connector", { ...ref, auth: "oauth" });
+        let result;
+        try { result = await post("connector", { ...target, auth: "oauth" }); }
+        catch (error) {
+          // Switching a connector that holds a token over to a sign-in replaces that token.
+          if (error?.code !== "step_up") throw error;
+          const grant = await confirmIdentity(ctx);
+          if (!grant || target !== ref) { store((s) => s?.removeItem(OAUTH_DONE_KEY)); setBusy(control, false); return; }
+          result = await post("connector", { ...target, auth: "oauth", grant });
+        }
+        if (target !== ref) return;
         if (result?.state === "fulfilled") { store((s) => s?.removeItem(OAUTH_DONE_KEY)); finish(ctx.view, "connected"); return; }
+        if (!result?.connector_id) throw new Error(result?.detail || "Couldn’t start the sign-in. Try again.");
         const { authorization_url: url } = await api(`/api/connectors/${encodeURIComponent(result.connector_id)}/oauth/start`, { method: "POST", body: "{}" });
         forgetLink();
         win.location.href = url;
@@ -298,8 +314,10 @@
     async function declineRequest(control) {
       if (busy) return;
       setBusy(control, true);
+      const target = ref;
       try {
-        await post("decline", ref);
+        await post("decline", target);
+        if (target !== ref) return;
         finish(null, "declined");
       } catch (error) {
         if (isGone(error)) { gone(); return; }
@@ -344,14 +362,20 @@
     }
 
     async function open(nextRef, fromLink) {
-      ref = nextRef;
-      viaLink = fromLink;
-      busy = false;
+      const gen = ++generation;
       try {
-        const { request } = await post("lookup", ref);
+        const { request } = await post("lookup", nextRef);
+        if (gen !== generation) return;
+        ref = nextRef;
+        viaLink = fromLink;
+        busy = false;
         render(request);
       } catch (error) {
+        if (gen !== generation) return;
         if (!isGone(error)) { showToast(error?.message || "Couldn’t open the request."); return; }
+        ref = nextRef;
+        viaLink = fromLink;
+        busy = false;
         gone();
       }
       openSheet(SHEET);

@@ -247,9 +247,13 @@ const mcpDeps: McpDeps = {
   now: () => Date.now(),
   secrets: {
     requests: secretRequests,
+    // The launch row and a live holder, like the communicator's identity; no process scan per call.
     async session(id) {
-      const session = (await listSessions()).find((s) => s.id === id && s.kind === "managed" && s.status !== "ended");
-      return session ? { launchId: session.launchId, screen: id.slice(2), sessionName: session.name, agent: session.provider } : null;
+      if (!id.startsWith("m:")) return null;
+      const screen = id.slice(2);
+      const row = db.query("SELECT launch_id, name, provider FROM launches WHERE screen = ? AND phase != 'failed'").get(screen) as { launch_id: string | null; name: string; provider: string } | null;
+      if (!row || !await mux.find(screen)) return null;
+      return { launchId: row.launch_id, screen, sessionName: row.name, agent: row.provider };
     },
   },
   restart,
