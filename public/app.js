@@ -284,6 +284,10 @@
     sessionSyncLost = false;
     sessions = data.sessions || [];
     archived = data.archived || [];
+    if (openSheetEl?.id === "sheet-confirm" && confirmSessionId) {
+      const current = sessions.find((item) => item.id === confirmSessionId);
+      if (current) syncSessionActions(current);
+    }
     renderHost(data.host);
     checkAskingTransitions(sessions); // before the early-return, so a flip never gets swallowed
     const json = JSON.stringify([sessions, archived]);
@@ -574,10 +578,6 @@
   let openSheetEl = null;
   let sheetTrigger = null;
   let sheetHistory = [];
-  const sheetFocusable = (el) => [...el.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]')]
-    .filter((node) => node.getClientRects().length > 0);
-  function openSheet(id, { back = false, returnFocus = null, scrollTop = 0 } = {}) {
-    if (openSheetEl?.id === id) return;
   // Each open sheet level owns one history entry, so the system back gesture (iOS
   // edge swipe, Android back) closes a sheet instead of leaving the app.
   // sheetDepth counts the entries this page pushed; popstate is the one path that
@@ -604,15 +604,19 @@
     });
     history.go(-steps);
   }
+  const sheetFocusable = (el) => [...el.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]')]
+    .filter((node) => node.getClientRects().length > 0);
+  function openSheet(id, { back = false, returnFocus = null, scrollTop = 0 } = {}) {
+    if (openSheetEl?.id === id) return;
     if (!openSheetEl) sheetTrigger = document.activeElement;
     if (!back && openSheetEl && (openSheetEl.id === "sheet-menu" || sheetHistory.length)) {
       sheetHistory.push({ id: openSheetEl.id, focus: document.activeElement, scrollTop: openSheetEl.scrollTop });
     }
+    if (!back) pushSheetEntry(!!openSheetEl && !(sheetHistory.length && sheetHistory.at(-1).id === openSheetEl.id));
     closeSheet(false, true);
     openSheetEl = $(id);
     const sheet = openSheetEl;
     const backButton = sheet.querySelector(".sheet-back");
-    if (!back) pushSheetEntry(!!openSheetEl && !(sheetHistory.length && sheetHistory.at(-1).id === openSheetEl.id));
     backButton.hidden = sheetHistory.length === 0;
     if (sheetHistory.length) {
       const parent = $(sheetHistory.at(-1).id);
@@ -668,10 +672,6 @@
     const previous = sheetHistory.pop();
     if (previous) openSheet(previous.id, { back: true, returnFocus: previous.focus, scrollTop: previous.scrollTop });
   }
-  document.querySelectorAll(".sheet").forEach(sheet => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "sheet-back";
   // The in-sheet Back button goes through history too, so the next system back
   // still closes exactly one level.
   function backSheet() {
@@ -685,6 +685,10 @@
     if (step.action === "close") { sheetDepth = 0; closeSheet(true, false, true); }
     else if (step.action === "back") { sheetDepth = target; for (let i = 0; i < step.steps; i++) stepBackSheet(); }
   });
+  document.querySelectorAll(".sheet").forEach(sheet => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sheet-back";
     button.hidden = true;
     button.innerHTML = '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7M5 12h14"/></svg>Back';
     button.addEventListener("click", backSheet);
@@ -1263,18 +1267,58 @@
     return `/chat.html?${query}`;
   }
 
-  async function openWebTerminal(body, okLabel) {
+  async function openWebTerminal(body, okLabel, { chat = false } = {}) {
     const screen = window.NativeShell.screenOpener();
     try {
       const { id, mux } = await api("/api/terminal", { method: "POST", body: JSON.stringify(body) });
       const label = body.kind === "attach" ? body.screen.replace(/^cs-/, "") : "Server shell";
-      const url = `/term.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(label)}&mux=${encodeURIComponent(mux ?? "screen")}`;
+      const url = `/term.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(label)}&mux=${encodeURIComponent(mux ?? "screen")}${chat ? "&chat=1" : ""}`;
       if (!window.NativeShell.standalone) showToast(okLabel);
       await screen.go(url);
     } catch (e) {
       screen.cancel();
       showToast(e.message || "Couldn’t open the terminal");
     }
+  }
+
+  // The sheet's ways into a session: the live web terminal (a writable second seat
+  // on its screen) and the chat. While the session is still starting they wait,
+  // disabled with a spinner, and the list poll flips them to ready by itself.
+  let confirmSessionId = null;
+  function syncSessionActions(s) {
+    const provider = providerOf(s);
+    const caps = { webTerminal: providerHas(provider, "webTerminal"), chatView: providerHas(provider, "chatView") };
+    const awaitingTrust = s.startupWaitingForTrust === true && window.sessionStatus(s).state === "waiting";
+
+    const term = $("btn-web-term");
+    const termState = window.sessionActionState(s, "terminal", caps);
+    term.hidden = termState === "hidden";
+    term.disabled = termState === "pending";
+    term.classList.toggle("is-busy", termState === "pending");
+    term.textContent = termState === "pending" ? "Opening terminal… wait a few seconds"
+      : awaitingTrust ? "Review in terminal" : "Open web terminal";
+    term.classList.toggle("btn-primary", awaitingTrust);
+    term.classList.toggle("btn-ghost", !awaitingTrust);
+    const chatState = window.sessionActionState(s, "chat", caps);
+    const transcriptChat = s.mode !== "acp" && chatState !== "hidden";
+    term.onclick = termState !== "ready" ? null : () => {
+      closeSheet();
+      openWebTerminal({ kind: "attach", screen: s.id.slice(2) }, "Opening web terminal…", { chat: transcriptChat });
+    };
+
+    // The same conversation as a chat: the agent's own transcript, or the ACP bridge's log.
+    const chat = $("btn-chat");
+    const acpChat = s.mode === "acp";
+    chat.hidden = chatState === "hidden";
+    chat.disabled = chatState === "pending";
+    chat.classList.toggle("is-busy", chatState === "pending");
+    chat.textContent = chatState === "pending" ? "Opening chat… wait a few seconds" : "Open chat";
+    chat.classList.toggle("btn-primary", acpChat);
+    chat.classList.toggle("btn-ghost", !acpChat);
+    chat.onclick = chatState !== "ready" ? null : () => {
+      closeSheet();
+      window.NativeShell.openScreen(chatUrl(s, provider));
+    };
   }
 
   function confirmEnd(s) {
@@ -1312,32 +1356,8 @@
     if (canOpenClaude) open.href = s.claudeUrl;
     else open.removeAttribute("href");
 
-    // Live web terminal: attach a writable second seat to this session's screen.
-    // Only for managed (cs-*) sessions that are actually up.
-    const term = $("btn-web-term");
-    term.textContent = awaitingTrust ? "Review in terminal" : "Open web terminal";
-    term.classList.toggle("btn-primary", awaitingTrust);
-    term.classList.toggle("btn-ghost", !awaitingTrust);
-    const canAttach = providerHas(provider, "webTerminal") && typeof s.id === "string" && s.id.startsWith("m:") && (s.status === "running" || s.status === "starting");
-    term.hidden = !canAttach;
-    if (canAttach) {
-      const screen = s.id.slice(2); // "cs-<name>"
-      term.onclick = () => { closeSheet(); openWebTerminal({ kind: "attach", screen }, "Opening web terminal…"); };
-    }
-
-    // The same conversation as a chat, read from the agent's own transcript.
-    const chat = $("btn-chat");
-    const acpChat = s.mode === "acp";
-    const canChat = (acpChat || providerHas(provider, "chatView")) && typeof s.id === "string" && s.id.startsWith("m:") && (s.status === "running" || (acpChat && s.status === "starting"));
-    chat.hidden = !canChat;
-    chat.classList.toggle("btn-primary", acpChat);
-    chat.classList.toggle("btn-ghost", !acpChat);
-    if (canChat) {
-      chat.onclick = () => {
-        closeSheet();
-        window.NativeShell.openScreen(chatUrl(s, provider));
-      };
-    }
+    confirmSessionId = s.id;
+    syncSessionActions(s);
 
     wireCopyCmd(provider, s.project, s.resumeId, s.name, s.status === "ended", s.remoteControl !== false);
 
@@ -2263,8 +2283,6 @@
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
-  boot();
-})();
   /* ---------- touch gestures ---------- */
 
   const native = window.NativeShell;
@@ -2430,3 +2448,5 @@
     history.replaceState({ ...(history.state && typeof history.state === "object" ? history.state : {}), scrollY: Math.round(window.scrollY) }, "");
   });
 
+  boot();
+})();
