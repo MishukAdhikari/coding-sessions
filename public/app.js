@@ -165,6 +165,33 @@
     $("btn-passkey").hidden = !canPasskey;
     $("form-password").hidden = canPasskey;
     $("btn-use-password").hidden = !canPasskey;
+    startPasskeyAutofill();
+  }
+
+  // Passkey autofill: where the browser can offer the saved passkey among the
+  // password field's suggestions (iOS's bar above the keyboard, Android's
+  // autofill), a passkey request waits quietly behind that field. Unlock stays
+  // the explicit way in, and cancels this request when it starts its own.
+  async function startPasskeyAutofill() {
+    const webauthn = window.SimpleWebAuthnBrowser;
+    let supported = false;
+    try { supported = await webauthn?.browserSupportsWebAuthnAutofill?.(); } catch {}
+    if (!window.NativeShell.passkeyAutofillPlan({ supported, hasPasskey: me?.hasPasskey === true, setupToken })) return;
+    let response;
+    let challengeId;
+    try {
+      const started = await api("/api/auth/login/options");
+      challengeId = started.challengeId;
+      response = await webauthn.startAuthentication({ optionsJSON: started.options, useBrowserAutofill: true });
+    } catch {
+      return; // cancelled by Unlock or by leaving the page, or never chosen: nothing to say
+    }
+    try {
+      await api("/api/auth/login/verify", { method: "POST", body: JSON.stringify({ challengeId, response }) });
+      enterApp();
+    } catch (e) {
+      loginError(e.message || "Couldn’t unlock.");
+    }
   }
 
   function loginError(msg) {
@@ -175,6 +202,7 @@
 
   $("btn-passkey").addEventListener("click", async () => {
     const startedAt = Date.now();
+    window.SimpleWebAuthnBrowser?.WebAuthnAbortService?.cancelCeremony();
     try {
       const { options, challengeId } = await api("/api/auth/login/options");
       const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
@@ -190,6 +218,7 @@
       else if (Date.now() - startedAt < 600) {
         loginError("No passkey on this device yet — sign in with your password, then add Face ID / Touch ID from the menu.");
       }
+      startPasskeyAutofill(); // the field's suggestions offer it again
     }
   });
 
