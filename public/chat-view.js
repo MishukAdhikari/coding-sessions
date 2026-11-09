@@ -493,8 +493,14 @@
     let dismissedAt = null; // the text Escape closed the menu at
     let chosen = null;
 
+    // Called on every poll: an unchanged list must not rebuild an open menu under the finger.
+    let commandsKey = "[]";
     function setCommands(list) {
-      commands = Array.isArray(list) ? list.filter((c) => c && typeof c.name === "string" && c.name) : [];
+      const next = Array.isArray(list) ? list.filter((c) => c && typeof c.name === "string" && c.name) : [];
+      const key = JSON.stringify(next);
+      if (key === commandsKey) return;
+      commandsKey = key;
+      commands = next;
       syncCommands();
     }
 
@@ -525,7 +531,6 @@
       menu.hidden = false;
       input.setAttribute("aria-expanded", "true");
       input.setAttribute("aria-activedescendant", `chat-cmd-${active}`);
-      menu.children[active]?.scrollIntoView?.({ block: "nearest" });
     }
 
     function closeMenu() {
@@ -569,6 +574,7 @@
         e.preventDefault();
         active = (active + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
         renderMenu();
+        menu.children[active]?.scrollIntoView?.({ block: "nearest" });
       } else if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         choose(shown[active]);

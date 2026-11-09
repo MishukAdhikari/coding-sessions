@@ -144,7 +144,19 @@
     let referrerSameOrigin = false;
     try { referrerSameOrigin = !!document.referrer && new URL(document.referrer).origin === location.origin; } catch {}
     const how = NS.closeTarget({ referrerSameOrigin, historyLength: history.length, opened: !!window.opener || !standalone });
-    if (how === "back") { history.back(); return; }
+    if (how === "back") {
+      // At the first entry of a tab (a terminal opened in a new tab, then chat and
+      // back) there is nothing to go back to: close the tab or load the list instead.
+      let left = false;
+      window.addEventListener("pagehide", () => { left = true; }, { once: true });
+      history.back();
+      setTimeout(() => {
+        if (left) return;
+        window.close();
+        setTimeout(() => { if (!window.closed) location.replace("/"); }, 150);
+      }, 400);
+      return;
+    }
     if (how === "close") {
       window.close();
       setTimeout(() => { if (!window.closed) location.replace("/"); }, 150);

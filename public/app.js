@@ -116,16 +116,22 @@
   // Never a blank page: until the server answers, the offline screen says so and
   // offers a retry, and coming back online or to the app retries on its own.
   let booting = false;
+  const BOOT_TIMEOUT_MS = 8000;
   async function boot() {
     if (booting) return;
     booting = true;
     $("btn-retry").disabled = true;
+    // A request that hangs (a captive portal, a radio handoff on resume) must
+    // still reach the offline screen, so it is bounded like connection-status.js's.
+    const request = new AbortController();
+    const timeout = setTimeout(() => request.abort(), BOOT_TIMEOUT_MS);
     try {
-      me = await api("/api/me");
+      me = await api("/api/me", { signal: request.signal });
     } catch {
       showOffline();
       return;
     } finally {
+      clearTimeout(timeout);
       booting = false;
       $("btn-retry").disabled = false;
     }
@@ -172,15 +178,25 @@
   // password field's suggestions (iOS's bar above the keyboard, Android's
   // autofill), a passkey request waits quietly behind that field. Unlock stays
   // the explicit way in, and cancels this request when it starts its own.
+  // Each start is one attempt; Unlock bumps the count so an attempt still waiting
+  // on its options can never start after (and abort) Unlock's own ceremony.
+  let autofillAttempt = 0;
   async function startPasskeyAutofill() {
+    const attempt = ++autofillAttempt;
     const webauthn = window.SimpleWebAuthnBrowser;
     let supported = false;
     try { supported = await webauthn?.browserSupportsWebAuthnAutofill?.(); } catch {}
+    if (attempt !== autofillAttempt) return;
     if (!window.NativeShell.passkeyAutofillPlan({ supported, hasPasskey: me?.hasPasskey === true, setupToken })) return;
+    // The suggestion appears when the field is focused, so the field stays on screen
+    // under Unlock (and "Use password instead" has nothing left to reveal).
+    $("form-password").hidden = false;
+    $("btn-use-password").hidden = true;
     let response;
     let challengeId;
     try {
       const started = await api("/api/auth/login/options");
+      if (attempt !== autofillAttempt) return;
       challengeId = started.challengeId;
       response = await webauthn.startAuthentication({ optionsJSON: started.options, useBrowserAutofill: true });
     } catch {
@@ -202,6 +218,7 @@
 
   $("btn-passkey").addEventListener("click", async () => {
     const startedAt = Date.now();
+    autofillAttempt++;
     window.SimpleWebAuthnBrowser?.WebAuthnAbortService?.cancelCeremony();
     try {
       const { options, challengeId } = await api("/api/auth/login/options");
@@ -1431,6 +1448,7 @@
   }
 
   function confirmArchived(a) {
+    confirmSessionId = null;
     const provider = providerOf(a);
     const displayName = providerName(provider);
     $("confirm-title").textContent = `“${a.name}”`;
@@ -1810,6 +1828,7 @@
   });
 
   $("btn-clear-archive").addEventListener("click", () => {
+    confirmSessionId = null;
     if (!archived.length) { closeSheet(); showToast("History is already empty"); return; }
     $("btn-open-claude").hidden = true;
     $("btn-copy-cmd").hidden = true;
@@ -1829,6 +1848,7 @@
   });
 
   $("btn-end-all").addEventListener("click", () => {
+    confirmSessionId = null;
     const running = sessions.filter((s) => s.status === "running" || s.status === "starting").length;
     if (!sessions.length) { closeSheet(); showToast("Nothing to end"); return; }
     $("btn-open-claude").hidden = true;
@@ -2327,6 +2347,7 @@
   document.querySelectorAll(".sheet").forEach((sheet) => {
     let drag = null;
     sheet.addEventListener("touchstart", (e) => {
+      if (drag) return; // a second finger joins: keep following the first
       drag = null;
       if (sideSheets.matches || sheet !== openSheetEl || e.touches.length !== 1 || sheet.scrollTop > 0) return;
       if (e.target.closest("input, textarea, select, .browser-live, .cmd")) return;
@@ -2378,6 +2399,7 @@
       ptr.style.setProperty("--pull-progress", String(Math.min(1, distance / native.PULL_TRIGGER)));
     };
     document.addEventListener("touchstart", (e) => {
+      if (pull) return; // a second finger joins: keep following the first
       pull = null;
       if (refreshing || openSheetEl || $("app").hidden || e.touches.length !== 1 || window.scrollY > 0) return;
       if (e.target.closest("input, textarea, select, .sheet, .dock")) return;
@@ -2460,7 +2482,12 @@
   // Back from GitHub, another app, or the back-forward cache: whatever the page was
   // in the middle of may have frozen with it. Retry a boot that never finished,
   // re-sync the list, and drop any sheet chrome that outlived its sheet.
+  // Coming back often fires two or three of these at once (pageshow, visible,
+  // online): one re-sync is enough.
+  let lastResume = 0;
   window.NativeShell.onResume(() => {
+    if (Date.now() - lastResume < 1000) return;
+    lastResume = Date.now();
     if (!$("offline").hidden) { boot(); return; }
     if ($("app").hidden) return;
     if (!openSheetEl) {
@@ -2482,10 +2509,5 @@
     history.replaceState({ ...(history.state && typeof history.state === "object" ? history.state : {}), scrollY: Math.round(window.scrollY) }, "");
   });
 
-  // Coming back often fires two or three of these at once (pageshow, visible,
-  // online): one re-sync is enough.
-  let lastResume = 0;
   boot();
-    if (Date.now() - lastResume < 1000) return;
-    lastResume = Date.now();
 })();
