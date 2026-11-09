@@ -1,8 +1,9 @@
 /* Terminal window — chrome around the ttyd iframe.
  *
- * Opened in its own tab by app.js. Closing it is a browser tab close and
- * nothing more: ttyd gets SIGHUP, screen detaches, and whatever is running on
- * the server keeps running. Nothing here ends a session.
+ * Opened by app.js (in the installed app, in the same window; in a browser, in
+ * its own tab). Closing it is leaving the page and nothing more: ttyd gets
+ * SIGHUP, screen detaches, and whatever is running on the server keeps running.
+ * Nothing here ends a session.
  *
  * The iframe is same-origin, so ttyd's `window.term` (xterm.js) is reachable —
  * that's how the key row types and how we re-fit when the soft keyboard
@@ -18,6 +19,15 @@
   const keys = $("term-keys");
 
   $("term-name").textContent = name;
+
+  // The same session's chat, when it has one (the app or the chat page says so
+  // with chat=1). A plain link: it opens in this window, and back returns here.
+  const hasChat = params.get("chat") === "1" && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,60}$/.test(name);
+  if (hasChat) {
+    const chat = $("btn-term-chat");
+    chat.href = `/chat.html?${new URLSearchParams({ id: `m:cs-${name}`, name })}`;
+    chat.hidden = false;
+  }
 
   // ⇞ enters screen's copy mode (Ctrl-A [) by default. zmx and herdr sessions have
   // no copy mode — their scrollback reaches the browser as-is, and Claude's
@@ -174,12 +184,8 @@
 
   /* ---------- close ---------- */
 
-  $("btn-term-close").addEventListener("click", () => {
-    window.close();
-    // close() is a no-op unless this tab was script-opened (deep link, PWA,
-    // restored tab) — fall back to walking back into the app.
-    setTimeout(() => { if (!window.closed) location.replace("/"); }, 150);
-  });
+  // Back to wherever it was opened from, close its own tab, or load the list.
+  $("btn-term-close").addEventListener("click", () => window.NativeShell.closeScreen());
 
   /* ---------- fitting ---------- */
 
@@ -207,7 +213,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.id) return { resumed: false, error: data.error };
-      location.replace(`/term.html?id=${encodeURIComponent(data.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(data.mux ?? "screen")}&r=1`);
+      location.replace(`/term.html?id=${encodeURIComponent(data.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(data.mux ?? "screen")}${hasChat ? "&chat=1" : ""}&r=1`);
       return { resumed: true };
     } catch {
       return { resumed: false };
@@ -227,14 +233,14 @@
   frame.addEventListener("load", () => {
     const doc = (() => { try { return frame.contentDocument; } catch { return null; } })();
     if (doc && /No such terminal/i.test(doc.body?.textContent ?? "")) { resumeOrGone(); return; }
+    // Pinch and double-tap inside the terminal would zoom the whole app on iOS.
+    if (doc) window.NativeShell.guardZoom(doc);
 
     // An expired cookie doesn't 401 here — /term/<id>/ redirects to "/", so the
     // whole app (login screen and all) would render inside the terminal frame.
     if (doc && (doc.getElementById("login") || doc.getElementById("app"))) { showSignedOut(); return; }
 
     // `load` fires before ttyd has constructed its Terminal, so window.term is
-    // Pinch and double-tap inside the terminal would zoom the whole app on iOS.
-    if (doc) window.NativeShell.guardZoom(doc);
     // still undefined here — poll for it rather than configuring nothing.
     let tries = 0;
     const wait = setInterval(() => {

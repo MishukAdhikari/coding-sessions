@@ -436,7 +436,7 @@
   /* ---------- the terminal, for menus a transcript chat can't answer ---------- */
 
   // Same flow as app.js's openWebTerminal: open the screen inside the gesture, then
-  // point it at the bridge once it exists.
+  // point it at the bridge once it exists. The terminal links back to this chat.
   async function openTerminal() {
     const screen = native.screenOpener();
     try {
@@ -446,7 +446,7 @@
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
-      const url = `/term.html?id=${encodeURIComponent(body.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(body.mux ?? "screen")}`;
+      const url = `/term.html?id=${encodeURIComponent(body.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(body.mux ?? "screen")}&chat=1`;
       await screen.go(url);
     } catch (e) {
       screen.cancel();
