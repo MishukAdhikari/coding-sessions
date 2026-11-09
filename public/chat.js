@@ -127,6 +127,27 @@
   let transcript = [];
   let seen = new Set();
   let transcriptRev = 0; // never reused, so a message that returns after a reset is drawn again
+  // A reply shows the moment it is sent, marked pending, until the agent's transcript records it. The agent may
+  // be busy and queue it, so that can take a while; without this the message seemed to vanish, then reappear.
+  let echoes = [];
+  let lastState = "unknown";
+  const sameText = (a, b) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+
+  function drawTranscript() {
+    view.setItems(echoes.length ? [...transcript, ...echoes] : transcript, { working: lastState === "working" });
+  }
+
+  // A user message from the transcript settles the echo it matches; failing a match, one recorded after an
+  // echo was sent settles the oldest (the agent may store it reworded, as a slash command or a pasted block).
+  function settleEcho(m) {
+    if (!echoes.length) return;
+    let i = echoes.findIndex((e) => sameText(e.text, String(m.text ?? "")));
+    if (i < 0) {
+      const at = Date.parse(m.at || "");
+      if (Number.isFinite(at) && at >= echoes[0].sentAt - 2000) i = 0;
+    }
+    if (i >= 0) echoes.splice(i, 1);
+  }
 
   function applyTranscript(data) {
     if (data.reset) { transcript = []; seen = new Set(); }
@@ -135,7 +156,7 @@
       seen.add(m.id);
       const text = String(m.text ?? "");
       const key = `m:${m.id}`;
-      if (m.role === "user") transcript.push({ key, rev: ++transcriptRev, kind: "user", text, at: m.at });
+      if (m.role === "user") { settleEcho(m); transcript.push({ key, rev: ++transcriptRev, kind: "user", text, at: m.at }); }
       else if (m.role === "tool") {
         const word = text.split(/\s/, 1)[0].toLowerCase();
         transcript.push({ key, rev: ++transcriptRev, kind: "tool", preview: true, title: text, toolKind: TOOL_KINDS[word] || "other", status: "completed" });
@@ -147,18 +168,29 @@
     view.setHeader(TRANSCRIPT_STATE[state]);
     view.setBanner(state === "asking"); // first: the banner changes the list's height, and with it "at the bottom"
     view.setEmpty("No messages yet", "Say something below. The agent's replies appear here as it writes them.");
-    view.setItems(transcript, { working: state === "working" });
+    lastState = state;
+    drawTranscript();
     document.body.dataset.state = state;
     return false;
   }
 
   async function sendMessage(text) {
-    const res = await fetch(`${api}/message`, {
-      method: "POST", credentials: "same-origin",
-      headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || "Couldn't send that.");
+    const echo = { key: `echo:${++transcriptRev}`, rev: transcriptRev, kind: "user", text, pending: true, sentAt: Date.now() };
+    echoes.push(echo);
+    drawTranscript();
+    try {
+      const res = await fetch(`${api}/message`, {
+        method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Couldn't send that.");
+    } catch (error) {
+      // Not sent: take the echo back; the composer keeps the text so it can be sent again.
+      echoes = echoes.filter((e) => e !== echo);
+      drawTranscript();
+      throw error;
+    }
     schedule(400);
   }
 

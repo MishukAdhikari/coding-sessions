@@ -8,7 +8,7 @@ const page = read("chat.html");
 const scripts = ["native.js", "chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
 
 /** The real chat page (its markup and its three scripts) against scripted server replies. */
-function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, keyboard = false } = {}) {
+function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, keyboard = false, postFail = false } = {}) {
   const document = loadBody(createDocument(), page);
   document.documentElement.style.setProperty = (name, value) => { document.documentElement.style[name] = value; };
   const timers = [];
@@ -16,7 +16,9 @@ function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, k
   const held = []; // with hold, each GET waits until release() answers it
   const fetch = async (url, options = {}) => {
     requests.push({ url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
-    if (options.method === "POST") return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    if (options.method === "POST") return postFail
+      ? { ok: false, status: 502, json: async () => ({ error: "The session didn't take it." }) }
+      : { ok: true, status: 200, json: async () => ({ ok: true }) };
     if (hold) await new Promise((resolve) => held.push(resolve));
     const next = responses.shift() ?? { status: 200, body: { messages: [], cursor: 0, state: "unknown" } };
     return { ok: next.status >= 200 && next.status < 300, status: next.status, json: async () => next.body };
@@ -405,4 +407,54 @@ test("a transcript chat shows no command menu", async () => {
   await settle();
   type(h, "/");
   expect(h.$("chat-commands").hidden).toBe(true);
+});
+
+test("a sent reply shows at once, pending, until the transcript records it, and then only once", async () => {
+  const h = harness({ responses: [
+    { status: 200, body: { cursor: 1, state: "working", messages: [] } },
+    { status: 200, body: { cursor: 2, state: "working", messages: [] } }, // the agent is busy: not recorded yet
+    { status: 200, body: { cursor: 3, state: "working", messages: [{ id: "u1", role: "user", text: "please  continue\n", at: null }] } },
+  ] });
+  await settle();
+  h.$("chat-input").value = "please continue";
+  h.$("chat-input").dispatch("input");
+  h.$("chat-form").dispatch("submit");
+  await settle();
+  expect(h.rows()).toHaveLength(1);
+  expect(text(h.rows()[0])).toContain("please continue");
+  expect(h.rows()[0].className).toContain("is-pending");
+  await h.tick(); // still not in the transcript: the echo stays
+  expect(h.rows()).toHaveLength(1);
+  expect(h.rows()[0].className).toContain("is-pending");
+  await h.tick(); // recorded: the real message replaces the echo
+  expect(h.rows()).toHaveLength(1);
+  expect(h.rows()[0].className).not.toContain("is-pending");
+});
+
+test("a reply the agent records reworded still settles its echo, by time", async () => {
+  const later = new Date(Date.now() + 1000).toISOString();
+  const h = harness({ responses: [
+    { status: 200, body: { cursor: 1, state: "waiting", messages: [] } },
+    { status: 200, body: { cursor: 2, state: "working", messages: [{ id: "u1", role: "user", text: "<command-name>/review</command-name>", at: later }] } },
+  ] });
+  await settle();
+  h.$("chat-input").value = "/review";
+  h.$("chat-input").dispatch("input");
+  h.$("chat-form").dispatch("submit");
+  await settle();
+  await h.tick();
+  expect(h.rows()).toHaveLength(1);
+  expect(h.rows()[0].className).not.toContain("is-pending");
+});
+
+test("a reply that could not be sent is taken back and stays in the composer", async () => {
+  const h = harness({ postFail: true, responses: [{ status: 200, body: { cursor: 1, state: "waiting", messages: [] } }] });
+  await settle();
+  h.$("chat-input").value = "try again later";
+  h.$("chat-input").dispatch("input");
+  h.$("chat-form").dispatch("submit");
+  await settle();
+  await settle();
+  expect(h.rows()).toHaveLength(0);
+  expect(h.$("chat-input").value).toBe("try again later");
 });
