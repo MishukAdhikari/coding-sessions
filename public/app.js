@@ -192,6 +192,9 @@
     // under Unlock (and "Use password instead" has nothing left to reveal).
     $("form-password").hidden = false;
     $("btn-use-password").hidden = true;
+    // Unlock stays the one primary action; the password is the quieter way in.
+    const submit = $("form-password").querySelector('button[type="submit"]');
+    submit?.classList.replace("btn-primary", "btn-ghost");
     let response;
     let challengeId;
     try {
