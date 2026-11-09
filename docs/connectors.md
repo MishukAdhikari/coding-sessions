@@ -29,6 +29,12 @@ Access stays off until you grant it at each level:
 
 Agents see the tools on an MCP server named `coding_sessions_connectors` as `<prefix>__<tool>`, plus `list_connections`, which reports what that session may use. The prefix is derived from the connector's first name and never changes, even if you rename it. A tool name with characters other than letters, digits, `_` and `-`, or one that would make the full name longer than 64 characters, gets a stable alias such as `prefix__files_read_1a2b3c4d`; the detail screen shows it. If two tools would end up with the same agent-facing name, neither can be granted.
 
+## When an agent asks for a connector
+
+An agent that needs a remote MCP server calls `request_connector {name, url, reason, auth}` on its communicator and gives you a one-time link (15 minutes). The page shows which session asks, why, and the server's host. With a token, you paste it (sending a token to a server always asks for your passkey first) and the app stores it like any connector token; with OAuth, **Sign in** runs the sign-in below in your own browser. This is the fix for MCP servers whose own sign-in redirects to `localhost` on the server: here the callback is the app's HTTPS address.
+
+The app then checks the connection. Only a working connection completes the request: the connector is enabled for the requesting agent type, granted to the requesting session if it started with the connectors gateway, and all of its tools are granted. Narrow tools here afterwards. If the check fails, the link stays valid so you can fix the token and try again. A name that already belongs to a connector on another URL is refused. Agents follow it with `connector_status`.
+
 ## OAuth sign-in
 
 In the connector's details, under **Authentication**, choose **Sign in with OAuth**, then **Apply** and **Sign in**. You approve access on the provider's page and come back to the connector's settings. Then test the connection and choose its tools.
