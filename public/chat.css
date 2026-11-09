@@ -271,6 +271,21 @@ summary.cv-tool-row:hover { background: var(--surface-muted); }
 .cv-composer[data-state="ended"] { opacity: .6; box-shadow: none; }
 .cv-input { flex: 1; min-width: 0; min-height: 36px; max-height: 200px; padding: 7px 4px 7px 10px; border: 0; background: transparent; resize: none; font-size: 16px; line-height: 1.4; color: var(--text-primary); caret-color: var(--action-primary); }
 .cv-input:focus { outline: none; }
+.cv-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
+.cv-input-wrap .cv-input { flex: 1; }
+/* A chosen command's input hint, set in the textarea's own type right after what is typed. */
+.cv-ghost { position: absolute; inset: 0; padding: 7px 4px 7px 10px; font-size: 16px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; pointer-events: none; }
+.cv-ghost-typed { color: transparent; }
+.cv-ghost-hint { color: var(--text-muted); }
+
+/* The agent's slash commands, above the composer while "/" is being typed. */
+.cv-commands { max-height: min(40dvh, 288px); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border: 1px solid var(--border-default); border-radius: 16px; background: var(--surface-panel); box-shadow: var(--shadow-overlay); animation: cv-rise var(--duration-fast) var(--ease-out); }
+.cv-cmd { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-height: 44px; padding: 7px 10px; border-radius: 10px; cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.cv-cmd[aria-selected="true"] { background: var(--action-tint); }
+.cv-cmd:active { background: var(--surface-muted); }
+.cv-cmd-name { font: 600 14px/1.35 var(--font-data); color: var(--text-primary); overflow-wrap: anywhere; }
+.cv-cmd[aria-selected="true"] .cv-cmd-name { color: var(--action-primary); }
+.cv-cmd-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.4; color: var(--text-secondary); }
 .cv-input::placeholder { color: var(--text-muted); }
 .cv-input:disabled { cursor: not-allowed; }
 .cv-round { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 50%; transition: background var(--duration-fast), opacity var(--duration-fast); }

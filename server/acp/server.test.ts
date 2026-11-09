@@ -112,7 +112,7 @@ describe("state mapping", () => {
     resumeId: null, model: null, initial: "C", ...fields,
   });
   const st = (state: AcpState["state"], error: string | null = null): AcpState =>
-    ({ v: 1, state, acpSessionId: "s", loadSession: true, agent: null, pendingPermissions: 0, error, updatedAt: "" });
+    ({ v: 1, state, acpSessionId: "s", loadSession: true, agent: null, pendingPermissions: 0, error, commands: [], updatedAt: "" });
 
   test("a pending permission reads as waiting on you everywhere", () => {
     const s = info(acpSessionFields(st("waiting"), row));
@@ -161,7 +161,7 @@ describe("routes", () => {
     acpRow(h.database);
     bridgeFiles(h.dataDir, "cs-chat", { state: "working" }, [["user", { text: "hi" }], ["turn_end", { stopReason: "end_turn" }]]);
     const first = await (await h.call("/api/sessions/m%3Acs-chat/acp"))!.json() as any;
-    expect(first).toMatchObject({ mode: "acp", state: "working", agent: { name: "fake" } });
+    expect(first).toMatchObject({ mode: "acp", state: "working", agent: { name: "fake" }, commands: [] });
     expect(first.events.map((e: any) => e.kind)).toEqual(["user", "turn_end"]);
     const again = await (await h.call(`/api/sessions/m%3Acs-chat/acp?after=${first.cursor}`))!.json() as any;
     expect(again.events).toEqual([]);

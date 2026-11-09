@@ -11,6 +11,7 @@
  * MCP credentials, nor any environment.
  */
 import { closeSync, constants, fstatSync, openSync, readSync, renameSync, writeFileSync, writeSync, readFileSync } from "node:fs";
+import { sanitizeCommands, type AcpCommand } from "./commands";
 
 /** Bumped when an event or state shape changes incompatibly. */
 export const ACP_LOG_VERSION = 1;
@@ -29,6 +30,8 @@ export interface AcpState {
   agent: { name: string | null; title: string | null; version: string | null } | null;
   pendingPermissions: number;
   error: string | null;
+  /** The agent's latest advertised slash commands (commands.ts); empty when none. */
+  commands: AcpCommand[];
   updatedAt: string;
 }
 
@@ -110,7 +113,7 @@ export function readEventWindow(path: string, after: number | null, maxBytes = M
 }
 
 /** Replace the state file atomically, 0600. */
-export function writeState(path: string, state: Omit<AcpState, "v" | "updatedAt">, now: () => Date = () => new Date()): void {
+export function writeState(path: string, state: Omit<AcpState, "v" | "updatedAt" | "commands"> & { commands?: AcpCommand[] }, now: () => Date = () => new Date()): void {
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify({ v: ACP_LOG_VERSION, ...state, updatedAt: now().toISOString() }), { mode: 0o600 });
   renameSync(tmp, path);
@@ -135,6 +138,7 @@ export function readState(path: string): AcpState | null {
       } : null,
       pendingPermissions: Number.isInteger(s.pendingPermissions) ? s.pendingPermissions : 0,
       error: typeof s.error === "string" ? s.error : null,
+      commands: sanitizeCommands(s.commands),
       updatedAt: typeof s.updatedAt === "string" ? s.updatedAt : "",
     };
   } catch {

@@ -2,7 +2,7 @@
  * The Chat (ACP) routes, behind the app's normal sign-in (index.ts calls this after
  * its auth gate):
  *
- *   GET  /api/sessions/:id/acp?after=<cursor>  {mode, state, agent, error, events, cursor, reset}
+ *   GET  /api/sessions/:id/acp?after=<cursor>  {mode, state, agent, error, commands, events, cursor, reset}
  *   POST /api/sessions/:id/acp                 {op: "prompt", text} | {op: "cancel"} | {op: "permission", requestId, optionId}
  *   GET  /api/acp/agents                       which agents can launch in Chat mode here
  *
@@ -83,7 +83,7 @@ export async function handleAcpRoute(request: Request, deps: AcpRouteDependencie
   const dirOk = checkPrivateDir(found.paths.dir);
 
   if (request.method === "GET") {
-    if (!dirOk.ok) return json({ mode: "acp", state: "starting", agent: null, error: null, events: [], cursor: 0, reset: false });
+    if (!dirOk.ok) return json({ mode: "acp", state: "starting", agent: null, error: null, commands: [], events: [], cursor: 0, reset: false });
     const rawAfter = url.searchParams.get("after");
     const after = rawAfter !== null && /^\d{1,15}$/.test(rawAfter) ? Number(rawAfter) : null;
     const window = readEventWindow(found.paths.events, after);
@@ -93,6 +93,7 @@ export async function handleAcpRoute(request: Request, deps: AcpRouteDependencie
       state: state?.state ?? "starting",
       agent: state?.agent ?? null,
       error: state?.error ?? null,
+      commands: state?.commands ?? [],
       ...window,
     });
   }

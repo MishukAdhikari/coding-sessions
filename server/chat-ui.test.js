@@ -326,3 +326,83 @@ test("with an on-screen keyboard up, Enter starts a new line and the send button
   await settle();
   expect(h.requests.filter((r) => r.method === "POST").map((r) => r.body)).toEqual([{ op: "prompt", text: "first line" }]);
 });
+
+/* ---------- slash commands ---------- */
+
+const advertised = [
+  { name: "review", description: "Review the current changes", hint: "what to focus on" },
+  { name: "release", description: "Cut a release", hint: null },
+  { name: "compound-engineering:ce-review", description: "Deep review", hint: null },
+];
+const type = (h, value) => { h.$("chat-input").value = value; h.$("chat-input").dispatch("input"); };
+const key = (h, k) => h.$("chat-input").dispatch("keydown", { key: k, shiftKey: false });
+const menuNames = (h) => h.$("chat-commands").children.map((o) => text(o.children[0]));
+
+test("typing / lists the agent's commands, filtered by prefix before substring", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [], { commands: advertised })] });
+  await settle();
+  expect(h.$("chat-commands").hidden).toBe(true);
+  type(h, "/");
+  expect(menuNames(h)).toEqual(["/review", "/release", "/compound-engineering:ce-review"]);
+  expect(text(h.$("chat-commands").children[0].children[1])).toBe("Review the current changes");
+  type(h, "/rev");
+  expect(menuNames(h)).toEqual(["/review", "/compound-engineering:ce-review"]);
+  type(h, "/zzz");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  type(h, "hello /rev");
+  expect(h.$("chat-commands").hidden).toBe(true);
+});
+
+test("arrows and Enter choose a command; it is inserted with its hint and sent as plain text", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [], { commands: advertised })] });
+  await settle();
+  type(h, "/re");
+  key(h, "ArrowDown");
+  expect(h.$("chat-commands").children[1].getAttribute("aria-selected")).toBe("true");
+  key(h, "ArrowUp");
+  key(h, "Enter");
+  expect(h.$("chat-input").value).toBe("/review ");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  expect(h.$("chat-ghost").hidden).toBe(false);
+  expect(text(h.$("chat-ghost"))).toBe("/review what to focus on");
+  expect(h.requests.filter((r) => r.method === "POST")).toEqual([]); // choosing is not sending
+  type(h, "/review src/http");
+  expect(h.$("chat-ghost").hidden).toBe(true);
+  key(h, "Enter");
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "/review src/http" });
+});
+
+test("a tap chooses, Tab chooses, and Escape closes the menu until the text changes", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [], { commands: advertised })] });
+  await settle();
+  type(h, "/");
+  h.$("chat-commands").children[1].click();
+  expect(h.$("chat-input").value).toBe("/release ");
+  type(h, "/c");
+  key(h, "Tab");
+  expect(h.$("chat-input").value).toBe("/compound-engineering:ce-review ");
+  type(h, "/r");
+  key(h, "Escape");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  key(h, "Enter"); // with the menu closed, Enter sends what was typed
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "/r" });
+});
+
+test("with no advertised commands, / is just text", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [])] });
+  await settle();
+  type(h, "/review");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  key(h, "Enter");
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "/review" });
+});
+
+test("a transcript chat shows no command menu", async () => {
+  const h = harness({ responses: [{ status: 200, body: { messages: [], cursor: 0, state: "waiting" } }] });
+  await settle();
+  type(h, "/");
+  expect(h.$("chat-commands").hidden).toBe(true);
+});

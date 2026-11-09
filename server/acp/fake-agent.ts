@@ -50,6 +50,12 @@ const peer = createPeer({
           await update(params.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "earlier answer" } });
           return {};
         }
+        // Like claude-agent-acp: the command list follows the new session, and may change later.
+        if (process.env.FAKE_COMMANDS === "1") setTimeout(() => update("fake-session-1", { sessionUpdate: "available_commands_update", availableCommands: [
+          { name: "review", description: "Review the current changes", input: { hint: "what to focus on" } },
+          { name: "release", description: "Cut a release", input: null },
+          { name: "bad name", description: "never shown" },
+        ] }), 10);
         return { sessionId: "fake-session-1" };
       }
       case "session/prompt":

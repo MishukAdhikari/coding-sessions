@@ -24,6 +24,7 @@
  */
 import { chmodSync, lstatSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
+import { sanitizeCommands } from "./commands";
 import { createEventWriter, writeState, type AcpState, type BridgeState } from "./event-log";
 import { createLineFramer, createPeer, rpcError } from "./jsonrpc";
 import { EVENTS_FILE, SOCKET_FILE, STATE_FILE, checkPrivateDir } from "./paths";
@@ -83,7 +84,7 @@ async function main() {
   for (const file of [eventsPath, statePath, `${statePath}.tmp`, socketPath]) rmSync(file, { force: true });
 
   const log = createEventWriter(eventsPath);
-  const state: Omit<AcpState, "v" | "updatedAt"> = { state: "starting", acpSessionId: null, loadSession: false, agent: null, pendingPermissions: 0, error: null };
+  const state: Omit<AcpState, "v" | "updatedAt"> = { state: "starting", acpSessionId: null, loadSession: false, agent: null, pendingPermissions: 0, error: null, commands: [] };
   const pending = new Map<string, PendingPermission>();
   let permissionCounter = 0;
   let turnRunning = false;
@@ -120,6 +121,8 @@ async function main() {
     onNotification(method, params) {
       if (method !== "session/update" || !params || typeof params.update !== "object") return;
       log.append("update", { update: params.update });
+      // The agent's slash commands: kept in the state, newest list wins, for the chat's "/" menu.
+      if (params.update.sessionUpdate === "available_commands_update") setState({ commands: sanitizeCommands(params.update.availableCommands) });
       mirror(params.update);
     },
     async onRequest(method, params) {

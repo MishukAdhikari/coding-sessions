@@ -468,6 +468,7 @@
       try {
         await handlers.onSend?.(text);
         input.value = "";
+        resetCommand();
         fit();
         toBottom(false);
       } catch (e) {
@@ -478,12 +479,119 @@
       }
     }
 
+    /* ---------- slash commands ---------- */
+
+    // The agent's own commands (ACP available_commands_update), and only those:
+    // typing "/" at the start of the message lists them, filtered as you type.
+    // Choosing one inserts "/name " and shows its input hint where the argument
+    // goes; sending is the ordinary prompt path.
+    const menu = $("chat-commands");
+    const ghost = $("chat-ghost");
+    let commands = [];
+    let shown = [];
+    let active = 0;
+    let dismissedAt = null; // the text Escape closed the menu at
+    let chosen = null;
+
+    function setCommands(list) {
+      commands = Array.isArray(list) ? list.filter((c) => c && typeof c.name === "string" && c.name) : [];
+      syncCommands();
+    }
+
+    const menuOpen = () => !!menu && !menu.hidden;
+
+    function syncCommands() {
+      if (!menu) return;
+      const query = commandQuery(input.value);
+      shown = query === null || input.disabled || input.value === dismissedAt ? [] : commandMatches(commands, query);
+      if (!shown.length) closeMenu();
+      else { active = Math.min(active, shown.length - 1); renderMenu(); }
+      syncGhost();
+    }
+
+    function renderMenu() {
+      menu.replaceChildren(...shown.map((command, i) => {
+        const option = el("div", "cv-cmd");
+        option.id = `chat-cmd-${i}`;
+        option.setAttribute("role", "option");
+        option.setAttribute("aria-selected", String(i === active));
+        option.append(el("span", "cv-cmd-name", `/${command.name}`));
+        if (command.description) option.append(el("span", "cv-cmd-desc", command.description));
+        // Keep the keyboard up and the caret in place: choose on press, not on focus change.
+        option.addEventListener("pointerdown", (e) => e.preventDefault());
+        option.addEventListener("click", () => choose(command));
+        return option;
+      }));
+      menu.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+      input.setAttribute("aria-activedescendant", `chat-cmd-${active}`);
+      menu.children[active]?.scrollIntoView?.({ block: "nearest" });
+    }
+
+    function closeMenu() {
+      if (!menu) return;
+      menu.hidden = true;
+      shown = [];
+      active = 0;
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
+    }
+
+    function choose(command) {
+      input.value = `/${command.name} `;
+      chosen = command;
+      dismissedAt = null;
+      closeMenu();
+      fit();
+      syncComposer();
+      syncGhost();
+      input.focus?.();
+    }
+
+    // The hint sits right after the typed command, in the same type, until there is an argument.
+    function syncGhost() {
+      if (!ghost) return;
+      const hint = chosen?.hint && input.value === `/${chosen.name} ` ? chosen.hint : "";
+      if (!hint) { ghost.hidden = true; return; }
+      ghost.replaceChildren(el("span", "cv-ghost-typed", input.value), el("span", "cv-ghost-hint", hint));
+      ghost.hidden = false;
+    }
+
+    function resetCommand() {
+      chosen = null;
+      dismissedAt = null;
+      syncCommands();
+    }
+
+    input.addEventListener("keydown", (e) => {
+      if (!menuOpen() || e.isComposing) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        active = (active + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
+        renderMenu();
+      } else if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        choose(shown[active]);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        dismissedAt = input.value;
+        closeMenu();
+      }
+    });
+
     $("chat-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
-    input.addEventListener("input", () => { fit(); syncComposer(); });
+    input.addEventListener("input", () => {
+      if (chosen && !input.value.startsWith(`/${chosen.name}`)) chosen = null;
+      fit();
+      syncComposer();
+      syncCommands();
+    });
+    input.addEventListener("blur", () => closeMenu());
     // Enter sends; Shift+Enter adds a line; an IME composing a character keeps Enter
     // for itself. The page may say otherwise (an on-screen keyboard, where Enter is
     // the only way to start a new line).
     input.addEventListener("keydown", (e) => {
+      if (e.defaultPrevented) return; // the command menu took it
       if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
       if (handlers.enterSends && !handlers.enterSends(e)) return;
       e.preventDefault();
@@ -560,7 +668,7 @@
     }
 
     syncComposer();
-    return { setItems, setEmpty, setLoading, setHeader, setTerminal, setBanner, setComposer, setPermission, showError, showGone, focus: () => input.focus?.() };
+    return { setItems, setEmpty, setLoading, setHeader, setTerminal, setBanner, setComposer, setPermission, setCommands, showError, showGone, focus: () => input.focus?.() };
   }
 
   /* ---------- unified diff from old and new text ---------- */
@@ -631,5 +739,19 @@
     return rows;
   }
 
-  root.ChatView = { create, unifiedDiff };
+  /** The command being typed: the text after a leading "/", up to the first space; else null. */
+  function commandQuery(value) {
+    const m = /^\/(\S*)$/.exec(String(value ?? ""));
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  /** Commands whose name starts with the query, then those that contain it. */
+  function commandMatches(commands, query) {
+    const q = String(query ?? "").toLowerCase();
+    const starts = commands.filter((c) => c.name.toLowerCase().startsWith(q));
+    const contains = commands.filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
+    return [...starts, ...contains];
+  }
+
+  root.ChatView = { create, unifiedDiff, commandQuery, commandMatches };
 })(typeof window !== "undefined" ? window : globalThis);

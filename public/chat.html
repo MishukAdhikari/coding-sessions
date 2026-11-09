@@ -67,9 +67,13 @@
       <span>The agent is asking. Reply below, or open the terminal to pick from a menu.</span>
     </div>
     <section id="chat-permission" class="cv-perm" aria-labelledby="chat-permission-title" hidden></section>
+    <div id="chat-commands" class="cv-commands" role="listbox" aria-label="Commands" hidden></div>
     <form id="chat-form" class="cv-composer" data-state="ready">
       <label for="chat-input" class="sr-only">Message</label>
-      <textarea id="chat-input" class="cv-input" rows="1" placeholder="Message the agent" autocomplete="off" enterkeyhint="send" aria-describedby="chat-reason"></textarea>
+      <div class="cv-input-wrap">
+        <textarea id="chat-input" class="cv-input" rows="1" placeholder="Message the agent" autocomplete="off" enterkeyhint="send" aria-describedby="chat-reason" aria-autocomplete="list" aria-controls="chat-commands" aria-expanded="false"></textarea>
+        <div id="chat-ghost" class="cv-ghost" aria-hidden="true" hidden></div>
+      </div>
       <button id="chat-stop" class="cv-round cv-stop" type="button" aria-label="Stop the agent" hidden>
         <svg class="cv-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.75 4.75h6.5v6.5h-6.5z"/></svg>
       </button>
