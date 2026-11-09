@@ -86,8 +86,9 @@ The commands were checked on 2026-11-08 against each agent's source and the [ACP
 - **Resume.** Reopening an ended chat session asks the agent to reload the same conversation (ACP `session/load`). If the agent can't, a new conversation starts in the same folder and the chat says so.
 - **The communicator.** Chat sessions get the built-in Coding Sessions MCP server (and external connectors, when enabled), passed to the agent when the session starts.
 - **MCP drivers.** `send_message` sends a prompt. While the agent waits on a permission request, the session's state is `asking`, `read_session` lists the request's options, and `send_message` with one option's name answers it. `press_keys` does not apply to chat sessions.
+- **Slash commands.** When the agent advertises its commands (ACP `available_commands_update`; Claude Code's list includes your skills), typing `/` at the start of a message lists them with their descriptions, filtered as you type. Pick one with a tap, the arrow keys and Enter, or Tab; it is inserted as `/name ` with the agent's hint for what to type next, and sent as an ordinary prompt. Only the agent's own commands are listed, and the list follows the agent when it changes. An agent that advertises none gets `/` as plain text. Bridges started before this version keep no list until the session is resumed. Terminal sessions don't need the menu: their chat replies go to the terminal, where the agent's own `/` commands work as typed.
 - **Fresh workspaces** (a repository cloned at launch) and synced launches are terminal-only for now.
-- **Not supported yet:** registered Commands that are not from a preset (their ACP command isn't known), images and file attachments in prompts, slash-command menus, and session modes and model switching from the chat.
+- **Not supported yet:** registered Commands that are not from a preset (their ACP command isn't known), images and file attachments in prompts, and session modes and model switching from the chat.
 
 ## Not supported yet
 

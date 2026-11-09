@@ -5,11 +5,12 @@ import { createDocument, loadBody, text } from "./chat-test-dom.js";
 
 const read = (path) => readFileSync(new URL(`../public/${path}`, import.meta.url), "utf8");
 const page = read("chat.html");
-const scripts = ["chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
+const scripts = ["native.js", "chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
 
 /** The real chat page (its markup and its three scripts) against scripted server replies. */
-function harness({ responses = [], id = "m:cs-demo", query = "", hold = false } = {}) {
+function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, keyboard = false } = {}) {
   const document = loadBody(createDocument(), page);
+  document.documentElement.style.setProperty = (name, value) => { document.documentElement.style[name] = value; };
   const timers = [];
   const requests = [];
   const held = []; // with hold, each GET waits until release() answers it
@@ -25,6 +26,8 @@ function harness({ responses = [], id = "m:cs-demo", query = "", hold = false } 
     location: { search: `?id=${encodeURIComponent(id)}&name=demo${query}`, href: "" },
     navigator: {},
     open: () => null, close() {}, closed: false, addEventListener() {},
+    // An on-screen keyboard covering the bottom 344px of an 844px phone.
+    innerHeight: 844, visualViewport: keyboard ? { height: 500, addEventListener() {} } : undefined, scrollY: 0,
     setTimeout: (fn, ms) => { const t = { fn, ms, live: true }; timers.push(t); return timers.length; },
     clearTimeout: (n) => { if (timers[n - 1]) timers[n - 1].live = false; },
   };
@@ -307,4 +310,99 @@ test("a poll asked for while one is still running waits for it, so streamed text
   expect(all).toContain("Hello world");
   expect(all.split("Hello").length - 1).toBe(1);
   expect(all.split(" world").length - 1).toBe(1);
+});
+
+test("with an on-screen keyboard up, Enter starts a new line and the send button sends", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [])], keyboard: true });
+  await settle();
+  expect(h.document.documentElement.style["--chat-vh"]).toBe("500px");
+  h.$("chat-input").value = "first line";
+  h.$("chat-input").dispatch("input");
+  h.$("chat-input").dispatch("keydown", { key: "Enter", shiftKey: false });
+  await settle();
+  expect(h.requests.filter((r) => r.method === "POST")).toEqual([]);
+  h.$("chat-send").click();
+  h.$("chat-form").dispatch("submit");
+  await settle();
+  expect(h.requests.filter((r) => r.method === "POST").map((r) => r.body)).toEqual([{ op: "prompt", text: "first line" }]);
+});
+
+/* ---------- slash commands ---------- */
+
+const advertised = [
+  { name: "review", description: "Review the current changes", hint: "what to focus on" },
+  { name: "release", description: "Cut a release", hint: null },
+  { name: "compound-engineering:ce-review", description: "Deep review", hint: null },
+];
+const type = (h, value) => { h.$("chat-input").value = value; h.$("chat-input").dispatch("input"); };
+const key = (h, k) => h.$("chat-input").dispatch("keydown", { key: k, shiftKey: false });
+const menuNames = (h) => h.$("chat-commands").children.map((o) => text(o.children[0]));
+
+test("typing / lists the agent's commands, filtered by prefix before substring", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [], { commands: advertised })] });
+  await settle();
+  expect(h.$("chat-commands").hidden).toBe(true);
+  type(h, "/");
+  expect(menuNames(h)).toEqual(["/review", "/release", "/compound-engineering:ce-review"]);
+  expect(text(h.$("chat-commands").children[0].children[1])).toBe("Review the current changes");
+  type(h, "/rev");
+  expect(menuNames(h)).toEqual(["/review", "/compound-engineering:ce-review"]);
+  type(h, "/zzz");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  type(h, "hello /rev");
+  expect(h.$("chat-commands").hidden).toBe(true);
+});
+
+test("arrows and Enter choose a command; it is inserted with its hint and sent as plain text", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [], { commands: advertised })] });
+  await settle();
+  type(h, "/re");
+  key(h, "ArrowDown");
+  expect(h.$("chat-commands").children[1].getAttribute("aria-selected")).toBe("true");
+  key(h, "ArrowUp");
+  key(h, "Enter");
+  expect(h.$("chat-input").value).toBe("/review ");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  expect(h.$("chat-ghost").hidden).toBe(false);
+  expect(text(h.$("chat-ghost"))).toBe("/review what to focus on");
+  expect(h.requests.filter((r) => r.method === "POST")).toEqual([]); // choosing is not sending
+  type(h, "/review src/http");
+  expect(h.$("chat-ghost").hidden).toBe(true);
+  key(h, "Enter");
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "/review src/http" });
+});
+
+test("a tap chooses, Tab chooses, and Escape closes the menu until the text changes", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [], { commands: advertised })] });
+  await settle();
+  type(h, "/");
+  h.$("chat-commands").children[1].click();
+  expect(h.$("chat-input").value).toBe("/release ");
+  type(h, "/c");
+  key(h, "Tab");
+  expect(h.$("chat-input").value).toBe("/compound-engineering:ce-review ");
+  type(h, "/r");
+  key(h, "Escape");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  key(h, "Enter"); // with the menu closed, Enter sends what was typed
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "/r" });
+});
+
+test("with no advertised commands, / is just text", async () => {
+  const h = harness({ query: "&mode=acp", responses: [acp("idle", [])] });
+  await settle();
+  type(h, "/review");
+  expect(h.$("chat-commands").hidden).toBe(true);
+  key(h, "Enter");
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "/review" });
+});
+
+test("a transcript chat shows no command menu", async () => {
+  const h = harness({ responses: [{ status: 200, body: { messages: [], cursor: 0, state: "waiting" } }] });
+  await settle();
+  type(h, "/");
+  expect(h.$("chat-commands").hidden).toBe(true);
 });

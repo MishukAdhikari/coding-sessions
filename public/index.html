@@ -2,17 +2,38 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Coding Sessions</title>
-<meta name="theme-color" content="#f3f2ed">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f3f2ed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141b20" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Sessions">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=48">
+<!-- iOS launch images (scripts/render-icons.ts): the page surface and the icon,
+     per screen and color scheme, so an installed launch never flashes white. -->
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1125x2436-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1125x2436-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-828x1792-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-828x1792-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1170x2532-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1170x2532-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1179x2556-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1179x2556-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1206x2622-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1206x2622-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1284x2778-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1284x2778-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1290x2796-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1290x2796-dark.png">
+<link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: light)" href="/icons/startup-1320x2868-light.png">
+<link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1320x2868-dark.png">
+<script src="/theme.js?v=2"></script>
+<script src="/native.js?v=1"></script>
+<link rel="stylesheet" href="/app.css?v=49">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -25,6 +46,20 @@ FORM: Grounded direction 5, field notebook index; seed eebd5d1f. Desktop rows be
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 -->
 
+<!-- ========== Offline ========== -->
+<!-- Shown whenever the first call to the server fails (no network, a resume on a
+     weak connection), so the app never sits on a blank page. -->
+<section id="offline" class="screen" hidden>
+  <div class="login-wrap">
+    <div class="wordmark" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="38" height="38" rx="5"/><path d="M14 16h20M14 24h12M14 32h20"/></svg></div>
+    <h1 class="login-title">Can&rsquo;t reach the server</h1>
+    <p class="login-sub">Your sessions keep running. This page reconnects by itself when the network is back.</p>
+    <div class="login-actions">
+      <button id="btn-retry" class="btn btn-primary">Try again</button>
+    </div>
+  </div>
+</section>
+
 <!-- ========== Login ========== -->
 <section id="login" class="screen" hidden>
   <div class="login-wrap">
@@ -36,7 +71,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <button id="btn-setup-link" class="btn btn-primary" hidden>Sign in with this link</button>
       <button id="btn-passkey" class="btn btn-primary" hidden>Unlock</button>
       <form id="form-password" hidden>
-        <input id="input-password" class="field" type="password" autocomplete="current-password"
+        <input id="input-password" class="field" type="password" autocomplete="current-password webauthn"
                placeholder="Admin password" aria-label="Admin password" required>
         <button class="btn btn-primary" type="submit">Sign in</button>
       </form>
@@ -90,6 +125,18 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <button id="clear-session-search" type="button" hidden>Clear</button>
   </form>
   <p id="search-status" class="search-status" role="status" aria-live="polite" aria-atomic="true"></p>
+
+  <div id="ptr" class="ptr" aria-hidden="true"><span class="ptr-spinner"></span></div>
+
+  <aside id="install-hint" class="install-hint" aria-labelledby="install-title" hidden>
+    <svg class="install-icon" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.75" width="12" height="18.5" rx="2.5"/><path d="M12 7.5v7m-3-3 3 3 3-3"/></svg>
+    <div class="install-copy">
+      <p id="install-title" class="install-title">Install Coding Sessions</p>
+      <p id="install-body" class="install-body"></p>
+    </div>
+    <button id="btn-install" class="install-action" type="button" hidden>Install</button>
+    <button id="btn-install-dismiss" class="install-dismiss" type="button" aria-label="Dismiss install hint"><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </aside>
 
   <main id="list" class="list"></main>
 
@@ -793,11 +840,11 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 
 <script src="/agent-auth.js?v=12"></script>
 <script src="/session-search.js?v=1"></script>
-<script src="/session-status.js?v=2"></script>
+<script src="/session-status.js?v=3"></script>
 <script src="/connection-status.js?v=5"></script>
 <script src="/connectors.js?v=6"></script>
 <script src="/secrets.js?v=1"></script>
 <script src="/launch-mode.js?v=1"></script>
-<script src="/app.js?v=61"></script>
+<script src="/app.js?v=62"></script>
 </body>
 </html>

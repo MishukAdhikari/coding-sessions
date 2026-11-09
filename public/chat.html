@@ -2,16 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Chat — Coding Sessions</title>
-<meta name="theme-color" content="#f3f2ed">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f3f2ed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141b20" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/tokens.css?v=4">
-<link rel="stylesheet" href="/chat.css?v=1">
+<script src="/theme.js?v=2"></script>
+<script src="/native.js?v=1"></script>
+<link rel="stylesheet" href="/tokens.css?v=5">
+<link rel="stylesheet" href="/chat.css?v=2">
 </head>
 <body class="chat-page">
 
@@ -20,7 +23,7 @@
      tab ends nothing. -->
 
 <header class="cv-header">
-  <button id="btn-chat-close" class="cv-icon-btn" type="button" aria-label="Close chat">
+  <button id="btn-chat-close" class="cv-icon-btn" type="button" aria-label="Close chat · keeps running" title="Close chat · keeps running">
     <svg class="cv-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3.75 5.75 8 10 12.25"/></svg>
   </button>
   <div class="cv-heading">
@@ -64,9 +67,13 @@
       <span>The agent is asking. Reply below, or open the terminal to pick from a menu.</span>
     </div>
     <section id="chat-permission" class="cv-perm" aria-labelledby="chat-permission-title" hidden></section>
+    <div id="chat-commands" class="cv-commands" role="listbox" aria-label="Commands" hidden></div>
     <form id="chat-form" class="cv-composer" data-state="ready">
       <label for="chat-input" class="sr-only">Message</label>
-      <textarea id="chat-input" class="cv-input" rows="1" placeholder="Message the agent" autocomplete="off" enterkeyhint="send" aria-describedby="chat-reason"></textarea>
+      <div class="cv-input-wrap">
+        <textarea id="chat-input" class="cv-input" rows="1" placeholder="Message the agent" autocomplete="off" enterkeyhint="send" aria-describedby="chat-reason" aria-autocomplete="list" aria-controls="chat-commands" aria-expanded="false"></textarea>
+        <div id="chat-ghost" class="cv-ghost" aria-hidden="true" hidden></div>
+      </div>
       <button id="chat-stop" class="cv-round cv-stop" type="button" aria-label="Stop the agent" hidden>
         <svg class="cv-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.75 4.75h6.5v6.5h-6.5z"/></svg>
       </button>
@@ -86,7 +93,7 @@
 </div>
 
 <script src="/chat-markdown.js?v=1"></script>
-<script src="/chat-view.js?v=1"></script>
-<script src="/chat.js?v=2"></script>
+<script src="/chat-view.js?v=2"></script>
+<script src="/chat.js?v=3"></script>
 </body>
 </html>

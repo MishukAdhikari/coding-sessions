@@ -33,7 +33,7 @@
   --type-menu-action: 1rem;
   --type-menu-helper: .875rem;
   --type-menu-label: .8125rem;
-  --font-body: "Instrument Sans", sans-serif;
+  --font-body: "Instrument Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-data: ui-monospace, SFMono-Regular, Menlo, monospace;
   --space-1: 4px;
   --space-2: 8px;
@@ -49,6 +49,8 @@
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   --duration-fast: 150ms;
   --duration-panel: 280ms;
+  --bar-bg: color-mix(in srgb, var(--surface-page) 84%, transparent);
+  --bar-blur: blur(18px) saturate(1.4);
   --bg: var(--surface-page);
   --bg-elev: var(--surface-panel);
   --bg-elev2: var(--surface-muted);
@@ -128,3 +130,17 @@
   --shadow-overlay: 0 16px 64px #0008;
   }
 }
+
+/* Coming back from another app can leave iOS with a stale, blank frame; native.js
+   toggles this for one frame to force a repaint. */
+html.repaint body { opacity: .999; }
+
+/* Moving between the list, a chat and a terminal slides like a pushed screen.
+   Back skips it (native.js): the system back gesture already animated the move. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root) { animation: 240ms var(--ease-out) both screen-leave; }
+  ::view-transition-new(root) { animation: 300ms var(--ease-out) both screen-enter; }
+}
+@keyframes screen-enter { from { transform: translateX(32%); opacity: 0; } }
+@keyframes screen-leave { to { transform: translateX(-12%); opacity: .5; } }

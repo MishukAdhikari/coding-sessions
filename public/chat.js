@@ -31,12 +31,19 @@
   let gone = false;
   let loaded = false;
 
+  const native = window.NativeShell;
+  // The page fits above the on-screen keyboard (--chat-vh), and while that keyboard
+  // is up Enter starts a new line: the send button sends.
+  const keyboard = native.trackKeyboard("chat-vh");
+  if (window.matchMedia?.("(pointer: coarse)").matches) document.getElementById("chat-input")?.setAttribute("enterkeyhint", "enter");
+
   const view = window.ChatView.create(document, {
     onSend: (text) => (acp ? sendPrompt(text) : sendMessage(text)),
     onStop: () => command({ op: "cancel" }).then(() => schedule(150)),
     onPermission: (requestId, optionId) => answerPermission(requestId, optionId),
     onTerminal: openTerminal,
-    onClose: () => { window.close(); if (!window.closed) location.href = "/"; },
+    onClose: () => native.closeScreen(),
+    enterSends: (e) => native.enterSends({ softKeyboard: keyboard.softKeyboard(), shift: e.shiftKey, composing: e.isComposing }),
   });
 
   document.title = `${name} — Chat`;
@@ -178,6 +185,7 @@
       failed: { status: "Failed", tone: "failed" },
     }[state];
     view.setHeader({ ...header, agent: agent?.title || agent?.name || agentParam || null, version: agent?.version });
+    view.setCommands(Array.isArray(data.commands) ? data.commands : []);
 
     const pending = model.pending();
     const live = state === "working" || state === "waiting";
@@ -428,9 +436,10 @@
 
   /* ---------- the terminal, for menus a transcript chat can't answer ---------- */
 
-  // Same flow as app.js's openWebTerminal: pop the tab inside the gesture, then point it at the bridge.
+  // Same flow as app.js's openWebTerminal: open the screen inside the gesture, then
+  // point it at the bridge once it exists. The terminal links back to this chat.
   async function openTerminal() {
-    const tab = window.open("about:blank", "_blank");
+    const screen = native.screenOpener();
     try {
       const res = await fetch("/api/terminal", {
         method: "POST", credentials: "same-origin",
@@ -438,10 +447,10 @@
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
-      const url = `/term.html?id=${encodeURIComponent(body.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(body.mux ?? "screen")}`;
-      if (tab) tab.location = url; else location.href = url;
+      const url = `/term.html?id=${encodeURIComponent(body.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(body.mux ?? "screen")}&chat=1`;
+      await screen.go(url);
     } catch (e) {
-      if (tab) tab.close();
+      screen.cancel();
       view.showError(e.message || "Couldn't open the terminal.");
     }
   }

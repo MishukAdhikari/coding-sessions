@@ -1,8 +1,9 @@
 /* Terminal window — chrome around the ttyd iframe.
  *
- * Opened in its own tab by app.js. Closing it is a browser tab close and
- * nothing more: ttyd gets SIGHUP, screen detaches, and whatever is running on
- * the server keeps running. Nothing here ends a session.
+ * Opened by app.js (in the installed app, in the same window; in a browser, in
+ * its own tab). Closing it is leaving the page and nothing more: ttyd gets
+ * SIGHUP, screen detaches, and whatever is running on the server keeps running.
+ * Nothing here ends a session.
  *
  * The iframe is same-origin, so ttyd's `window.term` (xterm.js) is reachable —
  * that's how the key row types and how we re-fit when the soft keyboard
@@ -18,6 +19,15 @@
   const keys = $("term-keys");
 
   $("term-name").textContent = name;
+
+  // The same session's chat, when it has one (the app or the chat page says so
+  // with chat=1). A plain link: it opens in this window, and back returns here.
+  const hasChat = params.get("chat") === "1" && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,60}$/.test(name);
+  if (hasChat) {
+    const chat = $("btn-term-chat");
+    chat.href = `/chat.html?${new URLSearchParams({ id: `m:cs-${name}`, name })}`;
+    chat.hidden = false;
+  }
 
   // ⇞ enters screen's copy mode (Ctrl-A [) by default. zmx and herdr sessions have
   // no copy mode — their scrollback reaches the browser as-is, and Claude's
@@ -174,12 +184,7 @@
 
   /* ---------- close ---------- */
 
-  $("btn-term-close").addEventListener("click", () => {
-    window.close();
-    // close() is a no-op unless this tab was script-opened (deep link, PWA,
-    // restored tab) — fall back to walking back into the app.
-    setTimeout(() => { if (!window.closed) location.replace("/"); }, 150);
-  });
+  $("btn-term-close").addEventListener("click", () => window.NativeShell.closeScreen());
 
   /* ---------- fitting ---------- */
 
@@ -207,7 +212,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.id) return { resumed: false, error: data.error };
-      location.replace(`/term.html?id=${encodeURIComponent(data.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(data.mux ?? "screen")}&r=1`);
+      location.replace(`/term.html?id=${encodeURIComponent(data.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(data.mux ?? "screen")}${hasChat ? "&chat=1" : ""}&r=1`);
       return { resumed: true };
     } catch {
       return { resumed: false };
@@ -227,6 +232,8 @@
   frame.addEventListener("load", () => {
     const doc = (() => { try { return frame.contentDocument; } catch { return null; } })();
     if (doc && /No such terminal/i.test(doc.body?.textContent ?? "")) { resumeOrGone(); return; }
+    // Pinch and double-tap inside the terminal would zoom the whole app on iOS.
+    if (doc) window.NativeShell.guardZoom(doc);
 
     // An expired cookie doesn't 401 here — /term/<id>/ redirects to "/", so the
     // whole app (login screen and all) would render inside the terminal frame.
@@ -255,34 +262,9 @@
   // — the cursor line, and the key row — end up behind the keyboard. Android
   // Chrome takes the `interactive-widget` hint in term.html; iOS ignores it, and
   // neither is worth trusting alone, so drive the height from visualViewport too.
-  const vv = window.visualViewport;
-  let pending = false;
-
-  function syncViewport() {
-    pending = false;
-    let height = "";
-    if (vv) {
-      // Only take over while something is actually covering the page. A small
-      // delta is just browser chrome collapsing, and overriding for that would
-      // fight the CSS on every scroll.
-      const covered = window.innerHeight - vv.height;
-      if (covered > 120) height = `${vv.height}px`;
-    }
-    document.documentElement.style.setProperty("--term-vh", height);
-    refit();
-  }
-
-  // visualViewport fires a burst of events per keyboard animation frame.
-  function queueSync() {
-    if (pending) return;
-    pending = true;
-    requestAnimationFrame(syncViewport);
-  }
-
-  window.addEventListener("resize", queueSync);
-  vv?.addEventListener("resize", queueSync);
-  vv?.addEventListener("scroll", queueSync);
-  window.addEventListener("orientationchange", () => setTimeout(queueSync, 250));
+  // native.js keeps --term-vh at the room above the keyboard (only while one
+  // really covers the page) and calls back so xterm re-fits.
+  window.NativeShell.trackKeyboard("term-vh", () => refit());
 
   function showGone(title, body) {
     frame.hidden = true;

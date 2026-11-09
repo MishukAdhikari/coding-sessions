@@ -113,13 +113,29 @@
   };
   let cliLoginCode = readCliLoginCode();
 
+  // Never a blank page: until the server answers, the offline screen says so and
+  // offers a retry, and coming back online or to the app retries on its own.
+  let booting = false;
+  const BOOT_TIMEOUT_MS = 8000;
   async function boot() {
+    if (booting) return;
+    booting = true;
+    $("btn-retry").disabled = true;
+    // A request that hangs (a captive portal, a radio handoff on resume) must
+    // still reach the offline screen, so it is bounded like connection-status.js's.
+    const request = new AbortController();
+    const timeout = setTimeout(() => request.abort(), BOOT_TIMEOUT_MS);
     try {
-      me = await api("/api/me");
+      me = await api("/api/me", { signal: request.signal });
     } catch {
-      showToast("Can't reach the server.");
+      showOffline();
       return;
+    } finally {
+      clearTimeout(timeout);
+      booting = false;
+      $("btn-retry").disabled = false;
     }
+    $("offline").hidden = true;
     me.authed ? enterApp() : showLogin();
     if (setupToken && me.authed) setupToken = null; // already signed in; leave the link unused
   }
@@ -139,6 +155,12 @@
     }
   });
 
+  function showOffline() {
+    if (!$("login").hidden || !$("app").hidden) return; // already running: the list says "Connection lost · retrying…"
+    $("offline").hidden = false;
+  }
+  $("btn-retry").addEventListener("click", boot);
+
   /* ---------- login ---------- */
 
   function showLogin() {
@@ -149,6 +171,46 @@
     $("btn-passkey").hidden = !canPasskey;
     $("form-password").hidden = canPasskey;
     $("btn-use-password").hidden = !canPasskey;
+    startPasskeyAutofill();
+  }
+
+  // Passkey autofill: where the browser can offer the saved passkey among the
+  // password field's suggestions (iOS's bar above the keyboard, Android's
+  // autofill), a passkey request waits quietly behind that field. Unlock stays
+  // the explicit way in, and cancels this request when it starts its own.
+  // Each start is one attempt; Unlock bumps the count so an attempt still waiting
+  // on its options can never start after (and abort) Unlock's own ceremony.
+  let autofillAttempt = 0;
+  async function startPasskeyAutofill() {
+    const attempt = ++autofillAttempt;
+    const webauthn = window.SimpleWebAuthnBrowser;
+    let supported = false;
+    try { supported = await webauthn?.browserSupportsWebAuthnAutofill?.(); } catch {}
+    if (attempt !== autofillAttempt) return;
+    if (!window.NativeShell.passkeyAutofillPlan({ supported, hasPasskey: me?.hasPasskey === true, setupToken })) return;
+    // The suggestion appears when the field is focused, so the field stays on screen
+    // under Unlock (and "Use password instead" has nothing left to reveal).
+    $("form-password").hidden = false;
+    $("btn-use-password").hidden = true;
+    // Unlock stays the one primary action; the password is the quieter way in.
+    const submit = $("form-password").querySelector('button[type="submit"]');
+    submit?.classList.replace("btn-primary", "btn-ghost");
+    let response;
+    let challengeId;
+    try {
+      const started = await api("/api/auth/login/options");
+      if (attempt !== autofillAttempt) return;
+      challengeId = started.challengeId;
+      response = await webauthn.startAuthentication({ optionsJSON: started.options, useBrowserAutofill: true });
+    } catch {
+      return; // cancelled by Unlock or by leaving the page, or never chosen: nothing to say
+    }
+    try {
+      await api("/api/auth/login/verify", { method: "POST", body: JSON.stringify({ challengeId, response }) });
+      enterApp();
+    } catch (e) {
+      loginError(e.message || "Couldn’t unlock.");
+    }
   }
 
   function loginError(msg) {
@@ -159,6 +221,8 @@
 
   $("btn-passkey").addEventListener("click", async () => {
     const startedAt = Date.now();
+    autofillAttempt++;
+    window.SimpleWebAuthnBrowser?.WebAuthnAbortService?.cancelCeremony();
     try {
       const { options, challengeId } = await api("/api/auth/login/options");
       const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
@@ -174,6 +238,7 @@
       else if (Date.now() - startedAt < 600) {
         loginError("No passkey on this device yet — sign in with your password, then add Face ID / Touch ID from the menu.");
       }
+      startPasskeyAutofill(); // the field's suggestions offer it again
     }
   });
 
@@ -237,13 +302,22 @@
         history.replaceState(null, "", location.pathname);
       }
     }
+    // The home-screen shortcut "Start a session" (manifest.webmanifest).
+    if (params.get("action") === "new") {
+      history.replaceState(null, "", location.pathname);
+      capabilitiesLoaded.then(() => $("btn-new").click());
+    }
     if (cliLoginCode) openCliLogin();
-    refresh(true);
+    // Back from chat or the terminal on a page iOS had discarded: return to where
+    // the list was (saved in its history entry before leaving).
+    refresh(true).then(() => {
+      const y = Number(history.state?.scrollY);
+      if (y > 0) requestAnimationFrame(() => window.scrollTo(0, y));
+    });
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 4000);
   }
 
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && me?.authed !== false && !$("app").hidden) refresh(); });
 
   async function refresh(force = false) {
     const version = ++refreshVersion;
@@ -264,6 +338,10 @@
     sessionSyncLost = false;
     sessions = data.sessions || [];
     archived = data.archived || [];
+    if (openSheetEl?.id === "sheet-confirm" && confirmSessionId) {
+      const current = sessions.find((item) => item.id === confirmSessionId);
+      if (current) syncSessionActions(current);
+    }
     renderHost(data.host);
     checkAskingTransitions(sessions); // before the early-return, so a flip never gets swallowed
     const json = JSON.stringify([sessions, archived]);
@@ -540,7 +618,9 @@
       return `<span class="pr-link" role="link" tabindex="0" data-state="${state}" data-href="${escapeHtml(pr.url)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${prIcon(state)}<span class="pr-num">${escapeHtml(text)}</span></span>`;
     }).join("")}</span>`;
   };
-  const openPrLink = (href) => { if (PR_URL_RE.test(href || "")) window.open(href, "_blank", "noopener,noreferrer"); };
+  // Through a real anchor: in the installed app iOS opens it over the app and the
+  // app stays mounted underneath, instead of coming back to a blank page.
+  const openPrLink = (href) => { if (PR_URL_RE.test(href || "")) window.NativeShell.openExternal(href); };
   const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   // Long paths truncate in the MIDDLE so both the root and the folder name stay visible
@@ -552,6 +632,32 @@
   let openSheetEl = null;
   let sheetTrigger = null;
   let sheetHistory = [];
+  // Each open sheet level owns one history entry, so the system back gesture (iOS
+  // edge swipe, Android back) closes a sheet instead of leaving the app.
+  // sheetDepth counts the entries this page pushed; popstate is the one path that
+  // steps back through them.
+  let sheetDepth = 0;
+  let ignoredPops = 0;
+  let unwound = Promise.resolve();
+  let finishUnwind = null;
+  const sheetState = (depth) => ({ ...(history.state && typeof history.state === "object" ? history.state : {}), sheet: depth });
+  function pushSheetEntry(replace) {
+    unwound.then(() => {
+      if (replace) history.replaceState(sheetState(sheetDepth), "");
+      else history.pushState(sheetState(++sheetDepth), "");
+    });
+  }
+  function unwindSheetEntries() {
+    if (!sheetDepth) return;
+    const steps = sheetDepth;
+    sheetDepth = 0;
+    ignoredPops++;
+    unwound = new Promise((resolve) => {
+      finishUnwind = resolve;
+      setTimeout(resolve, 600); // a traversal the browser drops must not hold later sheets
+    });
+    history.go(-steps);
+  }
   const sheetFocusable = (el) => [...el.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]')]
     .filter((node) => node.getClientRects().length > 0);
   function openSheet(id, { back = false, returnFocus = null, scrollTop = 0 } = {}) {
@@ -560,7 +666,8 @@
     if (!back && openSheetEl && (openSheetEl.id === "sheet-menu" || sheetHistory.length)) {
       sheetHistory.push({ id: openSheetEl.id, focus: document.activeElement, scrollTop: openSheetEl.scrollTop });
     }
-    closeSheet(false, true);
+    if (!back) pushSheetEntry(!!openSheetEl && !(sheetHistory.length && sheetHistory.at(-1).id === openSheetEl.id));
+    closeSheet({ restoreFocus: false, keepHistory: true });
     openSheetEl = $(id);
     const sheet = openSheetEl;
     const backButton = sheet.querySelector(".sheet-back");
@@ -584,8 +691,11 @@
       (returnFocus?.isConnected && sheet.contains(returnFocus) ? returnFocus : sheet).focus({ preventScroll: true });
     });
   }
-  function closeSheet(restoreFocus = true, keepHistory = false) {
-    if (!keepHistory) sheetHistory = [];
+  function closeSheet({ restoreFocus = true, keepHistory = false, fromHistory = false } = {}) {
+    if (!keepHistory) {
+      sheetHistory = [];
+      if (!fromHistory) unwindSheetEntries();
+    }
     if (!openSheetEl) return;
     const el = openSheetEl;
     if (el.id === "sheet-server-settings") cancelServerConfirm?.();
@@ -612,10 +722,23 @@
       if (restoreFocus && !openSheetEl && sheetTrigger?.isConnected) sheetTrigger.focus({ preventScroll: true });
     }, 300);
   }
-  function backSheet() {
+  function stepBackSheet() {
     const previous = sheetHistory.pop();
     if (previous) openSheet(previous.id, { back: true, returnFocus: previous.focus, scrollTop: previous.scrollTop });
   }
+  // The in-sheet Back button goes through history too, so the next system back
+  // still closes exactly one level.
+  function backSheet() {
+    if (sheetDepth > 1) history.back();
+    else stepBackSheet();
+  }
+  window.addEventListener("popstate", (event) => {
+    if (ignoredPops > 0) { ignoredPops--; finishUnwind?.(); return; }
+    const target = Number(event.state?.sheet) || 0;
+    const step = window.NativeShell.historyTarget(sheetDepth, target);
+    if (step.action === "close") { sheetDepth = 0; closeSheet({ fromHistory: true }); }
+    else if (step.action === "back") { sheetDepth = target; for (let i = 0; i < step.steps; i++) stepBackSheet(); }
+  });
   document.querySelectorAll(".sheet").forEach(sheet => {
     const button = document.createElement("button");
     button.type = "button";
@@ -1182,13 +1305,15 @@
     };
   }
 
-  // Open a live, writable web terminal in its own tab. It runs inside a session
+  // Open a live, writable web terminal: in the installed app, in this window (back
+  // returns to the list); in a browser, in its own tab. It runs inside a session
   // holder (zmx, or screen for older sessions) on the server and is proxied through this (already-gated) origin — so
   // closing the tab just detaches and whatever's running keeps going in the
   // background. The tab gets term.html, which wraps ttyd's bare xterm.js UI in a
   // title bar, a Close button and a key row (ttyd alone is unusable on a phone).
-  // Pop the tab synchronously BEFORE the async POST so iOS Safari doesn't treat
-  // the later navigation as a non-gesture popup and block it.
+  // screenOpener pops the tab synchronously BEFORE the async POST so iOS Safari
+  // doesn't treat the later navigation as a non-gesture popup and block it. Nothing
+  // navigates until the terminal exists, so a failed attach is a toast, not a blank page.
   // A Chat (ACP) session's chat reads the bridge's event log; any other chat reads the transcript.
   function chatUrl(s, provider) {
     const query = new URLSearchParams({ id: s.id, name: s.name });
@@ -1196,18 +1321,58 @@
     return `/chat.html?${query}`;
   }
 
-  async function openWebTerminal(body, okLabel) {
-    const tab = window.open("about:blank", "_blank");
+  async function openWebTerminal(body, okLabel, { chat = false } = {}) {
+    const screen = window.NativeShell.screenOpener();
     try {
       const { id, mux } = await api("/api/terminal", { method: "POST", body: JSON.stringify(body) });
       const label = body.kind === "attach" ? body.screen.replace(/^cs-/, "") : "Server shell";
-      const url = `/term.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(label)}&mux=${encodeURIComponent(mux ?? "screen")}`;
-      if (tab) tab.location = url; else window.location.href = url;
-      showToast(okLabel);
+      const url = `/term.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(label)}&mux=${encodeURIComponent(mux ?? "screen")}${chat ? "&chat=1" : ""}`;
+      if (!window.NativeShell.standalone) showToast(okLabel);
+      await screen.go(url);
     } catch (e) {
-      if (tab) tab.close();
+      screen.cancel();
       showToast(e.message || "Couldn’t open the terminal");
     }
+  }
+
+  // The sheet's ways into a session: the live web terminal (a writable second seat
+  // on its screen) and the chat. While the session is still starting they wait,
+  // disabled with a spinner, and the list poll flips them to ready by itself.
+  let confirmSessionId = null;
+  function syncSessionActions(s) {
+    const provider = providerOf(s);
+    const caps = { webTerminal: providerHas(provider, "webTerminal"), chatView: providerHas(provider, "chatView") };
+    const awaitingTrust = s.startupWaitingForTrust === true && window.sessionStatus(s).state === "waiting";
+
+    const term = $("btn-web-term");
+    const termState = window.sessionActionState(s, "terminal", caps);
+    term.hidden = termState === "hidden";
+    term.disabled = termState === "pending";
+    term.classList.toggle("is-busy", termState === "pending");
+    term.textContent = termState === "pending" ? "Opening terminal… wait a few seconds"
+      : awaitingTrust ? "Review in terminal" : "Open web terminal";
+    term.classList.toggle("btn-primary", awaitingTrust);
+    term.classList.toggle("btn-ghost", !awaitingTrust);
+    const chatState = window.sessionActionState(s, "chat", caps);
+    const transcriptChat = s.mode !== "acp" && chatState !== "hidden";
+    term.onclick = termState !== "ready" ? null : () => {
+      closeSheet();
+      openWebTerminal({ kind: "attach", screen: s.id.slice(2) }, "Opening web terminal…", { chat: transcriptChat });
+    };
+
+    // The same conversation as a chat: the agent's own transcript, or the ACP bridge's log.
+    const chat = $("btn-chat");
+    const acpChat = s.mode === "acp";
+    chat.hidden = chatState === "hidden";
+    chat.disabled = chatState === "pending";
+    chat.classList.toggle("is-busy", chatState === "pending");
+    chat.textContent = chatState === "pending" ? "Opening chat… wait a few seconds" : "Open chat";
+    chat.classList.toggle("btn-primary", acpChat);
+    chat.classList.toggle("btn-ghost", !acpChat);
+    chat.onclick = chatState !== "ready" ? null : () => {
+      closeSheet();
+      window.NativeShell.openScreen(chatUrl(s, provider));
+    };
   }
 
   function confirmEnd(s) {
@@ -1245,32 +1410,8 @@
     if (canOpenClaude) open.href = s.claudeUrl;
     else open.removeAttribute("href");
 
-    // Live web terminal: attach a writable second seat to this session's screen.
-    // Only for managed (cs-*) sessions that are actually up.
-    const term = $("btn-web-term");
-    term.textContent = awaitingTrust ? "Review in terminal" : "Open web terminal";
-    term.classList.toggle("btn-primary", awaitingTrust);
-    term.classList.toggle("btn-ghost", !awaitingTrust);
-    const canAttach = providerHas(provider, "webTerminal") && typeof s.id === "string" && s.id.startsWith("m:") && (s.status === "running" || s.status === "starting");
-    term.hidden = !canAttach;
-    if (canAttach) {
-      const screen = s.id.slice(2); // "cs-<name>"
-      term.onclick = () => { closeSheet(); openWebTerminal({ kind: "attach", screen }, "Opening web terminal…"); };
-    }
-
-    // The same conversation as a chat, read from the agent's own transcript.
-    const chat = $("btn-chat");
-    const acpChat = s.mode === "acp";
-    const canChat = (acpChat || providerHas(provider, "chatView")) && typeof s.id === "string" && s.id.startsWith("m:") && (s.status === "running" || (acpChat && s.status === "starting"));
-    chat.hidden = !canChat;
-    chat.classList.toggle("btn-primary", acpChat);
-    chat.classList.toggle("btn-ghost", !acpChat);
-    if (canChat) {
-      chat.onclick = () => {
-        closeSheet();
-        window.open(chatUrl(s, provider), "_blank");
-      };
-    }
+    confirmSessionId = s.id;
+    syncSessionActions(s);
 
     wireCopyCmd(provider, s.project, s.resumeId, s.name, s.status === "ended", s.remoteControl !== false);
 
@@ -1310,6 +1451,7 @@
   }
 
   function confirmArchived(a) {
+    confirmSessionId = null;
     const provider = providerOf(a);
     const displayName = providerName(provider);
     $("confirm-title").textContent = `“${a.name}”`;
@@ -1689,6 +1831,7 @@
   });
 
   $("btn-clear-archive").addEventListener("click", () => {
+    confirmSessionId = null;
     if (!archived.length) { closeSheet(); showToast("History is already empty"); return; }
     $("btn-open-claude").hidden = true;
     $("btn-copy-cmd").hidden = true;
@@ -1708,6 +1851,7 @@
   });
 
   $("btn-end-all").addEventListener("click", () => {
+    confirmSessionId = null;
     const running = sessions.filter((s) => s.status === "running" || s.status === "starting").length;
     if (!sessions.length) { closeSheet(); showToast("Nothing to end"); return; }
     $("btn-open-claude").hidden = true;
@@ -2195,6 +2339,178 @@
   }
 
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+  /* ---------- touch gestures ---------- */
+
+  const native = window.NativeShell;
+  const sideSheets = window.matchMedia("(min-width: 760px)");
+
+  // A bottom sheet follows a downward drag from its top and closes past the
+  // threshold (native.js decides), like the system sheets it imitates.
+  document.querySelectorAll(".sheet").forEach((sheet) => {
+    let drag = null;
+    sheet.addEventListener("touchstart", (e) => {
+      if (drag) return; // a second finger joins: keep following the first
+      drag = null;
+      if (sideSheets.matches || sheet !== openSheetEl || e.touches.length !== 1 || sheet.scrollTop > 0) return;
+      if (e.target.closest("input, textarea, select, .browser-live, .cmd")) return;
+      drag = { y: e.touches[0].clientY, dy: 0, at: e.timeStamp, velocity: 0, active: false };
+    }, { passive: true });
+    sheet.addEventListener("touchmove", (e) => {
+      if (!drag) return;
+      const dy = e.touches[0].clientY - drag.y;
+      if (!drag.active) {
+        if (dy < -6) { drag = null; return; } // scrolling up: the sheet's own content
+        if (dy < 6) return;
+        drag.active = true;
+        sheet.classList.add("dragging");
+      }
+      e.preventDefault();
+      const dt = Math.max(1, e.timeStamp - drag.at);
+      drag.velocity = (dy - drag.dy) / dt;
+      drag.dy = dy;
+      drag.at = e.timeStamp;
+      // Past the top it resists, the way an overscrolled native sheet does.
+      sheet.style.transform = `translateY(${dy > 0 ? dy : dy / 4}px)`;
+      $("scrim").style.opacity = String(Math.max(0, 1 - Math.max(0, dy) / sheet.offsetHeight));
+    }, { passive: false });
+    const end = () => {
+      const done = drag;
+      drag = null;
+      if (!done?.active) return;
+      sheet.classList.remove("dragging");
+      sheet.style.transform = "";
+      $("scrim").style.opacity = "";
+      if (native.sheetShouldDismiss({ dy: done.dy, velocity: done.velocity, height: sheet.offsetHeight })) {
+        native.haptic();
+        closeSheet();
+      }
+    };
+    sheet.addEventListener("touchend", end);
+    sheet.addEventListener("touchcancel", end);
+  });
+
+  // Pull to refresh on the sessions list: the installed app has no browser
+  // refresh, and the list is the one thing worth refreshing by hand.
+  {
+    // State lives on #app: the indicator and the content it pulls down both read it.
+    const ptr = $("app");
+    let pull = null;
+    let refreshing = false;
+    const show = (distance) => {
+      ptr.style.setProperty("--pull", `${distance}px`);
+      ptr.style.setProperty("--pull-progress", String(Math.min(1, distance / native.PULL_TRIGGER)));
+    };
+    document.addEventListener("touchstart", (e) => {
+      if (pull) return; // a second finger joins: keep following the first
+      pull = null;
+      if (refreshing || openSheetEl || $("app").hidden || e.touches.length !== 1 || window.scrollY > 0) return;
+      if (e.target.closest("input, textarea, select, .sheet, .dock")) return;
+      pull = { y: e.touches[0].clientY, distance: 0, armed: false };
+    }, { passive: true });
+    document.addEventListener("touchmove", (e) => {
+      if (!pull) return;
+      const raw = e.touches[0].clientY - pull.y;
+      if (raw <= 0 || window.scrollY > 0) {
+        if (pull.distance) show(0);
+        pull.distance = 0;
+        ptr.classList.remove("ptr-pulling", "ptr-armed");
+        return;
+      }
+      e.preventDefault();
+      ptr.classList.add("ptr-pulling");
+      pull.distance = native.pullDistance(raw);
+      const armed = native.pullTriggered(pull.distance);
+      if (armed && !pull.armed) native.haptic(6);
+      pull.armed = armed;
+      ptr.classList.toggle("ptr-armed", armed);
+      show(pull.distance);
+    }, { passive: false });
+    const release = async () => {
+      const done = pull;
+      pull = null;
+      if (!done) return;
+      ptr.classList.remove("ptr-pulling", "ptr-armed");
+      if (!native.pullTriggered(done.distance)) { show(0); return; }
+      refreshing = true;
+      ptr.classList.add("ptr-refreshing");
+      show(native.PULL_TRIGGER * 0.75);
+      // Long enough to read as a refresh even when the server answers at once.
+      await Promise.all([refresh(true), new Promise((resolve) => setTimeout(resolve, 450))]);
+      ptr.classList.remove("ptr-refreshing");
+      show(0);
+      refreshing = false;
+    };
+    document.addEventListener("touchend", release);
+    document.addEventListener("touchcancel", release);
+  }
+
+  // Installing: Android offers its own dialog; iOS Safari only has Share, then
+  // Add to Home Screen, so say that. Shown on the list until dismissed, once.
+  {
+    const KEY = "xs_install_hint";
+    const hint = $("install-hint");
+    let deferredPrompt = null;
+    const dismissed = () => { try { return localStorage.getItem(KEY) === "dismissed"; } catch { return false; } };
+    const dismiss = () => { try { localStorage.setItem(KEY, "dismissed"); } catch {} };
+    const sync = () => {
+      const kind = native.installHintKind({
+        standalone: native.standalone, dismissed: dismissed(), hasPrompt: !!deferredPrompt,
+        iosSafari: native.isIosSafari(navigator.userAgent, navigator.maxTouchPoints),
+      });
+      hint.hidden = !kind;
+      if (!kind) return;
+      $("btn-install").hidden = kind !== "prompt";
+      $("install-body").textContent = kind === "prompt"
+        ? "Opens from your home screen, full screen, like any app."
+        : "Tap Share, then “Add to Home Screen” to open it full screen, like any app.";
+    };
+    window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; sync(); });
+    window.addEventListener("appinstalled", () => { deferredPrompt = null; dismiss(); sync(); });
+    $("btn-install").addEventListener("click", async () => {
+      const prompt = deferredPrompt;
+      deferredPrompt = null;
+      if (!prompt) return sync();
+      prompt.prompt();
+      const { outcome } = await prompt.userChoice.catch(() => ({ outcome: "dismissed" }));
+      if (outcome === "accepted") dismiss();
+      sync();
+    });
+    $("btn-install-dismiss").addEventListener("click", () => { dismiss(); sync(); });
+    sync();
+  }
+
+  /* ---------- coming back ---------- */
+
+  // Back from GitHub, another app, or the back-forward cache: whatever the page was
+  // in the middle of may have frozen with it. Retry a boot that never finished,
+  // re-sync the list, and drop any sheet chrome that outlived its sheet.
+  // Coming back often fires two or three of these at once (pageshow, visible,
+  // online): one re-sync is enough.
+  let lastResume = 0;
+  window.NativeShell.onResume(() => {
+    if (Date.now() - lastResume < 1000) return;
+    lastResume = Date.now();
+    if (!$("offline").hidden) { boot(); return; }
+    if ($("app").hidden) return;
+    if (!openSheetEl) {
+      $("scrim").hidden = true;
+      $("scrim").classList.remove("show");
+      document.body.classList.remove("sheet-open");
+      $("app").inert = false;
+    }
+    refresh(true);
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 4000);
+  });
+
+  // The list's scroll survives a trip to chat or the terminal even when iOS
+  // discarded the page meanwhile: it rides in the list's history entry.
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  window.NativeShell.setBeforeLeave(async () => {
+    await unwound;
+    history.replaceState({ ...(history.state && typeof history.state === "object" ? history.state : {}), scrollY: Math.round(window.scrollY) }, "");
+  });
 
   boot();
 })();

@@ -76,6 +76,18 @@ describe("ACP bridge against the fake agent", () => {
     expect(events(h.paths).find((e) => e.kind === "turn_end")).toMatchObject({ stopReason: "end_turn" });
   });
 
+  test("the agent's slash commands land in the state, without the ones the chat could not insert", async () => {
+    const h = start({ FAKE_COMMANDS: "1" });
+    const s = await until(h.paths, (st) => st.commands.length > 0);
+    expect(s.commands).toEqual([
+      { name: "review", description: "Review the current changes", hint: "what to focus on" },
+      { name: "release", description: "Cut a release", hint: null },
+    ]);
+    // A command is ordinary prompt text to the agent.
+    expect(await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "/review src" })).toMatchObject({ ok: true });
+    await until(h.paths, () => events(h.paths).some((e) => e.kind === "user" && e.text === "/review src"));
+  });
+
   test("socket is 0600 inside a 0700 directory", async () => {
     const h = start();
     await until(h.paths, (s) => s.state === "idle");

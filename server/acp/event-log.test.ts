@@ -74,6 +74,16 @@ describe("state file", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
+  test("the advertised slash commands round-trip, and junk in them is dropped on read", () => {
+    const path = join(temp(), "state.json");
+    writeState(path, { state: "idle", acpSessionId: "s1", loadSession: false, agent: null, pendingPermissions: 0, error: null, commands: [{ name: "review", description: "Review", hint: "focus" }] });
+    expect(readState(path)?.commands).toEqual([{ name: "review", description: "Review", hint: "focus" }]);
+    writeFileSync(path, JSON.stringify({ state: "idle", commands: [{ name: "ok", description: "fine" }, { name: "not ok" }, 42] }));
+    expect(readState(path)?.commands).toEqual([{ name: "ok", description: "fine", hint: null }]);
+    writeFileSync(path, JSON.stringify({ state: "idle" }));
+    expect(readState(path)?.commands).toEqual([]);
+  });
+
   test("an unknown state or junk reads as null", () => {
     const path = join(temp(), "state.json");
     writeFileSync(path, '{"state":"dancing"}');

@@ -2,6 +2,36 @@ import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
+// A browser history: entries, an index, and popstate events delivered when the
+// test says the browser got to them (traversals are asynchronous in browsers).
+function fakeHistory(window) {
+  const entries = [{ state: null }];
+  let index = 0;
+  const queue = [];
+  const history = {
+    get state() { return entries[index].state; },
+    get length() { return entries.length; },
+    pushState(state) { entries.splice(index + 1); entries.push({ state }); index++; },
+    replaceState(state) { entries[index] = { state }; },
+    go(n) { queue.push(n); },
+    back() { queue.push(-1); },
+  };
+  const deliver = () => {
+    while (queue.length) {
+      const n = queue.shift();
+      index = Math.max(0, Math.min(entries.length - 1, index + n));
+      window.listeners.popstate?.({ state: entries[index].state });
+    }
+  };
+  return { history, deliver, entries: () => entries.map((e) => e.state?.sheet ?? 0), index: () => index };
+}
+
+function loadNativeShell() {
+  const context = {};
+  runInNewContext(readFileSync(new URL("../public/native.js", import.meta.url), "utf8"), context);
+  return context.NativeShell;
+}
+
 function harness() {
   const source = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
   const timers = [];
@@ -26,7 +56,10 @@ function harness() {
   const scrim = { classList: classes(), hidden: true };
   const app = { inert: false };
   let dismissed = 0;
+  const window = { listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, NativeShell: loadNativeShell() };
+  const browser = fakeHistory(window);
   const context = {
+    window, history: browser.history,
     document, $: id => id === "scrim" ? scrim : id === "app" ? app : sheets.get(id),
     requestAnimationFrame: fn => fn(), setTimeout: fn => timers.push(fn), clearTimeout() {},
     cliUpdatePoll: 1, agentAuth: { refreshAccounts() {}, dismissAccounts() { dismissed++; } },
@@ -34,7 +67,7 @@ function harness() {
   const start = source.indexOf("  let openSheetEl = null;");
   runInNewContext(source.slice(start, source.indexOf('  document.addEventListener("keydown"', start)), context);
   const trigger = control("page"); trigger.focus();
-  return { context, sheets, control, document, trigger, app, dismissed: () => dismissed, flush: () => timers.splice(0).forEach(fn => fn()) };
+  return { context, sheets, control, document, trigger, app, browser, dismissed: () => dismissed, flush: () => timers.splice(0).forEach(fn => fn()) };
 }
 
 test("settings Back restores the originating control and scroll position", () => {
@@ -75,4 +108,56 @@ test("closing a settings child clears history and restores the original page tri
   expect(h.app.inert).toBe(false);
   h.context.openSheet("sheet-new");
   expect(h.sheets.get("sheet-new").querySelector(".sheet-back").hidden).toBe(true);
+});
+
+// pushState waits on a promise, so let microtasks run before reading history.
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const visible = (h) => [...h.sheets.values()].filter((sheet) => !sheet.hidden).map((sheet) => sheet.id);
+
+test("system back closes one sheet level at a time, then the sheet itself", async () => {
+  const h = harness();
+  h.context.openSheet("sheet-menu"); await settle();
+  h.context.openSheet("sheet-projects"); await settle();
+  expect(h.browser.entries()).toEqual([0, 1, 2]);
+  h.browser.history.back(); h.browser.deliver(); h.flush();
+  expect(visible(h)).toEqual(["sheet-menu"]);
+  expect(h.app.inert).toBe(true);
+  h.browser.history.back(); h.browser.deliver(); h.flush();
+  expect(visible(h)).toEqual([]);
+  expect(h.app.inert).toBe(false);
+  expect(h.document.activeElement).toBe(h.trigger);
+});
+
+test("the in-sheet Back button steps through history, so the next system back closes the sheet", async () => {
+  const h = harness();
+  h.context.openSheet("sheet-menu"); await settle();
+  h.context.openSheet("sheet-projects"); await settle();
+  h.context.backSheet(); h.browser.deliver(); h.flush();
+  expect(visible(h)).toEqual(["sheet-menu"]);
+  expect(h.browser.index()).toBe(1);
+  h.browser.history.back(); h.browser.deliver(); h.flush();
+  expect(visible(h)).toEqual([]);
+  expect(h.browser.index()).toBe(0);
+});
+
+test("closing from the sheet unwinds its history entries without reopening anything", async () => {
+  const h = harness();
+  h.context.openSheet("sheet-menu"); await settle();
+  h.context.openSheet("sheet-projects"); await settle();
+  h.context.closeSheet();
+  h.browser.deliver(); h.flush();
+  expect(h.browser.index()).toBe(0);
+  expect(visible(h)).toEqual([]);
+  h.context.openSheet("sheet-new"); await settle();
+  expect(h.browser.entries()).toEqual([0, 1]);
+  expect(h.browser.index()).toBe(1);
+});
+
+test("a sheet that replaces another at the same level reuses its history entry", async () => {
+  const h = harness();
+  h.context.openSheet("sheet-new"); await settle();
+  h.context.openSheet("sheet-auth"); await settle();
+  expect(h.browser.entries()).toEqual([0, 1]);
+  h.browser.history.back(); h.browser.deliver(); h.flush();
+  expect(visible(h)).toEqual([]);
 });
