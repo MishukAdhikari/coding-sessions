@@ -1,4 +1,4 @@
-@import url('/tokens.css?v=4');
+@import url('/tokens.css?v=5');
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -221,7 +221,9 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .term-note span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .term-btn { min-height: 44px; flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 10px 12px; border-radius: var(--radius-control); background: var(--surface-muted); color: var(--text-primary); font-size: 12px; font-weight: 600; text-decoration: none; }
 .term-btn-chat { background: var(--action-tint); color: var(--action-primary); }
-@media (min-width: 600px) { .term-back-label { display: inline; } .term-note span:last-child { display: none; } .term-note { display: none; } }
+.term-note-more { display: none; }
+@media (min-width: 460px) { .term-note-more { display: inline; } }
+@media (min-width: 600px) { .term-back-label { display: inline; } .term-note { display: none; } }
 .term-btn[aria-pressed="false"] { color: var(--text-secondary); }
 .term-frame { flex: 1; min-height: 0; width: 100%; border: 0; display: block; background: #10171c; }
 .term-keys { display: flex; gap: 5px; flex: none; padding: 8px 8px calc(env(safe-area-inset-bottom) + 8px); background: var(--surface-page); overflow-x: auto; }
@@ -468,3 +470,13 @@ html.repaint body { opacity: .999; }
 .install-dismiss:hover { background: var(--surface-muted); }
 @media (max-width: 420px) { .install-hint { margin-inline: 20px; } }
 @media (min-width: 760px) { .install-hint { display: none; } }
+
+/* Moving between the list, a chat and a terminal slides like a pushed screen.
+   Back skips it (native.js): the system back gesture already animated the move. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root) { animation: 240ms var(--ease-out) both screen-leave; }
+  ::view-transition-new(root) { animation: 300ms var(--ease-out) both screen-enter; }
+}
+@keyframes screen-enter { from { transform: translateX(32%); opacity: 0; } }
+@keyframes screen-leave { to { transform: translateX(-12%); opacity: .5; } }

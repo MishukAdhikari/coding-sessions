@@ -282,6 +282,11 @@
         history.replaceState(null, "", location.pathname);
       }
     }
+    // The home-screen shortcut "Start a session" (manifest.webmanifest).
+    if (params.get("action") === "new") {
+      history.replaceState(null, "", location.pathname);
+      capabilitiesLoaded.then(() => $("btn-new").click());
+    }
     if (cliLoginCode) openCliLogin();
     // Back from chat or the terminal on a page iOS had discarded: return to where
     // the list was (saved in its history entry before leaving).

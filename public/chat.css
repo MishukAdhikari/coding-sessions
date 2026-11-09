@@ -336,3 +336,13 @@ html.repaint body { opacity: .999; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* Moving between the list, a chat and a terminal slides like a pushed screen.
+   Back skips it (native.js): the system back gesture already animated the move. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root) { animation: 240ms var(--ease-out) both screen-leave; }
+  ::view-transition-new(root) { animation: 300ms var(--ease-out) both screen-enter; }
+}
+@keyframes screen-enter { from { transform: translateX(32%); opacity: 0; } }
+@keyframes screen-leave { to { transform: translateX(-12%); opacity: .5; } }
