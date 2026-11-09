@@ -20,6 +20,7 @@ never sleeps. Drive them from your phone, your terminal, or another agent.
 - **Or start it as a chat.** Pick **Chat (ACP)** when you start a session and Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode or Kimi Code run over the [Agent Client Protocol](https://agentclientprotocol.com): streamed replies, tool calls with diffs, the agent's plan, and permission requests you answer with one tap. It survives restarts like any session. See [agents](docs/agents.md#chat-acp-mode).
 - **Let agents team up.** Ask a Claude session to get a second opinion from a Codex session. Sessions find and message each other over a built-in MCP, with no setup.
 - **Connect a tool once.** Sign in to an MCP server one time and every agent shares it.
+- **Keys without the chat.** When an agent needs an API key or an MCP sign-in, it sends you a one-time link: paste the key (or sign in) in the app and every session can use it, running ones included. Agents never ask for keys in chat. See [secret requests](docs/security.md#secret-and-connector-requests).
 - **Bring more agents.** One-click presets add Gemini CLI, Kimi Code, Qwen Code and opencode, with the same built-in MCP. They're third-party tools; see [agents](docs/agents.md).
 - **Steer it from other agents.** Claude Code, Codex or the Claude app can launch and drive sessions over MCP.
 - **Looks after itself.** Docker or Ubuntu install, passkey sign-in, and daily updates that roll back if a release won't start.
@@ -255,7 +256,8 @@ Use [.env.example](.env.example) for non-secret configuration. Keep secrets out 
 | Native provider and GitHub logins | Provider-managed files in the service account's home |
 | Browser session, CLI bearer, and inbound OAuth code/access/refresh tokens (apps connecting to Coding Sessions) | Hashes in SQLite |
 | External MCP connector credentials (bearer tokens; outbound OAuth access/refresh tokens and client secrets) | AES-256-GCM ciphertext in SQLite; refused without the encryption key |
-| Secrets for sessions (Settings › Secrets) and secret-manager credentials (Bitwarden, Infisical, Vault/OpenBao) | AES-256-GCM ciphertext in SQLite; refused without the encryption key; delivered to every managed session as environment variables |
+| Secrets for sessions (Settings › Secrets) and secret-manager credentials (Bitwarden, Infisical, Vault/OpenBao) | AES-256-GCM ciphertext in SQLite; refused without the encryption key; delivered to every managed session as environment variables and in its `$CS_SECRETS_FILE` (a `0600` file in a runtime directory, outside the data directory) |
+| Secret request links | Only a SHA-256 of each one-time token; cleared once the request is answered or expires |
 
 ### Server settings in the app
 

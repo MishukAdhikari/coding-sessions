@@ -12,6 +12,8 @@ export interface ConnectorsRouteDependencies {
   oauth?: ConnectorOAuth;
   /** The configured app origin, which completion requires as the exact Origin header. */
   origin?: string;
+  /** After an OAuth sign-in completes: lets a pending connector request finish (secret-requests.ts). */
+  onOAuthConnected?: (connectorId: string) => Promise<void>;
 }
 const privateJson = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status, headers: { "content-type": "application/json", ...PRIVATE_NO_STORE_HEADERS },
@@ -62,7 +64,10 @@ export async function handleConnectorsRoute(request: Request, deps: ConnectorsRo
     if (path === "/api/connectors/oauth/complete" && method === "POST") {
       if (!deps.oauth || !deps.origin || request.headers.get("origin") !== deps.origin) return privateJson({ error: "Same-origin request required." }, 403);
       const { state, code, iss, error } = await body();
-      return await connector(deps.oauth.complete({ state, code, iss, error }, session));
+      const completed = await deps.oauth.complete({ state, code, iss, error }, session);
+      // A request that asked for this connector finishes now (check, then grant); never fatal here.
+      if (deps.onOAuthConnected) { try { await deps.onOAuthConnected(completed.id); } catch {} }
+      return await connector(deps.connectors.view(completed.id));
     }
     const match = /^\/api\/connectors\/([0-9a-f-]{36})(?:\/([a-z-]+(?:\/[a-z]+)?))?$/.exec(path);
     if (!match) return privateJson({ error: "Not found" }, 404);

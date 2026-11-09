@@ -15,7 +15,9 @@
     return `${c.address ? new URL(c.address).host : ""} · ${c.mount}/${c.path}`;
   }
 
-  window.createSecretsUI = ({ $, api, openSheet, showToast, agoStr, escapeHtml }) => {
+  // renderRequests (optional) draws the pending requests from sessions at the top
+  // (secret-request.js's renderSettingsList, whose Open opens a request by id).
+  window.createSecretsUI = ({ $, api, openSheet, showToast, agoStr, escapeHtml, renderRequests = null }) => {
     let busy = false;
     let removeArmed = null; // a remove needs a second tap; a secret cannot be recovered
 
@@ -115,6 +117,14 @@
       } catch (e) { showToast(e.message); }
     }
 
+    // Hidden when there are none, or when they can't be read: the stored secrets still work.
+    async function loadRequests() {
+      if (!renderRequests) return;
+      let requests = [];
+      try { requests = (await api("/api/secret-requests")).requests || []; } catch {}
+      renderRequests($("secret-requests"), requests);
+    }
+
     $("select-secret-source").addEventListener("change", showKind);
 
     $("form-secret").addEventListener("submit", async (ev) => {
@@ -160,8 +170,10 @@
         $("form-secret").reset();
         showKind();
         load();
+        loadRequests();
         openSheet("sheet-secrets");
       },
+      reloadRequests: loadRequests,
     };
   };
 })();

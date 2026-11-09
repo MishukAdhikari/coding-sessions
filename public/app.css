@@ -466,3 +466,48 @@ img, svg { -webkit-user-drag: none; }
 @media (max-width: 420px) { .install-hint { margin-inline: 20px; } }
 @media (min-width: 760px) { .install-hint { display: none; } }
 
+
+/* ---------- a session's request for a secret or a connector (secret-request.js) ---------- */
+
+.sr-who { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: -4px 0 20px; color: var(--text-secondary); font-size: 14px; line-height: 1.5; }
+.sr-session { min-width: 0; color: var(--text-primary); font-weight: 600; overflow-wrap: anywhere; }
+.sr-who .chip { margin-top: 0; }
+.sr-name { color: var(--text-primary); font: 600 22px/1.3 var(--font-data); letter-spacing: -.01em; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+.sr-host { margin-top: 6px; color: var(--text-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.sr-reason { margin: 20px 0 0; padding: 14px 16px 16px; border-radius: var(--radius-control); background: var(--surface-page); }
+.sr-reason-label { margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.sr-reason-text { margin: 0; max-height: 40dvh; overflow-y: auto; color: var(--text-primary); font-size: 15px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sr-note { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; color: var(--text-secondary); font-size: 13px; line-height: 1.55; text-wrap: pretty; }
+.sr-note-icon { flex: none; margin-top: 1px; color: var(--status-working); }
+.sr-existing { margin-top: 16px; padding: 12px 14px; border-radius: var(--radius-control); background: var(--status-working-tint); color: var(--text-primary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; text-wrap: pretty; }
+.sr-conflict { background: var(--status-danger-tint); color: var(--status-danger); }
+.sr-form { display: flex; flex-direction: column; margin-top: 24px; }
+.sr-form .hint { margin: 0 0 8px; }
+.sr-field { font-family: var(--font-data); letter-spacing: .04em; }
+.sr-field::placeholder { font-family: var(--font-body); letter-spacing: 0; }
+.sr-error { margin-top: 8px; color: var(--status-danger); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.sr-stepup { margin-top: 16px; padding: 14px 16px 16px; border-radius: var(--radius-control); background: var(--surface-page); }
+.sr-stepup .server-setting-confirm { margin-top: 0; }
+.sr-stepup-label { color: var(--text-primary); font-size: 14px; line-height: 1.5; }
+.sr-paste { display: block; margin: 4px auto 0; }
+.sr-expiry { text-align: center; font-variant-numeric: tabular-nums; }
+.sheet-title.sr-outcome-title { font-size: 24px; line-height: 1.25; text-wrap: pretty; }
+.sr-done-name { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; color: var(--text-secondary); font: 500 15px/1.5 var(--font-data); overflow-wrap: anywhere; }
+.sr-done-name > span { min-width: 0; }
+/* The one moment here: the check draws itself once the value is safely stored. */
+.sr-done-icon { flex: none; width: 32px; height: 32px; padding: 6px; border-radius: 50%; background: color-mix(in srgb, var(--status-positive) 16%, transparent); color: var(--status-positive); stroke-width: 2.4; stroke-dasharray: 24; stroke-dashoffset: 0; animation: sr-draw 420ms var(--ease-out) 80ms both; }
+@keyframes sr-draw { from { stroke-dashoffset: 24; } }
+
+/* Settings › Secrets: requests waiting on the member, above what is stored. */
+.sr-requests { margin-bottom: 8px; }
+.sr-requests .label { margin-top: 0; }
+.sr-row-copy > span { display: block; }
+.sr-row-name { color: var(--text-primary); font: 600 14px/1.5 var(--font-data); overflow-wrap: anywhere; }
+
+/* Session card: the request line opens the request, like a PR chip opens the PR. */
+.card-request { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 8px; padding: 3px 10px 3px 8px; border-radius: 6px; background: var(--status-working-tint); color: var(--status-working); font-size: 13px; font-weight: 600; line-height: 1.5; cursor: pointer; transition: background var(--duration-fast), color var(--duration-fast); }
+.card-request-icon { flex: none; }
+.card-request:hover, .card-request:focus-visible { color: var(--text-primary); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.card-request:focus-visible { outline: 2px solid var(--action-primary); outline-offset: 2px; }
+@media (pointer: coarse) { .card-request { min-height: 44px; padding-inline: 12px 14px; } }
+@media (min-width: 760px) { .card-request { grid-column: 1 / 3; justify-self: start; margin-top: 12px; } }

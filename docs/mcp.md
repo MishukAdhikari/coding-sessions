@@ -27,6 +27,17 @@ Scripts and agents on the server itself can call the same tools without a token 
 | `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, sends it once the agent is ready. If the agent is still starting when the call returns, `prompt_queued` is true and the server sends the prompt as soon as the agent is up. `mode`: `terminal` (default) or `acp` for [Chat (ACP) mode](agents.md#chat-acp-mode), project launches only. |
 | `resume_session` | Reopen an archived conversation. |
 | `end_session` | End a Session (archives it); `delete_workspace` also removes its folder. |
+| `list_secrets` | Names of stored secrets, their source and when they changed. Never values. |
+| `secret_status` | One secret: set or not, source, the latest request for it; with `session_id`, whether that session's environment has the current value and its secrets file. |
+| `request_secret` | A one-time link (15 minutes) where the member pastes a secret into Coding Sessions. `session_id` (optional) says which session it is for. |
+| `request_connector` | A one-time link where the member connects a remote MCP server with a token or an OAuth sign-in in their own browser. |
+| `connector_status` | A connector's state, auth mode and granted tools, and the latest request for it. Never credentials. |
+| `restart_session` | End a Session and resume the same conversation so it starts with the current secrets. Refused, with nothing ended, when it could not come back. |
+
+**Secrets never go through MCP.** No tool takes or returns a secret value. To get one,
+call `request_secret` and give the member the link; they paste the value in the app
+(signed in), and it is stored as a Secret. Requests made here are labelled on the page
+as coming through the operator connection. See [secret requests](security.md#secret-and-connector-requests).
 
 States: `starting`, `working`, `asking` (blocked on a question), `waiting`
 (finished its turn), `running` (alive, no turn state — registered Commands other
@@ -164,6 +175,26 @@ This connector exchanges messages between participating sessions on this instanc
 | `send_message` | Queue a message to a peer, or reply to a received message. |
 | `read_messages` | Read this session's inbox or sent history. |
 | `wait_for_messages` | Wait up to 25 seconds for incoming mail. |
+| `list_secrets` | Names of the secrets stored in Coding Sessions, and whether this session's environment already has each current value. Never values. |
+| `secret_status` | One secret: set or not, source, `in_launch_environment` (`current`, `outdated`, `missing`, `unknown`), this session's `$CS_SECRETS_FILE`, and the state of its latest request. |
+| `request_secret` | Ask the member for a secret: returns a one-time link to give them. |
+| `request_connector` | Ask the member to connect a remote MCP server (token or OAuth in their browser). |
+| `connector_status` | Whether a connector exists, works, and is usable by this session now. |
+
+### Secrets in a session
+
+Agents never ask for keys in chat. Before asking, an agent calls `list_secrets`; a
+secret saved after the session started is already in `$CS_SECRETS_FILE`, which the app
+rewrites whenever secrets change, so no restart is needed to use it:
+`( . "$CS_SECRETS_FILE" && some-command )`. When a key is missing the agent calls
+`request_secret {name, reason}` and posts the link; you open it, see which session asks
+and why, paste the value and save. The agent polls `secret_status` and continues.
+
+When an MCP server's own sign-in fails because it redirects to `localhost` on the
+server, the agent calls `request_connector {name, url, reason, auth: "oauth"}`: you sign
+in from your own browser through the app's [connector OAuth](connectors.md#oauth-sign-in),
+whose callback is the app's HTTPS address. Requests made by one session are invisible
+to other sessions. Security details: [secret requests](security.md#secret-and-connector-requests).
 
 Ask an agent to check its inbox when beginning collaborative work. For example: “Find the Command Code session, ask it to review this approach, and wait for its reply.” Ask the other session to check or wait on its inbox too. A busy agent can collect pending messages on its next inbox call. An idle agent that is not polling is **not automatically woken up**; the communicator never types into its terminal.
 

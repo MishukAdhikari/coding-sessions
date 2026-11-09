@@ -17,6 +17,7 @@ import { lastTurnState, type TurnState } from "./turn-state";
 import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type CommandProvider, type SessionProvider } from "./session-provider";
 import { commandEnv, findCommand, resolveBin, type CustomCommand } from "./commands";
 import { sessionSecretEnv } from "./secret-store";
+import { launchSecrets, removeLaunchSecrets } from "./launch-secrets";
 import { findPreset, presetLaunch, presetReadsTurnState } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
 import { codexActivity, isCodexSessionId } from "./codex-state";
@@ -635,15 +636,19 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
   // the Codex path's `exec env KEY=value` shape is not reused here — those markers
   // are non-secret, a token is not.
   // Stored secrets first, so the Command's own token wins on a name clash.
-  const { code, err } = await mux.spawn(options.screen, inner, { env: { ...await sessionSecretEnv(), ...commandEnv(slug) } });
-  if (code !== 0) return { ok: false, error: err || "session failed to start" };
+  const launchId = randomUUID();
+  const secrets = await sessionSecretEnv();
+  const { code, err } = await mux.spawn(options.screen, inner, { env: { ...secrets, ...launchSecrets.prepare(launchId, secrets), ...commandEnv(slug) } });
+  if (code !== 0) { removeLaunchSecrets(launchSecrets.dir, launchId); return { ok: false, error: err || "session failed to start" }; }
 
   db.query(
     "INSERT INTO launches (screen, name, project_path, created_at, remote_control, provider, launch_id, phase, error_message, resume_archive_id) VALUES (?, ?, ?, ?, 0, ?, ?, 'ready', NULL, NULL) " +
     "ON CONFLICT(screen) DO UPDATE SET name = excluded.name, project_path = excluded.project_path, " +
     "created_at = excluded.created_at, remote_control = 0, provider = excluded.provider, " +
     "launch_id = excluded.launch_id, phase = 'ready', error_message = NULL, resume_archive_id = NULL, mode = 'terminal'",
-  ).run(options.screen, options.name, options.projectPath, Date.now(), options.provider, randomUUID());
+  ).run(options.screen, options.name, options.projectPath, Date.now(), options.provider, launchId);
+  // A refresh that ran while spawn was in flight saw no row for this launch and removed its file.
+  launchSecrets.prepare(launchId, secrets);
   return { ok: true };
 }
 
@@ -674,6 +679,8 @@ interface CommunicatingSessionRuntime {
   spawn: typeof mux.spawn;
   /** Stored secrets for the session's environment; absent in tests that predate them. */
   secretEnv?: () => Promise<Record<string, string>>;
+  /** Writes the launch's $CS_SECRETS_FILE and returns the env naming it; absent in older tests. */
+  secretsFile?: (launchId: string, secrets: Record<string, string>) => Record<string, string>;
   hasHolder: (screen: string) => Promise<boolean>;
   uuid: () => string;
   now: () => number;
@@ -681,7 +688,8 @@ interface CommunicatingSessionRuntime {
 const communicatingRuntime: CommunicatingSessionRuntime = {
   database: db, communicator, connectors, installSkill: installCollaborationSkill,
   configure: (provider, cwd, bin, withConnectors) => providerCommunicatorArgs(provider, cwd, { commandCodeBin: bin, connectors: withConnectors }),
-  spawn: mux.spawn, secretEnv: sessionSecretEnv, hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
+  spawn: mux.spawn, secretEnv: sessionSecretEnv, secretsFile: (id, secrets) => launchSecrets.prepare(id, secrets),
+  hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
 };
 
 /** Reserve identity before the child can initialize MCP; restore previous history if spawn fails. */
@@ -718,7 +726,8 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
     runtime.installSkill?.();
     // Precedence: stored secrets < the provider's own credential < session plumbing.
     const secrets = await runtime.secretEnv?.() ?? {};
-    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...secrets, ...options.env, ...mcpEnv, ...communicatorEnvironment(token, config.port, connectorToken) } });
+    const secretsFile = runtime.secretsFile?.(launchId, secrets) ?? {};
+    const result = await runtime.spawn(options.screen, options.command(args), { env: { ...secrets, ...options.env, ...mcpEnv, ...communicatorEnvironment(token, config.port, connectorToken), ...secretsFile } });
     if (result.code !== 0) throw new Error(safeLaunchError(result.err, "Session failed to start."));
     database.query("UPDATE launches SET phase='ready' WHERE launch_id=? AND phase='preparing'").run(launchId);
     if (options.resumeArchiveId != null) database.query("DELETE FROM archive WHERE id=?").run(options.resumeArchiveId);
@@ -1532,11 +1541,13 @@ export interface ManagedCodexRuntime {
   installSkill?: () => void;
   /** Stored secrets for the session's environment; absent in tests that predate them. */
   secretEnv?: () => Promise<Record<string, string>>;
+  secretsFile?: (launchId: string, secrets: Record<string, string>) => Record<string, string>;
 }
 
 const defaultManagedCodexRuntime: ManagedCodexRuntime = {
   database: db,
   secretEnv: sessionSecretEnv,
+  secretsFile: (id, secrets) => launchSecrets.prepare(id, secrets),
   connectors,
   installSkill: installCollaborationSkill,
   dbPath: DB_PATH,
@@ -1601,7 +1612,7 @@ export async function startManagedCodex(
     const connectorToken = withConnectors ? runtime.connectors?.prepare(launchId) ?? null : null;
     runtime.installSkill?.();
     const secrets = await runtime.secretEnv?.() ?? {};
-    const env = { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken) };
+    const env = { ...secrets, ...communicatorEnvironment(token, config.port, connectorToken), ...runtime.secretsFile?.(launchId, secrets) };
     const inner = `${options.setupPrefix ?? ""}${command}`;
     const backend = runtime.backend?.() ?? mux.newSessionBackend();
     result = backend === "herdr"
@@ -1933,7 +1944,34 @@ async function removeWorkspace(path: string | null, endingScreen: string | null 
   return { ok: true };
 }
 
-export async function killSession(id: string, force = false, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Why ending and resuming this session would lose it, or null when it can come back.
+ * Checked before "Restart with new secrets" ends anything.
+ */
+export function restartBlocker(id: string): string | null {
+  if (!id.startsWith("m:")) return "Only sessions this app started can restart.";
+  const launch = db.query(`SELECT ${launchColumns}, mode FROM launches WHERE screen = ?`).get(id.slice(2)) as (LaunchRow & { mode: string | null }) | null;
+  if (!launch) return "That session is not running.";
+  const provider = rowProvider(launch.provider);
+  if (launch.mode === "acp") return existsSync(launch.project_path) ? null : "Its folder is gone, so it could not come back.";
+  if (isCommandProvider(provider)) return `${providerDisplayName(provider)} has no conversation to resume, so a restart would lose it. End it and start a new session instead.`;
+  if (!existsSync(launch.project_path)) return "Its folder is gone, so it could not come back.";
+  if (!canArchiveManagedLaunch(provider, launch.phase)) return "It is still starting. Try again once it is ready.";
+  // The same checks resumeArchived applies to the archive row this end will write.
+  if (provider === "codex") {
+    const state = launch.launch_id ? db.query("SELECT session_id FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id) as { session_id: string | null } | null : null;
+    return canResumeCodexArchive(launch.project_path, launch.name, state?.session_id ?? launch.resume_id) ? null : "This Codex session has no conversation id yet, so it could not be resumed.";
+  }
+  if (provider === "command-code") {
+    return canResumeCommandCodeArchive(launch.project_path, launch.name, launch.resume_id) ? null : "This Command Code session has no saved conversation yet, so it could not be resumed.";
+  }
+  if (launch.project_path.includes("'")) return "That project path can't be resumed safely.";
+  const rid = launch.resume_id && RESUME_ID_RE.test(launch.resume_id) ? launch.resume_id : null;
+  return (rid && existsSync(transcriptPathFor(launch.project_path, rid))) || projectHasAnyTranscript(launch.project_path)
+    ? null : "This Claude session has no saved conversation yet, so it could not be resumed.";
+}
+
+export async function killSession(id: string, force = false, deleteWorkspace = false, deleteChat = false): Promise<{ ok: boolean; error?: string; archiveId?: number | null }> {
   if (id.startsWith("m:")) {
     const screenName = id.slice(2);
     if (!screenName.startsWith(SCREEN_PREFIX) || !/^[a-zA-Z0-9_-]+$/.test(screenName.slice(SCREEN_PREFIX.length))) {
@@ -1955,14 +1993,19 @@ export async function killSession(id: string, force = false, deleteWorkspace = f
     if (pid && !force) await gracefulKill(pid);
     await mux.quit(screenName);
     const chatUrl = (pid ? urlCache.get(pid) : undefined) ?? launch?.claude_url ?? null;
-    if (launch && canArchiveManagedLaunch(provider, launch.phase)) archiveRow(launch, "ended", chatUrl);
+    let archiveId: number | null = null;
+    if (launch && canArchiveManagedLaunch(provider, launch.phase)) {
+      archiveRow(launch, "ended", chatUrl);
+      // Synchronous, straight after the insert: nothing else can write in between.
+      archiveId = (db.query("SELECT id FROM archive WHERE name = ? ORDER BY id DESC LIMIT 1").get(launch.name) as { id: number } | null)?.id ?? null;
+    }
     else if (launch) db.query("DELETE FROM launches WHERE screen = ?").run(screenName);
     if (deleteChat && provider === "claude") queueChatDeletion(chatUrl);
     if (deleteWorkspace && launch) {
       const removed = await removeWorkspace(launch.project_path, screenName);
       if (!removed.ok) return { ok: false, error: `The session ended, but its folder was kept: ${removed.error}` };
     }
-    return { ok: true };
+    return { ok: true, archiveId };
   }
   if (id.startsWith("e:")) {
     const pid = Number(id.slice(2));

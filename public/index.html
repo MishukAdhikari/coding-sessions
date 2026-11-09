@@ -33,7 +33,7 @@
 <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1320x2868-dark.png">
 <script src="/theme.js?v=2"></script>
 <script src="/native.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=49">
+<link rel="stylesheet" href="/app.css?v=50">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -255,6 +255,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <button id="btn-copy-cmd" class="btn btn-ghost btn-big" hidden>Copy terminal command</button>
   <button id="btn-copy-managed" class="btn btn-ghost btn-big" hidden>Copy background command</button>
   <p id="copy-cmd-hint" class="hint" hidden></p>
+  <button id="btn-restart-session" class="btn btn-ghost btn-big" hidden>Restart with new secrets</button>
   <button id="btn-confirm" class="btn btn-danger btn-big"></button>
   <button class="btn btn-ghost btn-big" data-close>Keep it</button>
 </div>
@@ -411,6 +412,12 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <p class="hint">Code <code id="cli-login-code"></code>. Allow only if you just ran <code>cs</code> yourself and your terminal shows the same code.</p>
   <button id="btn-cli-login-allow" class="btn btn-primary btn-big">Allow</button>
   <button id="btn-cli-login-deny" class="btn btn-ghost btn-big">Deny</button>
+</div>
+
+<div id="sheet-secret-request" class="sheet" role="dialog" aria-modal="true" aria-labelledby="secret-request-heading" tabindex="-1" hidden>
+  <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  <h2 class="sheet-title" id="secret-request-heading">A session is asking for a secret</h2>
+  <div id="secret-request-content" class="sr-content"></div>
 </div>
 
 <div id="sheet-server-settings" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-server-settings-heading" tabindex="-1" hidden>
@@ -600,6 +607,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-secrets-heading">Secrets</h2>
   <p class="sheet-body">API tokens and keys every new session receives as environment variables. Values are encrypted on the server and never shown again. Running sessions keep the values they started with.</p>
+  <div id="secret-requests" class="sr-requests" hidden></div>
   <h3 class="label">Stored here</h3>
   <div id="secret-list"></div>
   <form id="form-secret" class="proj-form">
@@ -843,8 +851,9 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/session-status.js?v=3"></script>
 <script src="/connection-status.js?v=5"></script>
 <script src="/connectors.js?v=6"></script>
-<script src="/secrets.js?v=1"></script>
+<script src="/secrets.js?v=2"></script>
+<script src="/secret-request.js?v=1"></script>
 <script src="/launch-mode.js?v=1"></script>
-<script src="/app.js?v=62"></script>
+<script src="/app.js?v=63"></script>
 </body>
 </html>

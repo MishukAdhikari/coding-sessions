@@ -185,6 +185,31 @@ export function applyDatabaseSchema(database: Database): void {
       updated_at INTEGER NOT NULL
     );
 
+    -- An agent asking the member for a secret or a connector (server/secret-requests.ts).
+    -- Only a SHA-256 of the one-time link token is kept, and it is cleared the moment the
+    -- request leaves pending. Values are never stored here.
+    CREATE TABLE IF NOT EXISTS secret_requests (
+      id           TEXT PRIMARY KEY,
+      kind         TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      reason       TEXT NOT NULL,
+      url          TEXT,
+      auth         TEXT,
+      screen       TEXT,
+      launch_id    TEXT,
+      session_name TEXT,
+      agent        TEXT,
+      requested_by TEXT NOT NULL,
+      token_hash   TEXT UNIQUE,
+      created_at   INTEGER NOT NULL,
+      expires_at   INTEGER NOT NULL,
+      state        TEXT NOT NULL DEFAULT 'pending',
+      resolved_at  INTEGER,
+      connector_id TEXT,
+      detail       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS secret_requests_state ON secret_requests (state, expires_at);
+
     CREATE TABLE IF NOT EXISTS secret_sources (
       id           INTEGER PRIMARY KEY,
       kind         TEXT NOT NULL,

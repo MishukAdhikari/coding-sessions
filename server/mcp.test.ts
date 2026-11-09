@@ -2,6 +2,12 @@ import { expect, test } from "bun:test";
 import { handleMcpPost, sessionState, settleQueuedPrompts, type McpDeps } from "./mcp";
 import { keyBytes, pasteBytes, screenFromId, tailLines } from "./session-io";
 import type { SessionInfo } from "./sessions";
+import { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
+import { applyDatabaseSchema } from "./db-schema";
+import { createSecretStore } from "./secret-store";
+import { createSecretCodec } from "./secrets";
+import { SecretRequests } from "./secret-requests";
 
 function session(over: Partial<SessionInfo> = {}): SessionInfo {
   return {
@@ -293,4 +299,51 @@ test("an ACP session's prompt goes out once its bridge is ready, with no screen 
   const r = await call(deps, "launch_session", { name: "demo", project_id: 1, mode: "acp", prompt: "go" });
   expect(r.structuredContent).toMatchObject({ prompt_sent: true });
   expect(sent).toEqual([["m:cs-demo", "go", true]]);
+});
+
+function secretHarness() {
+  const database = new Database(":memory:");
+  applyDatabaseSchema(database);
+  const store = createSecretStore({ database, codec: createSecretCodec(randomBytes(32)), sources: { fetch, runBws: async () => ({ code: 127, out: "" }) }, now: () => 7 });
+  const requests = new SecretRequests({ database, origin: "https://cs.example", secrets: () => store, secretsFile: id => `/run/cs/${id}.env`, inLaunchEnvironment: async () => "outdated" });
+  const restarts: string[] = [];
+  const { deps } = harness({
+    secrets: { requests, session: async (id) => id === "m:cs-demo" ? { launchId: "launch-demo", screen: "cs-demo", sessionName: "demo", agent: "codex" } : null },
+    restart: async (id) => { restarts.push(id); return id === "m:cs-demo" ? { ok: true, session_id: id, archive_id: 3 } : { ok: false, error: "That session is not running.", ended: false }; },
+  });
+  return { deps, store, database, restarts };
+}
+
+test("operator secret tools create labelled requests for any live session and never return a value", async () => {
+  const h = secretHarness();
+  const tools = (await rpc(h.deps, "tools/list")).json.result.tools.map((t: any) => t.name);
+  for (const name of ["list_secrets", "secret_status", "request_secret", "request_connector", "connector_status", "restart_session"]) expect(tools).toContain(name);
+  const init = (await rpc(h.deps, "initialize")).json.result.instructions as string;
+  expect(init).toContain("never ask for a value in chat".replace("never", "Never"));
+  h.store.set("STORED", "operator-hidden-value");
+  const list = await call(h.deps, "list_secrets");
+  expect(list.structuredContent.secrets).toEqual([{ name: "STORED", source: "Coding Sessions", updated_at: new Date(7).toISOString() }]);
+  const status = await call(h.deps, "secret_status", { name: "STORED", session_id: "m:cs-demo" });
+  expect(status.structuredContent).toMatchObject({ set: true, in_launch_environment: "outdated", secrets_file: "/run/cs/launch-demo.env" });
+  expect(JSON.stringify([list, status])).not.toContain("operator-hidden-value");
+
+  const created = await call(h.deps, "request_secret", { name: "NEW_TOKEN", reason: "For the demo session", session_id: "m:cs-demo" });
+  expect(created.structuredContent.url).toStartWith("https://cs.example/#secret-request=");
+  expect(h.database.query("SELECT requested_by, screen, launch_id, agent FROM secret_requests").get())
+    .toEqual({ requested_by: "operator", screen: "cs-demo", launch_id: "launch-demo", agent: "codex" });
+  expect((await call(h.deps, "request_secret", { name: "X_TOKEN", reason: "needed", session_id: "m:cs-nope" })).isError).toBe(true);
+  expect((await call(h.deps, "request_secret", { name: "PATH", reason: "needed" })).isError).toBe(true);
+  expect((await call(h.deps, "connector_status", { name: "KazTrack" })).structuredContent).toMatchObject({ exists: false, request: null });
+});
+
+test("restart_session restarts through the dependency and reports refusals as errors", async () => {
+  const h = secretHarness();
+  expect((await call(h.deps, "restart_session", { session_id: "m:cs-demo" })).structuredContent).toMatchObject({ ok: true, restarted: true, archive_id: 3 });
+  const refused = await call(h.deps, "restart_session", { session_id: "m:cs-gone" });
+  expect(refused.isError).toBe(true);
+  expect(refused.content[0].text).toBe("That session is not running.");
+  expect(h.restarts).toEqual(["m:cs-demo", "m:cs-gone"]);
+  const { deps } = harness();
+  expect((await call(deps, "request_secret", { name: "A_B", reason: "needed" })).isError).toBe(true);
+  expect((await call(deps, "restart_session", { session_id: "m:cs-demo" })).isError).toBe(true);
 });

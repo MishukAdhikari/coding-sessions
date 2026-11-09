@@ -8,7 +8,8 @@
       ...opts,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    // status and the server's code (e.g. "gone", "exists", "step_up") let a caller tell refusals apart.
+    if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, code: data.code });
     return data;
   };
 
@@ -112,6 +113,21 @@
     return m ? m[1].toUpperCase() : null;
   };
   let cliLoginCode = readCliLoginCode();
+
+  // An agent's request for a secret or a connector opens #secret-request=TOKEN. Like the links
+  // above it leaves the address bar at once; this tab keeps it (sessionStorage) so a sign-in or a
+  // reload doesn't lose it, until the request is answered or found gone (secret-request.js).
+  const SECRET_REQUEST_KEY = "cs.secretRequest";
+  const readSecretRequest = () => {
+    if (!location.hash.startsWith("#secret-request=")) return null;
+    const token = location.hash.slice("#secret-request=".length);
+    history.replaceState(null, "", location.pathname + location.search);
+    if (!token || token.length > 200) return null;
+    try { sessionStorage.setItem(SECRET_REQUEST_KEY, token); } catch {}
+    return token;
+  };
+  let secretRequestToken = readSecretRequest();
+  if (!secretRequestToken) { try { secretRequestToken = sessionStorage.getItem(SECRET_REQUEST_KEY); } catch {} }
 
   // Never a blank page: until the server answers, the offline screen says so and
   // offers a retry, and coming back online or to the app retries on its own.
@@ -308,6 +324,7 @@
       capabilitiesLoaded.then(() => $("btn-new").click());
     }
     if (cliLoginCode) openCliLogin();
+    openSecretRequestLink();
     // Back from chat or the terminal on a page iOS had discarded: return to where
     // the list was (saved in its history entry before leaving).
     refresh(true).then(() => {
@@ -494,7 +511,7 @@
     const running = sessions.filter((s) => s.status === "running").length;
     const summary = sessionSyncLost ? "Connection lost · retrying…" : window.sessionActivitySummary(sessions);
     if ($("summary").textContent !== summary) $("summary").textContent = summary;
-    document.body.dataset.state = sessions.some(sessionIsAsking) ? "needs" : sessions.some(sessionIsBusy) ? "working" : running > 0 ? "idle" : "quiet";
+    document.body.dataset.state = sessions.some((s) => sessionIsAsking(s) || pendingRequests(s).length) ? "needs" : sessions.some(sessionIsBusy) ? "working" : running > 0 ? "idle" : "quiet";
 
     document.querySelectorAll(".tab").forEach((b) => {
       b.classList.toggle("selected", b.dataset.tab === tab);
@@ -517,7 +534,8 @@
       const asking = sessionIsAsking(s);
       const waiting = !telemetryUnknown(s) && s.waiting === true;
       const provider = providerOf(s);
-      card.className = `card ${s.status}${s.phase === "failed" ? " failed" : ""}${busy ? " active" : ""}${s.status === "running" ? " running" : ""}${(waiting && !busy) ? " waiting" : ""}${(asking && !busy) ? " asking" : ""}${telemetryUnknown(s) ? " telemetry-unknown" : ""}`;
+      const requests = pendingRequests(s);
+      card.className = `card ${s.status}${s.phase === "failed" ? " failed" : ""}${busy ? " active" : ""}${s.status === "running" ? " running" : ""}${(waiting && !busy) ? " waiting" : ""}${((asking && !busy) || requests.length) ? " asking" : ""}${requests.length ? " has-request" : ""}${telemetryUnknown(s) ? " telemetry-unknown" : ""}`;
       card.dataset.activity = sessionSyncLost ? "stale" : window.sessionStatus(s).state;
       card.dataset.sessionId = s.id;
       card.innerHTML = `
@@ -529,6 +547,7 @@
           <span class="card-name">${escapeHtml(s.name)}</span>
           <span class="card-sub">${escapeHtml(middlePath(s.projectLabel || s.project || "—"))}</span>
           <span class="card-status">${statusLine(s)}</span>
+          ${requestLineHtml(requests)}
           ${prLinksHtml(s.prs)}
         </span>
         <span class="card-side">
@@ -541,9 +560,14 @@
         // A PR chip opens the PR, not the session's menu (the card is a button, so the chip can't be a real link).
         const pr = event.target.closest?.(".pr-link");
         if (pr) { event.stopPropagation(); openPrLink(pr.dataset.href); return; }
+        // So does the request line: it opens the request, not the menu.
+        const request = event.target.closest?.(".card-request");
+        if (request) { event.stopPropagation(); secretRequestUI.openById(request.dataset.requestId); return; }
         confirmEnd(s);
       });
       card.addEventListener("keydown", (event) => {
+        const request = event.target.closest?.(".card-request");
+        if (request && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); secretRequestUI.openById(request.dataset.requestId); return; }
         const pr = event.target.closest?.(".pr-link");
         if (pr && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); openPrLink(pr.dataset.href); }
       });
@@ -592,6 +616,17 @@
         : "No sessions running. Start one here,<br>then continue in its app or web terminal.";
     }
   }
+
+  // Requests for a secret or a connector this session is waiting on (server/secret-requests.ts).
+  const pendingRequests = (s) => (Array.isArray(s.requests) ? s.requests.filter((r) => r && typeof r.id === "string") : []);
+  const requestLineHtml = (requests) => {
+    if (!requests.length) return "";
+    const what = requests.length > 1 ? `${requests.length} requests` : requests[0].kind === "connector" ? "a connector" : "a secret";
+    const label = requests.length > 1 ? `Answer the first of ${requests.length} requests` : `Answer the request for ${requests[0].name || what}`;
+    return `<span class="card-request" role="button" tabindex="0" data-request-id="${escapeHtml(requests[0].id)}" aria-label="${escapeHtml(String(label))}">`
+      + '<svg class="card-request-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14.5 8.5l2 2"/></svg>'
+      + `Waiting on you: ${what}</span>`;
+  };
 
   // Pull requests the session's agent printed (server/pr-links.ts), newest first.
   const PR_STATES = new Set(["open", "draft", "merged", "closed"]);
@@ -1413,6 +1448,11 @@
     confirmSessionId = s.id;
     syncSessionActions(s);
 
+    // A managed session reads its secrets when it starts: restarting it picks up new ones.
+    const restart = $("btn-restart-session");
+    restart.hidden = !(s.kind === "managed" && s.status === "running" && s.phase !== "failed" && !awaitingTrust);
+    restart.onclick = () => confirmRestart(s);
+
     wireCopyCmd(provider, s.project, s.resumeId, s.name, s.status === "ended", s.remoteControl !== false);
 
     const wsRow = $("ws-row");
@@ -1450,8 +1490,23 @@
     openSheet("sheet-confirm");
   }
 
+  // Restart's confirm step, in the same sheet: everything else in it goes out of the way.
+  function confirmRestart(s) {
+    confirmSessionId = null; // the list poll must not bring the other actions back
+    for (const id of ["btn-restart-session", "btn-resume", "btn-open-claude", "btn-chat", "btn-web-term", "btn-copy-cmd", "btn-copy-managed", "copy-cmd-hint", "ws-row", "chat-row"]) $(id).hidden = true;
+    $("confirm-title").textContent = `Restart “${s.name}”?`;
+    $("confirm-body").textContent = `Ends “${s.name}” and reopens the same conversation with the current secrets. Everything running in it stops and the agent restarts.`;
+    $("btn-confirm").textContent = "Restart";
+    confirmAction = async () => {
+      await api(`/api/sessions/${encodeURIComponent(s.id)}/restart`, { method: "POST", body: "{}" });
+      showToast(`Restarting “${s.name}”…`);
+    };
+    $("btn-confirm").focus();
+  }
+
   function confirmArchived(a) {
     confirmSessionId = null;
+    $("btn-restart-session").hidden = true;
     const provider = providerOf(a);
     const displayName = providerName(provider);
     $("confirm-title").textContent = `“${a.name}”`;
@@ -2226,7 +2281,41 @@
   const connectorsUI = window.createConnectorsUI({ $, api, openSheet, showToast, agoStr, escapeHtml });
   $("btn-connectors").addEventListener("click", () => connectorsUI.open());
 
-  const secretsUI = window.createSecretsUI({ $, api, openSheet, showToast, agoStr, escapeHtml });
+  // A fresh check for one sensitive change (Replace a secret, send a token to a server): the
+  // passkey when one exists, else the admin password, asked for where the change is made.
+  // Resolves to null when the person cancels.
+  async function stepUpGrant({ askPassword }) {
+    const { stepUp } = await api("/api/server-settings");
+    if (stepUp === "passkey") {
+      const { options, challengeId } = await api("/api/server-settings/step-up/options");
+      const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
+      return (await api("/api/server-settings/step-up", { method: "POST", body: JSON.stringify({ challengeId, response }) })).grant;
+    }
+    const password = await askPassword();
+    if (password == null) return null;
+    return (await api("/api/server-settings/step-up", { method: "POST", body: JSON.stringify({ password }) })).grant;
+  }
+
+  const secretRequestUI = window.createSecretRequestUI({
+    $, api, openSheet, closeSheet, showToast, agoStr, getGrant: stepUpGrant,
+    onResolved: () => { refresh(true); secretsUI.reloadRequests(); },
+  });
+  function openSecretRequestLink() {
+    if (!secretRequestToken) return;
+    const token = secretRequestToken;
+    secretRequestToken = null;
+    secretRequestUI.openByToken(token);
+  }
+  window.addEventListener("hashchange", () => {
+    const token = readSecretRequest();
+    if (!token) return;
+    secretRequestToken = token;
+    // The app shows only when signed in; `me` is the boot answer and stays stale after an in-page sign-in.
+    if (!$("app").hidden) openSecretRequestLink();
+  });
+
+  const secretsUI = window.createSecretsUI({ $, api, openSheet, showToast, agoStr, escapeHtml,
+    renderRequests: (container, requests) => secretRequestUI.renderSettingsList(container, requests) });
   $("btn-secrets").addEventListener("click", () => secretsUI.open());
 
   $("btn-cli-access").addEventListener("click", () => {

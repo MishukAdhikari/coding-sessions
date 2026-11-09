@@ -95,3 +95,13 @@ test("a preset's launch environment outranks a stored secret of the same name", 
  expect(seen.OPENCODE_CONFIG_CONTENT).toBe("{}");
  expect(seen.OTHER_TOKEN).toBe("kept");db.close();
 });
+test("every launch gets its secrets file, written with the same stored secrets and named by CS_SECRETS_FILE", async () => {
+ const db=new Database(":memory:");applyDatabaseSchema(db);const comm=new Communicator(db,{isLive:async()=>true});let seen:Record<string,string>={};const files:Array<[string,Record<string,string>]>=[];
+ const result=await startCommunicatingSession({screen:"cs-file",name:"file",projectPath:"/srv/demo",provider:"claude",remoteControl:0,command:()=>"agent"},{database:db,communicator:comm,hasHolder:async()=>false,uuid:()=>"launch-file",now:()=>1,configure:async()=>[],
+  secretEnv:async()=>({API_TOKEN:"stored"}),
+  secretsFile:(id,secrets)=>{files.push([id,secrets]);return {CS_SECRETS_FILE:`/run/cs/${id}.env`};},
+  spawn:async(_s,cmd,{env}={})=>{seen=env!;expect(cmd).not.toContain("stored");return{code:0,out:"",err:""};}});
+ expect(result).toEqual({ok:true});
+ expect(files).toEqual([["launch-file",{API_TOKEN:"stored"}]]);
+ expect(seen.CS_SECRETS_FILE).toBe("/run/cs/launch-file.env");db.close();
+});

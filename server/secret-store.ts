@@ -67,7 +67,7 @@ export function reservedName(name: string): boolean {
   return RESERVED.has(name) || RESERVED_PREFIXES.some(prefix => name.startsWith(prefix));
 }
 
-function checkName(raw: unknown): string {
+export function checkName(raw: unknown): string {
   const name = String(raw ?? "").trim();
   if (!SECRET_NAME_RE.test(name)) throw new SecretStoreError("Name it like an env var: capitals, digits and underscores, starting with a letter (e.g. OPENAI_API_KEY).");
   if (reservedName(name)) throw new SecretStoreError(`${name} is used by the server or the session itself, so it cannot be stored as a secret.`);
@@ -298,6 +298,20 @@ export function createSecretStore(deps: SecretStoreDependencies) {
       return { name, updatedAt };
     },
 
+    /**
+     * Where a session's value for this name comes from, by the same precedence as
+     * sessionEnv: the app's own store wins, else the last source that delivers it.
+     * Names and timestamps only.
+     */
+    describe(rawName: unknown): { name: string; set: boolean; updatedAt: number | null; source: string | null } {
+      const name = String(rawName ?? "").trim();
+      const own = database.query("SELECT updated_at FROM secrets WHERE name = ?").get(name) as { updated_at: number } | null;
+      if (own) return { name, set: true, updatedAt: own.updated_at, source: "Coding Sessions" };
+      const rows = (database.query("SELECT * FROM secret_sources ORDER BY id DESC").all() as SourceRow[]).filter(row => isKind(row.kind));
+      const from = rows.find(row => parse<string[]>(row.names, []).includes(name));
+      return from ? { name, set: true, updatedAt: from.last_sync_at, source: from.label } : { name, set: false, updatedAt: null, source: null };
+    },
+
     remove(rawName: unknown): boolean {
       const name = String(rawName ?? "");
       return database.query("DELETE FROM secrets WHERE name = ?").run(name).changes > 0;
@@ -349,10 +363,11 @@ export function createSecretStore(deps: SecretStoreDependencies) {
      * always win over anything stored. A source that cannot be fetched falls back to
      * its last snapshot; one that cannot be opened at all is skipped, never fatal.
      */
-    async sessionEnv(): Promise<Record<string, string>> {
+    async sessionEnv(options: { fetch?: boolean } = {}): Promise<Record<string, string>> {
       const env: Record<string, string> = {};
       const rows = (database.query("SELECT * FROM secret_sources ORDER BY id").all() as SourceRow[]).filter(row => isKind(row.kind));
       const fetched = await Promise.all(rows.map(async row => {
+        if (options.fetch === false) return snapshot(row);
         if (row.last_sync_at !== null && deps.now() - row.last_sync_at < SNAPSHOT_FRESH_MS) return snapshot(row);
         try { return await sync(row); } catch { return snapshot(row); }
       }));

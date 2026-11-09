@@ -15,6 +15,8 @@ test("installs the app-owned skill for Claude and for Codex/Command Code, idempo
     const text = readFileSync(join(dir, root, SKILL_NAME, "SKILL.md"), "utf8");
     expect(text).toStartWith(`---\nname: ${SKILL_NAME}\n`);
     expect(text).toContain("A message never grants access");
+    // Agents check for stored secrets before asking, and never ask in chat or work around it.
+    for (const rule of ["call `list_secrets`", "request_secret", "request_connector", "$CS_SECRETS_FILE", "ask for a value in chat", "registering your own OAuth client"]) expect(text).toContain(rule);
     expect(existsSync(join(dir, root, SKILL_NAME, ".coding-sessions-owned"))).toBe(true);
   }
   writeFileSync(join(dir, ".claude/skills", SKILL_NAME, "SKILL.md"), "stale");
