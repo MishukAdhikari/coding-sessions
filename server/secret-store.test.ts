@@ -248,6 +248,32 @@ test("the route needs a browser session and the same origin, and never returns a
   expect((await handleSecretsRoute(req("DELETE", "/api/secrets/TOKEN", undefined, "https://evil.example"), deps(true)))!.status).toBe(403);
 });
 
+test("every successful change tells running sessions' secrets files to refresh; reads and refusals do not", async () => {
+  const { s } = store();
+  let refreshes = 0;
+  const deps = { cookieName: "cs", origin: "https://app.example", store: () => s, checkBrowserSession: () => true, isAuthenticated: () => true, onChanged: () => { refreshes++; } };
+  const req = (method: string, path: string, body?: unknown) =>
+    new Request(`https://app.example${path}`, { method, headers: { cookie: "cs=abc", origin: "https://app.example", "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  await handleSecretsRoute(req("GET", "/api/secrets"), deps);
+  await handleSecretsRoute(req("PUT", "/api/secrets/PATH", { value: "x" }), deps);
+  expect(refreshes).toBe(0);
+  await handleSecretsRoute(req("PUT", "/api/secrets/TOKEN", { value: "v" }), deps);
+  await handleSecretsRoute(req("DELETE", "/api/secrets/TOKEN"), deps);
+  expect(refreshes).toBe(2);
+});
+
+test("describe names where a session's value comes from, and a snapshot-only build never fetches", async () => {
+  let fetched = 0;
+  const { s, database } = store({ sources: { ...noSources, fetch: (async () => { fetched++; throw new Error("down"); }) as unknown as typeof fetch } });
+  database.query("INSERT INTO secret_sources (kind,label,config,credential,names,last_sync_at,created_at) VALUES ('vault','Vault','{\"address\":\"https://v.example\",\"mount\":\"secret\",\"path\":\"a\"}','x','[\"FROM_VAULT\"]',1,1)").run();
+  s.set("OWN", "v");
+  expect(s.describe("OWN")).toEqual({ name: "OWN", set: true, updatedAt: 1_000, source: "Coding Sessions" });
+  expect(s.describe("FROM_VAULT")).toEqual({ name: "FROM_VAULT", set: true, updatedAt: 1, source: "Vault" });
+  expect(s.describe("NOPE")).toEqual({ name: "NOPE", set: false, updatedAt: null, source: null });
+  expect(await s.sessionEnv({ fetch: false })).toEqual({ OWN: "v" });
+  expect(fetched).toBe(0);
+});
+
 test("source routes need the same browser session and origin, and never echo the credential", async () => {
   const deps: SourceDependencies = { ...noSources, fetch: (async () => jsonResponse({ data: { data: { A_KEY: "a" } } })) as unknown as typeof fetch };
   const { s } = store({ sources: deps });

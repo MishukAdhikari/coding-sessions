@@ -7,6 +7,8 @@ export interface SecretsRouteDependencies {
   checkBrowserSession: (token: string | null) => boolean;
   isAuthenticated: (request: Request) => boolean;
   store: () => SecretStore;
+  /** Running sessions' secrets files are rewritten after every change. Fire and forget. */
+  onChanged?: () => void;
 }
 
 /**
@@ -43,26 +45,27 @@ export async function handleSecretsRoute(request: Request, deps: SecretsRouteDep
   try {
     const store = deps.store();
     if (path === "/api/secrets" && method === "GET") return json(store.list());
+    const changed = (response: Response) => { deps.onChanged?.(); return response; };
 
     if (isSecrets) {
       const name = decodeURIComponent(path.slice("/api/secrets/".length));
       if (!name || name.includes("/")) return json({ error: "Not found." }, 404);
-      if (method === "PUT") return json({ ok: true, secret: store.set(name, (await body()).value) });
-      if (method === "DELETE") return store.remove(name) ? json({ ok: true }) : json({ error: "That secret is already gone." }, 404);
+      if (method === "PUT") return changed(json({ ok: true, secret: store.set(name, (await body()).value) }));
+      if (method === "DELETE") return store.remove(name) ? changed(json({ ok: true })) : json({ error: "That secret is already gone." }, 404);
       return json({ error: "Method not allowed." }, 405);
     }
 
     if (path === "/api/secret-sources") {
       if (method === "GET") return json({ sources: store.list().sources });
-      if (method === "POST") return json({ ok: true, source: await store.addSource(await body()) });
+      if (method === "POST") return changed(json({ ok: true, source: await store.addSource(await body()) }));
       return json({ error: "Method not allowed." }, 405);
     }
     const rest = path.slice("/api/secret-sources/".length);
     const [rawId, action, extra] = rest.split("/");
     const id = Number(rawId);
     if (!Number.isInteger(id) || id <= 0 || extra !== undefined) return json({ error: "Not found." }, 404);
-    if (action === "sync" && method === "POST") return json({ ok: true, source: await store.syncSource(id) });
-    if (action === undefined && method === "DELETE") return store.removeSource(id) ? json({ ok: true }) : json({ error: "That source is already gone." }, 404);
+    if (action === "sync" && method === "POST") return changed(json({ ok: true, source: await store.syncSource(id) }));
+    if (action === undefined && method === "DELETE") return store.removeSource(id) ? changed(json({ ok: true })) : json({ error: "That source is already gone." }, 404);
     return json({ error: "Method not allowed." }, 405);
   } catch (error) {
     if (error instanceof SecretStoreError) return json({ error: error.message }, error.status);
