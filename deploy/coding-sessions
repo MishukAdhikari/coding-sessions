@@ -163,7 +163,12 @@ as_service() {
   [[ -f $env_file ]] || die "instance $INSTANCE isn't installed; run: sudo coding-sessions setup"
   mapfile -t vars < <(grep -E '^[A-Z_][A-Z0-9_]*=' "$env_file")
   # Its own session and no input: a program the account controls can't reach this terminal.
-  (cd "${AS_CWD:-/}" && setsid -w runuser -u "$(svc)" -- env -i "${vars[@]}" "$@" </dev/null)
+  # AS_INPUT=1 passes this script's standard input instead (a piped secret, never a terminal).
+  if [[ ${AS_INPUT:-} = 1 ]]; then
+    (cd "${AS_CWD:-/}" && setsid -w runuser -u "$(svc)" -- env -i "${vars[@]}" "$@")
+  else
+    (cd "${AS_CWD:-/}" && setsid -w runuser -u "$(svc)" -- env -i "${vars[@]}" "$@" </dev/null)
+  fi
 }
 
 # Install this CLI from the source, stamped with the version it came from.
@@ -479,6 +484,38 @@ load_instance() {
 
 cmd_setup_link() { need_root setup-link; load_instance; print_setup_link; }
 
+# New admin password, stored as a hash; every browser is signed out. Passkeys, CLI tokens and
+# MCP OAuth tokens keep working. The password goes to stdout once and never to argv or a log.
+cmd_reset_password() {
+  need_root reset-password
+  local json=0 stdin=0 out pw
+  while (($#)); do
+    case $1 in
+      --json) json=1 ;;
+      --stdin) stdin=1 ;;
+      *) die "usage: coding-sessions reset-password [--stdin] [--json]" ;;
+    esac; shift
+  done
+  load_instance
+  local cli=(server/reset-password-cli.ts)
+  ((json)) && cli+=(--json)
+  if ((stdin)); then
+    if [[ -t 0 ]]; then
+      printf 'New admin password (16+ characters): ' >&2; IFS= read -rs pw || true; printf '\n' >&2
+    else
+      IFS= read -r pw || true
+    fi
+    out=$(printf '%s\n' "$pw" | AS_INPUT=1 AS_CWD=$(app_dir) as_service "$(app_dir)/bin/bun" "${cli[@]}" --stdin) || die "the admin password was not changed"
+    pw=''
+  else
+    out=$(AS_CWD=$(app_dir) as_service "$(app_dir)/bin/bun" "${cli[@]}") || die "the admin password was not changed"
+  fi
+  logger -t "coding-sessions@$INSTANCE" "admin password reset by ${SUDO_USER:-root}; browser sessions signed out" 2>/dev/null || true
+  if ((json)); then printf '%s\n' "$out"; return; fi
+  printf '\n  %sNew admin password (shown once; store it in your password manager):%s\n\n    %s\n\n' "$B" "$N" "$out"
+  printf '  %sEvery browser was signed out. Passkeys and CLI tokens keep working.%s\n' "$D" "$N"
+}
+
 # The last-activity signal (CS_ACTIVITY_PORT, server/activity-signal.ts), for an idle check
 # on this machine. Fails when the signal is off, so a caller can fall back to its own checks.
 cmd_activity() {
@@ -606,6 +643,7 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
        --skip-dns-check  --dry-run  --yes
        --no-link                         don't print the sign-in link (e.g. when an AI agent runs setup)
   sudo coding-sessions setup-link        one-time sign-in link (lost access, new device)
+  sudo coding-sessions reset-password    new admin password; signs out browsers [--stdin] [--json]
   sudo coding-sessions doctor            check everything, with fixes
   sudo coding-sessions status            what's running, where, which version
   sudo coding-sessions activity [--json] when anything was last in use (CS_ACTIVITY_PORT)
@@ -625,6 +663,7 @@ main() {
   case $cmd in
     setup|install) cmd_setup "$@" ;;
     setup-link|link) cmd_setup_link ;;
+    reset-password) cmd_reset_password "$@" ;;
     status) cmd_status ;;
     activity) cmd_activity "$@" ;;
     doctor) cmd_doctor ;;
