@@ -150,6 +150,19 @@
     return out;
   }
 
+  // Agents write HTML entities (&amp;, &lt;, &#39;) where Markdown means the character. Outside code they are
+  // decoded to text; the result is still only ever a text node, never markup.
+  const ENTITY = /&(amp|lt|gt|quot|apos|nbsp|#\d{1,7}|#x[0-9a-f]{1,6});/gi;
+  const NAMED = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
+  function decodeEntities(text) {
+    return text.indexOf("&") < 0 ? text : text.replace(ENTITY, (whole, name) => {
+      const lower = name.toLowerCase();
+      if (NAMED[lower]) return NAMED[lower];
+      const code = lower[1] === "x" ? parseInt(lower.slice(2), 16) : parseInt(lower.slice(1), 10);
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : whole;
+    });
+  }
+
   function tokenize(text) {
     return parseBlocks(String(text ?? "").replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n"));
   }
@@ -183,7 +196,7 @@
   function parseInline(text, depth = 0) {
     const out = [];
     let buf = "";
-    const flush = () => { if (buf) { out.push({ type: "text", text: buf }); buf = ""; } };
+    const flush = () => { if (buf) { out.push({ type: "text", text: decodeEntities(buf) }); buf = ""; } };
     const nested = (s) => (depth < MAX_DEPTH ? parseInline(s, depth + 1) : [{ type: "text", text: s }]);
     let i = 0;
     while (i < text.length) {

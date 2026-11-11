@@ -67,7 +67,7 @@ test("Claude: user strings and assistant text show; meta, sidechain, results and
   const lines = [
     claudeLine({ type: "user", message: { role: "user", content: "give an announcement" } }),
     claudeLine({ type: "user", isMeta: true, message: { role: "user", content: "Caveat: local command" } }),
-    claudeLine({ type: "user", message: { role: "user", content: "<command-name>/clear</command-name>" } }),
+    claudeLine({ type: "user", message: { role: "user", content: "<system-reminder>injected context</system-reminder>" } }),
     claudeLine({ type: "assistant", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "subagent chatter" }] } }),
     claudeLine({ type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [
       { type: "thinking", thinking: "hmm" },
@@ -280,4 +280,13 @@ test("Claude: a resume id that tries to leave the project folder is refused", ()
   writeFileSync(join(roots.claudeProjects, "secret.jsonl"), "{}\n");
   database.query("INSERT INTO launches (screen, name, project_path, created_at, provider, resume_id) VALUES ('cs-evil', 'e', '/srv/p', 0, 'claude', '../secret')").run();
   expect(resolveTranscript(database, "m:cs-evil", roots)).toMatchObject({ ok: true, value: { path: null } });
+});
+
+test("a Claude Code slash command shows as typed; other injected context stays hidden", () => {
+  const cmd = JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/review</command-name>\n<command-message>review</command-message>\n<command-args>the retry logic</command-args>" } });
+  expect(parseTranscriptLine("claude", cmd, 0).map(m => m.text)).toEqual(["/review the retry logic"]);
+  const bare = JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "<command-name>clear</command-name>" }] } });
+  expect(parseTranscriptLine("claude", bare, 0).map(m => m.text)).toEqual(["/clear"]);
+  const injected = JSON.stringify({ type: "user", message: { content: "<system-reminder>context</system-reminder>" } });
+  expect(parseTranscriptLine("claude", injected, 0)).toEqual([]);
 });
