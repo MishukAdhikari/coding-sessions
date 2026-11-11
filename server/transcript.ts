@@ -50,6 +50,15 @@ function isInjected(text: string): boolean {
   return t.startsWith("# AGENTS.md instructions") || /^<\/?[A-Za-z][\w-]*(\s[^>]*)?>/.test(t);
 }
 
+/** Claude Code stores a slash command as `<command-name>/review</command-name><command-args>…</command-args>`;
+ *  the chat shows it as it was typed. Null for anything else. */
+function slashCommand(text: string): string | null {
+  const name = /<command-name>\s*\/?([^<\s]+)\s*<\/command-name>/.exec(text);
+  if (!name) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim();
+  return `/${name[1]}${args ? ` ${args}` : ""}`;
+}
+
 function joinParts(parts: string[]): string {
   return parts.map(p => p.trim()).filter(Boolean).join("\n\n");
 }
@@ -104,11 +113,16 @@ function claudeEntries(o: any): Entry[] {
   if ((o?.type !== "user" && o?.type !== "assistant") || o.isMeta || o.isSidechain) return [];
   const content = o.message?.content;
   if (o.type === "user") {
-    if (typeof content === "string") return !isInjected(content) && content.trim() ? [{ role: "user", text: clip(content.trim(), MAX_TEXT) }] : [];
+    if (typeof content === "string") {
+      const command = slashCommand(content);
+      if (command) return [{ role: "user", text: clip(command, MAX_TEXT) }];
+      return !isInjected(content) && content.trim() ? [{ role: "user", text: clip(content.trim(), MAX_TEXT) }] : [];
+    }
     if (!Array.isArray(content)) return [];
     const parts = content.map((c: any) =>
       c?.type === "image" ? "[image]"
-      : c?.type === "text" && typeof c.text === "string" && !isInjected(c.text) ? c.text : ""); // tool_result is not a prompt
+      : c?.type === "text" && typeof c.text === "string" ? (slashCommand(c.text) ?? (!isInjected(c.text) ? c.text : ""))
+      : ""); // tool_result is not a prompt
     const text = joinParts(parts);
     return text ? [{ role: "user", text: clip(text, MAX_TEXT) }] : [];
   }
