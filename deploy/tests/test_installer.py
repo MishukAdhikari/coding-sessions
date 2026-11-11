@@ -69,6 +69,21 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn("[[ ${HERDR:-no} = yes ]] && args+=(--herdr)", cli)
         self.assertIn("--herdr                           opt-in: install pinned herdr", cli)
 
+    def test_reset_password_is_root_only_and_keeps_the_password_off_argv_and_logs(self):
+        cli = (ROOT / "deploy/coding-sessions").read_text()
+        body = cli.split("cmd_reset_password() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("need_root reset-password", body)
+        self.assertIn("reset-password) cmd_reset_password \"$@\" ;;", cli)
+        self.assertIn('printf \'%s\\n\' "$pw" | AS_INPUT=1', body)
+        log = [line for line in body.splitlines() if "logger" in line]
+        self.assertEqual(len(log), 1)
+        self.assertNotIn("$out", log[0])
+        self.assertNotIn("$pw", log[0])
+        result = subprocess.run(["bash", str(ROOT / "deploy/coding-sessions"), "reset-password"], capture_output=True, text=True)
+        if os.geteuid() != 0:
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("run as root", result.stderr)
+
     def test_app_updater_picks_newest_stable_release_tag(self):
         result = subprocess.run(["bash", str(ROOT / "deploy/update-app"), "--newest-release"],
             input="v0.1.9\nv0.10.0\nv0.2.0\nv1.0.0-rc1\nnot-a-tag\nv0.9.12\n", capture_output=True, text=True)

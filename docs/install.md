@@ -102,6 +102,7 @@ sudo coding-sessions agents install gemini kimi
 sudo coding-sessions agents update
 sudo coding-sessions browser install     add Playwright Chromium later
 sudo coding-sessions setup-link          a new one-time sign-in link
+sudo coding-sessions reset-password      a new admin password; signs out every browser
 sudo coding-sessions update [--agents]   update the CLI and the app (and agents)
 sudo coding-sessions logs [-f]
 sudo coding-sessions restart             agent sessions keep running
@@ -116,6 +117,7 @@ Agents can also be installed from the app: **Settings → Agent authentication**
 - **"port 80/443 is used by …":** another web server is running. Stop it, or put Coding Sessions behind it yourself; [deploy/README.md](../deploy/README.md) covers the manual install.
 - **The HTTPS site doesn't come up:** run `sudo coding-sessions doctor`. Then `journalctl -u caddy -n 50` shows why the certificate wasn't issued.
 - **Lost sign-in:** run `sudo coding-sessions setup-link`.
+- **Forgotten admin password:** run `sudo coding-sessions reset-password`. It prints a new random password once (`--json` prints `{"password": "..."}`; `--stdin` reads your own from standard input instead) and signs out every browser. Passkeys and CLI tokens keep working.
 - **"systemd on this host cannot pass credentials":** some container-based VPSes (LXC) can't hand services their secrets the usual way. The service then reads owner-only copies in its own home, as the Docker image does. Setup checks this every run and switches back when systemd can.
 - **Changing the domain:** passkeys are tied to the domain, so a re-run refuses it. Install a second instance with `--instance NAME --port PORT` for the new domain.
 

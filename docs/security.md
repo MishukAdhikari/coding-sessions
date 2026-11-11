@@ -72,7 +72,7 @@ Keep a protected, recoverable copy of the token encryption key separately from t
 
 There is no automatic encryption-key rotation command. Do not overwrite the key and restart as a rotation procedure: old ciphertext requires the old key. A planned rotation needs authenticated re-encryption of existing values or deliberate token re-entry, consistent backups, and validation before retiring the old key. The process caches its key, so a file replacement alone does not update a running process.
 
-The administrator password file is bootstrap input, not a continuously synchronized password setting. Changing it does not replace an existing password hash. Preserve a working passkey and recovery access; perform an explicit reviewed recovery procedure if both are lost. Never publish database exports or bootstrap files to request help.
+The administrator password file is bootstrap input, not a continuously synchronized password setting. Changing it does not replace an existing password hash. To change it, root runs `sudo coding-sessions reset-password`: it stores the hash of a new random password (or one read from standard input, never from the command line), prints the password once to standard output, deletes every browser session, and writes an audit line without the password to the system journal (`coding-sessions@INSTANCE`). Passkeys, CLI tokens and MCP OAuth tokens are left alone; revoke those separately in Settings if the reset follows a suspected compromise. `sudo coding-sessions setup-link` signs one browser in without changing the password. Preserve a working passkey and recovery access. Never publish database exports or bootstrap files to request help.
 
 ## Service hardening and detached sessions
 
