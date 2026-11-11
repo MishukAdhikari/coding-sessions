@@ -457,6 +457,8 @@ test("a reply that could not be sent is taken back and stays in the composer", a
   await settle();
   expect(h.rows()).toHaveLength(0);
   expect(h.$("chat-input").value).toBe("try again later");
+});
+
 test("HTML entities in agent text show as characters, still as text", async () => {
   const h = harness({ responses: [{ status: 200, body: { cursor: 1, state: "waiting", messages: [{ id: "a1", role: "assistant", text: "a &amp; b &lt;div&gt; &#39;x&#39; and `&amp;` in code", at: null }] } }] });
   await settle();
