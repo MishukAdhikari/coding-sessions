@@ -1994,11 +1994,17 @@
   /* Arguments are typed as one line and tokenized server-side, where quoting is
      tested — `-c 'sleep 300'` must stay two arguments, not three. */
 
-  async function loadCommands() {
+  // A list that failed to load: say so, unless it loaded in the background for settings search.
+  function loadFailed(error, quiet) {
+    if (quiet) console.warn("Settings search: a list didn't load:", error?.message || error);
+    else showToast(error.message);
+  }
+
+  async function loadCommands({ quiet = false } = {}) {
     const wrap = $("command-list");
     wrap.innerHTML = "";
     let commands = [];
-    try { commands = (await api("/api/commands")).commands; } catch (e) { showToast(e.message); return; }
+    try { commands = (await api("/api/commands")).commands; } catch (e) { loadFailed(e, quiet); return; }
     if (!commands.length) {
       wrap.innerHTML = '<p class="hint" style="text-align:left;margin:2px 2px 10px">No commands yet — add one below.</p>';
       return;
@@ -2094,11 +2100,11 @@
   }
   $("btn-agent-auth").addEventListener("click", () => loadAgentInstalls());
 
-  async function loadPresets() {
+  async function loadPresets({ quiet = false } = {}) {
     const wrap = $("preset-list");
     wrap.replaceChildren();
     let presets = [];
-    try { presets = (await api("/api/commands/presets")).presets; } catch (e) { showToast(e.message); return; }
+    try { presets = (await api("/api/commands/presets")).presets; } catch (e) { loadFailed(e, quiet); return; }
     for (const preset of presets) {
       const row = document.createElement("div");
       row.className = "proj-row";
@@ -2175,11 +2181,11 @@
 
   /* ---------- CLI access tokens (cs) ---------- */
 
-  async function loadCliTokens() {
+  async function loadCliTokens({ quiet = false } = {}) {
     const wrap = $("cli-token-list");
     wrap.innerHTML = "";
     let tokens = [];
-    try { tokens = (await api("/api/cli-tokens")).tokens; } catch (e) { showToast(e.message); return; }
+    try { tokens = (await api("/api/cli-tokens")).tokens; } catch (e) { loadFailed(e, quiet); return; }
     if (!tokens.length) {
       wrap.innerHTML = '<p class="hint" style="text-align:left;margin:2px 2px 10px">No tokens yet — generate one below.</p>';
       return;
@@ -2253,11 +2259,11 @@
     } catch (e) { showToast(e.message); }
   });
 
-  async function loadMcpConnections() {
+  async function loadMcpConnections({ quiet = false } = {}) {
     const wrap = $("mcp-connection-list");
     wrap.innerHTML = "";
     let connections = [];
-    try { connections = (await api("/api/mcp-connections")).connections; } catch (e) { showToast(e.message); return; }
+    try { connections = (await api("/api/mcp-connections")).connections; } catch (e) { loadFailed(e, quiet); return; }
     if (!connections.length) {
       wrap.innerHTML = '<p class="hint" style="text-align:left;margin:2px 2px 10px">None yet.</p>';
       return;
@@ -2606,6 +2612,7 @@
 
   // Lists that a settings sheet renders only when opened: rendered behind the closed sheet so
   // their rows (agents, commands, tokens, connectors, secret names, projects) can be searched.
+  // Every loader runs quiet: a failed background load is logged, never shown.
   const behindClosed = (sheet, load) => () => ($(sheet).hidden ? load() : undefined);
   window.CommandPalette.create({
     document, window,
@@ -2625,8 +2632,8 @@
     preload: [
       behindClosed("sheet-server-settings", loadServerSettings),
       behindClosed("sheet-agent-auth", () => loadAgentInstalls()),
-      behindClosed("sheet-commands", () => Promise.all([loadCommands(), loadPresets()])),
-      behindClosed("sheet-cli", () => Promise.all([loadCliTokens(), loadMcpConnections()])),
+      behindClosed("sheet-commands", () => Promise.all([loadCommands({ quiet: true }), loadPresets({ quiet: true })])),
+      behindClosed("sheet-cli", () => Promise.all([loadCliTokens({ quiet: true }), loadMcpConnections({ quiet: true })])),
       behindClosed("sheet-secrets", () => secretsUI.preload()),
       () => connectorsUI.preload(),
       behindClosed("sheet-projects", async () => { projects = (await api("/api/projects")).projects; renderProjectList(); }),

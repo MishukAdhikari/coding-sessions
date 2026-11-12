@@ -195,7 +195,7 @@ test("the shortcut: Cmd+K on a Mac, Ctrl+K elsewhere, never in a terminal or edi
 test("actions come from data-command, a select gives one per option", () => {
   const { document, P } = load();
   const actions = labels(P.collectActions(document));
-  expect(actions).toEqual(expect.arrayContaining(["New session", "Open settings", "Show ended sessions", "Appearance: Light", "Appearance: Dark", "Appearance: System", "Open a terminal on the server"]));
+  expect(actions).toEqual(expect.arrayContaining(["New session", "Open settings", "Show ended sessions", "Appearance: Light", "Appearance: Dark", "Appearance: System"]));
 });
 
 test("the palette markup is an accessible combobox dialog with a 16px input", () => {
@@ -210,4 +210,61 @@ test("the palette markup is an accessible combobox dialog with a 16px input", ()
   expect(document.getElementById("btn-palette").getAttribute("aria-label")).toBe("Search settings and actions");
   expect(read("app.css")).toMatch(/\.palette-field input \{[^}]*font: 400 16px/);
   expect(source).not.toMatch(/innerHTML|insertAdjacentHTML|outerHTML/);
+});
+
+test("a setting that also carries data-command is offered once", () => {
+  const html = read("index.html").replace('id="btn-web-terminal" ', 'id="btn-web-terminal" data-command="Open a terminal on the server" ');
+  const { document, P } = load(html);
+  const items = [...P.collectSettings(document), ...P.collectActions(document)];
+  expect(items.filter((i) => i.label === "Open a terminal on the server")).toHaveLength(1);
+  const real = load();
+  const all = [...real.P.collectSettings(real.document), ...real.P.collectActions(real.document)];
+  expect(all.filter((i) => i.label === "Open a terminal on the server")).toHaveLength(1);
+  // A select inside Settings still gives its option actions.
+  expect(labels(all)).toContain("Appearance: Dark");
+});
+
+/* ---------- background loads for settings search are silent ---------- */
+
+async function failingModule(file, factory) {
+  const { document } = load();
+  const toasts = [];
+  const warnings = [];
+  const context = {
+    document, console: { warn: (...a) => warnings.push(a.join(" ")), log() {}, error() {} },
+    MutationObserver: class { observe() {} }, setTimeout, clearTimeout, URL, location: { origin: "http://x", href: "http://x/" },
+  };
+  context.window = context;
+  runInNewContext(read(file), context, { filename: file });
+  const ui = context[factory]({
+    $: (id) => document.getElementById(id), api: async () => { throw new Error("Server unavailable"); },
+    openSheet() {}, showToast: (m) => toasts.push(m), agoStr: () => "", escapeHtml: (s) => s,
+  });
+  await ui.preload();
+  return { toasts, warnings };
+}
+
+test("secrets: a failed background load logs and shows nothing", async () => {
+  const { toasts, warnings } = await failingModule("secrets.js", "createSecretsUI");
+  expect(toasts).toEqual([]);
+  expect(warnings.join()).toContain("Server unavailable");
+});
+
+test("connectors: a failed background load logs and shows nothing", async () => {
+  const { toasts, warnings } = await failingModule("connectors.js", "createConnectorsUI");
+  expect(toasts).toEqual([]);
+  expect(warnings.join()).toContain("Server unavailable");
+});
+
+test("app: every palette preload runs its loader quietly", () => {
+  const app = read("app.js");
+  const start = app.indexOf("preload: [");
+  const block = app.slice(start, app.indexOf("],", start));
+  for (const loader of ["loadCommands", "loadPresets", "loadCliTokens", "loadMcpConnections"]) {
+    expect(block).toContain(`${loader}({ quiet: true })`);
+    expect(app).toMatch(new RegExp(`async function ${loader}\\(\\{ quiet = false \\} = \\{\\}\\)[\\s\\S]*?loadFailed\\(e, quiet\\)`));
+  }
+  expect(app).toMatch(/function loadFailed\(error, quiet\) \{\s*if \(quiet\) console\.warn/);
+  expect(block).toContain("secretsUI.preload()");
+  expect(block).toContain("connectorsUI.preload()");
 });

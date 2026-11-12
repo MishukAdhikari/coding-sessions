@@ -109,12 +109,15 @@
       }
     }
 
-    async function load() {
+    async function load({ quiet = false } = {}) {
       try {
         const data = await api("/api/secrets");
         renderSecrets(data.secrets);
         renderSources(data.sources);
-      } catch (e) { showToast(e.message); }
+      } catch (e) {
+        if (quiet) console.warn("Settings search: secrets didn't load:", e.message);
+        else showToast(e.message);
+      }
     }
 
     // Hidden when there are none, or when they can't be read: the stored secrets still work.
@@ -175,7 +178,7 @@
       },
       reloadRequests: loadRequests,
       /** Renders the saved names (never values) without opening the sheet, for settings search. */
-      preload: () => load(),
+      preload: () => load({ quiet: true }),
     };
   };
 })();

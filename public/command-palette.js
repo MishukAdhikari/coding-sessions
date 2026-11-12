@@ -246,6 +246,8 @@
     const items = [];
     for (const el of document.querySelectorAll("[data-command]")) {
       const name = el.dataset.command;
+      // A button already indexed as a setting stays one entry (its option actions still count).
+      if (el.localName !== "select" && up(el, null, (n) => is(n, ".sheet") && !!n.dataset?.settings)) continue;
       if (el.localName === "select") {
         for (const option of el.querySelectorAll("option")) {
           items.push({

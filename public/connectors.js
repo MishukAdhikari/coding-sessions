@@ -236,7 +236,7 @@
     async function load({ quiet = false } = {}) {
       const mine = ++generation;
       let data;
-      try { data = await api("/api/connectors"); } catch (error) { if (mine === generation && !quiet) showToast(error.message); return false; }
+      try { data = await api("/api/connectors"); } catch (error) { if (quiet) console.warn("Settings search: connectors didn't load:", error.message); else if (mine === generation) showToast(error.message); return false; }
       if (mine !== generation) return false;
       connectors = data.connectors;
       oauthUrls = data.oauth ?? null;
