@@ -13,7 +13,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import {
   claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
-  parseServerArgs, prettyProject, RUN, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
+  parseServerArgs, prettyProject, RUN, renderLiveFrame, newLiveRenderState, liveBackoffMs, liveSocketUrl, type LiveFrame, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
 import { runClient } from "../server/socket-client";
@@ -533,6 +533,90 @@ async function cmdMirror(cfg: Config, nameArg: string | undefined): Promise<void
   process.exit(await joinSession(cfg, session));
 }
 
+
+/* ---------- cs live: follow a session's progress (docs/cli.md#live) ---------- */
+
+/** The session to follow: by name, else this branch's, else the only one running. Waits for a just-launched one. */
+async function resolveLiveSession(cfg: Config, nameArg: string | undefined, waitMs = 0): Promise<{ id: string; name: string }> {
+  const name = nameArg || (insideGitRepo() ? sanitizeName(capture(["git", "branch", "--show-current"]).out) : "");
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const { sessions } = await api(cfg, "/api/sessions");
+    const live = (sessions as any[]).filter((s) => s.status !== "ended");
+    let s = name ? findSession(live, name) : undefined;
+    if (!s && !nameArg && live.length === 1) s = live[0];
+    if (s) return { id: s.id, name: s.name };
+    if (Date.now() >= deadline) {
+      die(nameArg || (name && !live.length)
+        ? `no live session matching "${name}". Try \`cs list\`.`
+        : live.length ? "several sessions are live — name one: `cs live <name>` (see `cs list`)." : "no sessions running on the server.");
+    }
+    await Bun.sleep(1500);
+  }
+}
+
+/**
+ * Print a session's live feed until it ends or Ctrl-C. The first batch comes over HTTPS
+ * (so a bad token or name fails with the API's own message); then a WebSocket pushes the
+ * rest, reconnecting from the last cursor after a drop. Over --ssh-api it polls instead.
+ */
+async function followLive(cfg: Config, target: { id: string; name: string }, json: boolean): Promise<number> {
+  const st = newLiveRenderState();
+  let cursor: number | null = null;
+  let endedAs: string | null = null;
+  const emit = (batch: { frames?: LiveFrame[]; cursor?: number | null }) => {
+    if (typeof batch.cursor === "number") cursor = batch.cursor;
+    for (const f of batch.frames ?? []) {
+      if (f.type === "end") endedAs = String(f.activity ?? "ended");
+      // The renderer also drops repeats (hello and state after a reconnect), for --json too.
+      const line = renderLiveFrame(f, st, useColor && !json);
+      if (line !== null) console.log(json ? JSON.stringify(f) : line);
+    }
+  };
+  process.on("SIGINT", () => {
+    if (!json) console.error(`\n${paint("detached", "2")} — ${target.name} keeps running. Follow again: cs live ${target.name}`);
+    process.exit(0);
+  });
+  const path = (after: number | null) => `/api/sessions/${encodeURIComponent(target.id)}/live${after !== null ? `?after=${after}` : ""}`;
+
+  emit(await api(cfg, path(null)));
+  if (endedAs) return endedAs === "failed" ? 1 : 0;
+
+  if (cfg.sshApi) {
+    for (;;) {
+      await Bun.sleep(2000);
+      try { emit(await api(cfg, path(cursor))); } catch (e) { if (!json) console.error(paint(`… ${(e as Error).message}; retrying`, "2")); }
+      if (endedAs) return endedAs === "failed" ? 1 : 0;
+    }
+  }
+
+  const headers: Record<string, string> = { authorization: `Bearer ${cfg.token}` };
+  if (cfg.cfId && cfg.cfSecret) { headers["CF-Access-Client-Id"] = cfg.cfId; headers["CF-Access-Client-Secret"] = cfg.cfSecret; }
+  for (let attempt = 0; ; ) {
+    const opened = await new Promise<boolean>((resolve) => {
+      let wasOpen = false;
+      const ws = new WebSocket(liveSocketUrl(cfg.api!, target.id, cursor), { headers } as any);
+      ws.onopen = () => { wasOpen = true; attempt = 0; };
+      ws.onmessage = (e) => { try { emit(JSON.parse(String(e.data))); } catch {} };
+      ws.onclose = () => resolve(wasOpen);
+      ws.onerror = () => {};
+    });
+    if (endedAs) return endedAs === "failed" ? 1 : 0;
+    // Dropped: check the session still exists (and catch up) over HTTPS, then reconnect.
+    const wait = liveBackoffMs(opened ? 0 : attempt++);
+    if (!json) console.error(paint(`… connection dropped; reconnecting in ${Math.round(wait / 1000)}s`, "2"));
+    await Bun.sleep(wait);
+    try { emit(await api(cfg, path(cursor))); } catch (e) { if (!json) console.error(paint(`… ${(e as Error).message}`, "2")); }
+    if (endedAs) return endedAs === "failed" ? 1 : 0;
+  }
+}
+
+async function cmdLive(cfg: Config, args: string[]): Promise<void> {
+  const json = args.includes("--json");
+  const nameArg = args.find((a) => !a.startsWith("-"));
+  process.exit(await followLive(cfg, await resolveLiveSession(cfg, nameArg), json));
+}
+
 // One-shot health check of the whole setup: a ✓/✗ line per dependency with a
 // fix hint on failure. Exits non-zero if anything is broken so it's scriptable.
 async function cmdDoctor(cfg: Config): Promise<void> {
@@ -778,13 +862,14 @@ async function cmdRun(getCfg: () => Config, args: string[]): Promise<void> {
 
   // --server: parse cs's own flags; the remaining words are the prompt.
   let name: string | null = null, repoArg: string | null = null, branchArg: string | null = null;
-  let autoMode = false, attach = false;
+  let autoMode = false, attach = false, live = false;
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--server" || a === "-s") continue;
     else if (a === "--auto") autoMode = true;
     else if (a === "--attach" || a === "-a") attach = true;
+    else if (a === "--live") live = true;
     else if (a === "--name" || a === "-n") name = args[++i] ?? null;
     else if (a === "--repo") repoArg = args[++i] ?? null;
     else if (a === "--branch") branchArg = args[++i] ?? null;
@@ -810,6 +895,10 @@ async function cmdRun(getCfg: () => Config, args: string[]): Promise<void> {
     process.exit(await joinSession(cfg, session));
   }
   if (st.state === "live") {
+    if (live) {
+      console.log("● already live — following it (your prompt was not sent).");
+      process.exit(await followLive(cfg, await resolveLiveSession(cfg, st.name, 30_000), false));
+    }
     console.log("● already live — a prompt can't be injected into a running session. Either:");
     console.log(`  ${paint("mirror it in your terminal:", "2")}  cs mirror ${raw}`);
     console.log(`  ${paint("or drive it in the app:", "2")}      ${st.claudeUrl || "(link appears in the app)"}`);
@@ -850,6 +939,7 @@ async function cmdRun(getCfg: () => Config, args: string[]): Promise<void> {
 
   const link = await pollClaudeUrl(cfg, st.name);
   console.log(link ? `\nOpen in Claude:  ${link}` : "\nStarting up — it'll appear in the app and on your phone shortly.");
+  if (live) { console.log(""); process.exit(await followLive(cfg, await resolveLiveSession(cfg, st.name, 30_000), false)); }
 }
 
 // Continue this folder's local Claude Code conversation on the server, with its
@@ -942,6 +1032,7 @@ async function cmdHandoff(cfg: Config, args: string[]): Promise<void> {
   const link = await pollClaudeUrl(cfg, st.name);
   console.log(link ? `\nOpen in Claude:  ${link}` : "\nStarting up — it'll appear in the app and on your phone shortly.");
   console.log(`The server session ${st.name} now carries this conversation. You can stop the local agent.`);
+  if (opts.live) { console.log(""); process.exit(await followLive(cfg, await resolveLiveSession(cfg, st.name, 30_000), false)); }
 }
 
 async function cmdUpgrade(): Promise<void> {
@@ -1087,6 +1178,7 @@ USAGE
   cs --server --attach "..."     ↑ then attach this terminal to it natively (zmx);
                                    rerun to reattach — it's also in the app/phone
   cs --server --auto …           start claude in auto mode
+  cs --server --live "..."       ↑ then follow its progress here (also: cs handoff --live)
   cs --server=<name> "..."       run on another saved server (also -S <name>)
 
   cs handoff [name] ["<next>"]   continue this folder's Claude Code conversation on the
@@ -1101,6 +1193,8 @@ USAGE
                                    close/detach and it keeps running; rerun to reattach
   cs term --sync [-- claude…]    ↑ but upload your working tree first (Synced Launch)
   cs mirror [name]               mirror a LIVE server session in your terminal
+  cs live [name] [--json]        follow a session's progress: messages, tool calls, questions,
+                                   PR links (also cs --live [name]); Ctrl-C detaches
   cs mcp add|status|remove       let Claude Code / Codex drive sessions over MCP
   cs install [agent…]            install agents on the server (no args: list them)
                                    claude codex command-code gemini kimi qwen opencode
@@ -1133,6 +1227,7 @@ try {
     case "term": case "attach": await cmdTerm(cfg(), args); break;
     case "mirror": await cmdMirror(cfg(), args[0]); break;
     case "handoff": await cmdHandoff(cfg(), args); break;
+    case "live": await cmdLive(cfg(), args); break;
     case "pull": process.exit(run(["git", "pull"])); break;
     case "server": await cmdServer(args); break;
     case "login": await cmdLogin(chosenServer); break;

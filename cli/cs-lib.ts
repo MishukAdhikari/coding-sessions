@@ -153,7 +153,7 @@ export const tokenEnvFor = (server: string | undefined, isDefault: boolean) =>
   isDefault || !server ? "CS_TOKEN" : `CS_TOKEN_${server.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 
 /** Subcommands that run on a server and take --server=<name> / -S <name> to choose it. */
-export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "attach", "mirror", "doctor", "mcp", "install", "login", "handoff"]);
+export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "attach", "mirror", "doctor", "mcp", "install", "login", "handoff", "live"]);
 
 /**
  * Pull the server choice out of argv without disturbing anything else.
@@ -169,6 +169,9 @@ const LOCAL_COMMANDS = new Set(["server", "socket", "pull", "upgrade", "version"
 export const RUN = "<run>";
 
 export function parseServerArgs(argv: string[]): { sub: string | undefined; args: string[]; server?: string } {
+  // `cs --live [name]` (also after a leading -S <name> / --server=<name>) is `cs live [name]`.
+  const liveAt = argv[0] === "--live" ? 0 : argv[1] === "--live" && argv[0]?.startsWith("--server=") ? 1 : argv[2] === "--live" && argv[0] === "-S" ? 2 : -1;
+  if (liveAt >= 0) argv = [...argv.slice(0, liveAt), "live", ...argv.slice(liveAt + 1)];
   let server: string | undefined;
   const pick = (list: string[], keepBare: boolean, shortS: boolean) => {
     const out: string[] = [];
@@ -210,6 +213,8 @@ export interface HandoffArgs {
   name: string | null;
   instruction: string | null;
   compactHint: boolean;
+  /** --live: follow the session in this terminal after it launches. */
+  live: boolean;
   agent: "claude" | "codex";
   /** auto: by the transcript's estimated size; see chooseHandoffMode. */
   mode: "auto" | "full" | "compact" | "lean";
@@ -224,7 +229,7 @@ const HANDOFF_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}$/;
  * it, or when it is the only word; anything else is the instruction.
  */
 export function parseHandoffArgs(args: string[]): HandoffArgs {
-  const out: HandoffArgs = { name: null, instruction: null, compactHint: false, agent: "claude", mode: "auto" };
+  const out: HandoffArgs = { name: null, instruction: null, compactHint: false, live: false, agent: "claude", mode: "auto" };
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
@@ -238,6 +243,7 @@ export function parseHandoffArgs(args: string[]): HandoffArgs {
       if (v !== "auto" && v !== "full" && v !== "compact" && v !== "lean") return { ...out, error: "--mode takes auto, full, compact or lean." };
       out.mode = v;
     }
+    else if (a === "--live") out.live = true;
     else if (a === "--agent" || a.startsWith("--agent=")) {
       const v = a === "--agent" ? args[++i] : a.slice(8);
       if (v !== "claude" && v !== "codex") return { ...out, error: "--agent takes claude or codex." };
@@ -309,4 +315,75 @@ export function handoffReceiveCommand(workspacePath: string, id: string): string
   const dir = `${workspacePath}/.cs-handoff`;
   const part = `${dir}/${id}.jsonl.part`;
   return `umask 077 && rm -rf ${shq(dir)} && mkdir -m 700 ${shq(dir)} && cat > ${shq(part)} && mv ${shq(part)} ${shq(`${dir}/${id}.jsonl`)}`;
+}
+
+/* ---------- cs live ---------- */
+
+/** A frame of the server's live feed (server/live.ts). */
+export type LiveFrame = { type: string; [key: string]: any };
+
+/** What the renderer remembers, so a reconnect or a poll never repeats itself. */
+export interface LiveRenderState { greeted: boolean; activity: string | null; prs: Set<string>; asking: string | null }
+export const newLiveRenderState = (): LiveRenderState => ({ greeted: false, activity: null, prs: new Set(), asking: null });
+
+const LIVE_MAX_LINES = 12;
+
+function indentLines(text: string, first: string, rest: string): string {
+  const lines = text.split("\n");
+  const shown = lines.slice(0, LIVE_MAX_LINES);
+  if (lines.length > LIVE_MAX_LINES) shown.push(`… ${lines.length - LIVE_MAX_LINES} more lines`);
+  return shown.map((l, i) => (i ? rest : first) + l).join("\n");
+}
+
+/**
+ * One frame as terminal lines, or null when it repeats what is on screen already
+ * (hello and state after a reconnect, a PR link seen before, the same question again).
+ */
+export function renderLiveFrame(f: LiveFrame, st: LiveRenderState, color = false): string | null {
+  const c = (s: string, code: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
+  switch (f.type) {
+    case "hello":
+      if (st.greeted) return null;
+      st.greeted = true;
+      return `${c("●", "36")} live: ${f.name} ${c(`(${f.provider}${f.mode === "acp" ? ", chat" : ""})`, "2")}  ${c("Ctrl-C detaches; the session keeps running", "2")}`;
+    case "state": {
+      if (f.activity === st.activity) return null;
+      st.activity = f.activity;
+      if (f.activity !== "waiting") st.asking = null;
+      const tone = f.activity === "running" ? "32" : f.activity === "waiting" ? "33" : f.activity === "failed" ? "31" : "2";
+      return c(`◇ ${f.activity}`, tone);
+    }
+    case "message":
+      return f.role === "user"
+        ? indentLines(String(f.text), c("› ", "36"), "  ")
+        : indentLines(String(f.text), c("◆ ", "35"), "  ");
+    case "tool":
+      return c(`  ⚙ ${f.text}`, "2");
+    case "ask": {
+      const key = `${f.text}|${(f.options ?? []).join("|")}`;
+      if (st.asking === key) return null;
+      st.asking = key;
+      const opts = f.options?.length ? `\n  options: ${f.options.join(" | ")}` : "";
+      return `${c(`? ${f.text}`, "1;33")}${opts}\n  ${c(`→ ${f.answer}`, "33")}`;
+    }
+    case "pr":
+      if (st.prs.has(f.url)) return null;
+      st.prs.add(f.url);
+      return `${c("⇢", "36")} PR ${f.repo}#${f.number}  ${f.url}`;
+    case "notice":
+      return c(`  · ${f.text}`, "2");
+    case "end":
+      return c(`■ ${f.reason ?? `session ${f.activity}`}`, f.activity === "failed" ? "31" : "1");
+    default:
+      return null;
+  }
+}
+
+/** Wait before reconnect attempt `n` (0-based): 1, 2, 4, 8, then 15 s. */
+export const liveBackoffMs = (n: number) => Math.min(15_000, 1000 * 2 ** Math.min(n, 4));
+
+/** The WebSocket URL of a session's live feed on `api` (http→ws, https→wss). */
+export function liveSocketUrl(api: string, id: string, after: number | null): string {
+  const base = api.replace(/\/+$/, "").replace(/^http/i, "ws");
+  return `${base}/api/sessions/${encodeURIComponent(id)}/live${after !== null ? `?after=${after}` : ""}`;
 }

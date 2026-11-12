@@ -8,6 +8,15 @@ release also lists how it was validated.
 ## [Unreleased]
 
 ### Added
+- `cs live [name]` (also `cs --live`) follows a session's progress in your terminal: state
+  changes, the agent's messages, one line per tool call, questions with how to answer them,
+  PR links, and the end. `--live` on `cs --server` and `cs handoff` follows right after the
+  launch, and `--json` prints one JSON frame per line. It works for Claude Code, Codex and
+  Chat (ACP) sessions, reconnects after a drop without repeating itself, and Ctrl-C detaches
+  without stopping the session.
+- `GET /api/sessions/:id/live`: the feed behind it, a WebSocket (or one JSON batch per
+  request with `?after=`), behind the app's sign-in. Stored secret values and common token
+  shapes are replaced with `[redacted]` before anything leaves the server.
 - Contributor guide, Code of Conduct, issue and pull request templates, and this changelog.
 - Handoff modes: `cs handoff --full|--compact|--lean` and MCP `handoff_session` `mode`
   (default `auto`: under ~50k estimated tokens full, up to ~300k compact, above that lean).
