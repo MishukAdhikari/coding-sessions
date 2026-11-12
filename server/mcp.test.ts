@@ -176,6 +176,34 @@ test("wait_for_session hands back a working agent that cannot report a question 
   expect(r.structuredContent).toMatchObject({ state: "working", timed_out: false, screen: "Allow shell_command? (y/n)" });
 });
 
+test("Claude Code's first-run screens read as questions, and a launch prompt is never typed into them", async () => {
+  const { TRUST, THEME } = await import("./claude-startup.fixtures");
+  // The turn state says "running" (nothing in a transcript yet); the screen says otherwise.
+  const { deps } = harness({
+    listSessions: async () => [session({ waiting: false, telemetryUnknown: true })],
+    readScreen: async () => ({ ok: true, value: TRUST }),
+  });
+  const read = (await call(deps, "read_session", { session_id: "m:cs-demo" })).structuredContent;
+  expect(read).toMatchObject({ state: "asking", startup_prompt: { kind: "folder_trust" } });
+  expect(read.next).toContain("Ask the operator");
+  const wait = (await call(deps, "wait_for_session", { session_id: "m:cs-demo", timeout_seconds: 60 })).structuredContent;
+  expect(wait).toMatchObject({ state: "asking", reason: "asking", timed_out: false, startup_prompt: { kind: "folder_trust" } });
+  expect(wait.waited_sec).toBe(0);
+
+  let clock = 0;
+  let screen = THEME;
+  const queued = harness({
+    listSessions: async () => [session({ status: clock < 5_000 ? "starting" : "running" })],
+    readScreen: async () => ({ ok: true, value: clock < 60_000 ? screen : (screen = "❯ ready") }),
+    sleep: async (ms) => { clock += ms; },
+    now: () => clock,
+  });
+  expect((await call(queued.deps, "launch_session", { name: "demo", project_id: 1, prompt: "fix" })).structuredContent.prompt_sent).toBe(false);
+  await settleQueuedPrompts();
+  expect(clock).toBeGreaterThanOrEqual(60_000);
+  expect(queued.sent).toEqual([["m:cs-demo", "fix", true]]);
+});
+
 test("wait_for_session keeps waiting on a working agent that does report questions", async () => {
   const { deps } = harness({
     listSessions: async () => [session({ provider: "codex", busy: true, waiting: false })],

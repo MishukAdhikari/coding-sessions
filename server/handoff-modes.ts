@@ -10,7 +10,18 @@ export type RequestedHandoffMode = typeof HANDOFF_MODES[number];
 export const COMPACT_FROM_TOKENS = 50_000;
 export const LEAN_ABOVE_TOKENS = 300_000;
 
-export const isHandoffMode = (m: unknown): m is RequestedHandoffMode => typeof m === "string" && (HANDOFF_MODES as readonly string[]).includes(m);
+/** How long `cs handoff` and the MCP upload command wait for a compact or lean handoff to launch. */
+export const HANDOFF_CLIENT_WAIT_MS = 15 * 60_000;
+export const HANDOFF_POLL_MS = 5000;
+/**
+ * The limit of one `claude -p` step (/compact, then HANDOFF.md if that fails). A step
+ * that cannot reach the model (a rejected key, no network) keeps retrying until this
+ * limit, so two steps plus the launch must fit in the client's wait, or the client
+ * gives up before the fallback it would have been told about.
+ */
+export const HANDOFF_STEP_TIMEOUT_MS = 6 * 60_000;
+
+export const isHandoffMode =(m: unknown): m is RequestedHandoffMode => typeof m === "string" && (HANDOFF_MODES as readonly string[]).includes(m);
 
 /** auto: < 50k full, 50k-300k compact, > 300k lean. An explicit mode wins. */
 export function chooseHandoffMode(tokens: number, requested: RequestedHandoffMode = "auto"): HandoffMode {

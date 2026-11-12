@@ -317,6 +317,41 @@ export function handoffReceiveCommand(workspacePath: string, id: string): string
   return `umask 077 && rm -rf ${shq(dir)} && mkdir -m 700 ${shq(dir)} && cat > ${shq(part)} && mv ${shq(part)} ${shq(`${dir}/${id}.jsonl`)}`;
 }
 
+/* ---------- work tree upload (rsync) ---------- */
+
+/**
+ * One path from `git ls-files` as an anchored rsync pattern that matches only itself.
+ * Wildcard characters go in a bracket class ([*]), which rsync and macOS's openrsync
+ * both read literally; a backslash escape is not honoured by both.
+ */
+const rsyncLiteral = (path: string) => "/" + path.replace(/[*?[]/g, "[$&]").replace(/[\r\n]/g, "?");
+
+/**
+ * rsync excludes for the paths git ignores, from
+ * `git ls-files -z --others --ignored --exclude-standard --directory`. git decides,
+ * not rsync's `:- .gitignore` merge, which does not understand `!` re-includes: with
+ * it a tracked `.env.example` under `.env.*` + `!.env.example` was excluded, and
+ * `--delete` then removed it from the server's checkout. One pattern a line, for
+ * `--exclude-from` (openrsync ignores --from0 there); a line break in a name is `?`.
+ */
+export function rsyncIgnoredExcludes(lsFilesZ: string): string {
+  return lsFilesZ.split("\0").filter(Boolean).map((p) => rsyncLiteral(p) + "\n").join("");
+}
+
+/** The rsync command that mirrors the local work tree into a server Workspace. */
+export function rsyncWorkTreeArgs(excludeFile: string, dest: string): string[] {
+  return [
+    "rsync", "-az", "--delete",
+    `--exclude-from=${excludeFile}`,
+    "--filter=P /vendor",
+    "--filter=P /node_modules",
+    "--filter=P /.env",
+    "--exclude=/.git/worktrees",
+    "-e", "ssh",
+    "./", dest,
+  ];
+}
+
 /* ---------- cs live ---------- */
 
 /** A frame of the server's live feed (server/live.ts). */

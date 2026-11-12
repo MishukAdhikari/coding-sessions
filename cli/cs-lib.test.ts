@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { findSession, fmtDur, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig, parseServerArgs, prettyProject, RUN, sanitizeName, serverNameFromUrl, shq, tokenEnvFor } from "./cs-lib";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { findSession, fmtDur, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig, parseServerArgs, prettyProject, RUN, rsyncIgnoredExcludes, rsyncWorkTreeArgs, sanitizeName, serverNameFromUrl, shq, tokenEnvFor } from "./cs-lib";
 
 test("session names follow the server's rule", () => {
   expect(sanitizeName("feature/Fix login!!")).toBe("feature-Fix-login");
@@ -112,4 +115,51 @@ test("MCP names and token variables are plain for the default server, suffixed f
 
 test("cs socket is a local command, not a prompt for the server", () => {
   expect(parseServerArgs(["socket", "--socket=/s.sock", "list_sessions", "-"])).toEqual({ sub: "socket", args: ["--socket=/s.sock", "list_sessions", "-"] });
+});
+
+test("the work tree upload skips what git ignores, keeps `!` re-includes, and never deletes them on the server", () => {
+  const root = mkdtempSync(join(tmpdir(), "cs-rsync-test-"));
+  const src = join(root, "src"), dest = join(root, "dest");
+  const sh = (cmd: string[]) => {
+    const p = Bun.spawnSync(cmd, { cwd: src, stdout: "pipe", stderr: "pipe" });
+    if (p.exitCode) throw new Error(p.stderr.toString());
+    return p.stdout.toString();
+  };
+  try {
+    mkdirSync(join(src, "skills", "ours"), { recursive: true });
+    mkdirSync(join(src, "build"), { recursive: true });
+    writeFileSync(join(src, ".gitignore"), ".env.*\n!.env.example\nbuild/\nskills/*\n!skills/link\n*.log\n");
+    writeFileSync(join(src, ".env.example"), "A=1\n");
+    writeFileSync(join(src, ".env.local"), "SECRET=1\n");
+    writeFileSync(join(src, "build", "out.js"), "x");
+    writeFileSync(join(src, "skills", "ours", "SKILL.md"), "s");
+    symlinkSync("ours", join(src, "skills", "link"));
+    writeFileSync(join(src, "weird[1]a.log"), "w");
+    writeFileSync(join(src, "keep.txt"), "k");
+    sh(["git", "init", "-q"]);
+    sh(["git", "add", "-A"]);
+    // The server's checkout: what was committed, plus server-only state.
+    mkdirSync(join(dest, "node_modules"), { recursive: true });
+    writeFileSync(join(dest, ".env.example"), "A=1\n");
+    writeFileSync(join(dest, ".env.local"), "server's own\n");
+    writeFileSync(join(dest, "gone.txt"), "deleted locally");
+    writeFileSync(join(dest, "node_modules", "x"), "x");
+    const ex = join(root, "exclude");
+    writeFileSync(ex, rsyncIgnoredExcludes(sh(["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])));
+    sh(rsyncWorkTreeArgs(ex, dest + "/"));
+    expect(existsSync(join(dest, ".env.example"))).toBe(true);
+    expect(lstatSync(join(dest, "skills", "link")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(dest, "keep.txt"))).toBe(true);
+    expect(existsSync(join(dest, "build"))).toBe(false);
+    expect(existsSync(join(dest, "weird[1]a.log"))).toBe(false);
+    expect(readFileSync(join(dest, ".env.local"), "utf8")).toBe("server's own\n");
+    expect(existsSync(join(dest, "node_modules", "x"))).toBe(true);
+    expect(existsSync(join(dest, "gone.txt"))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ignored paths become anchored literal rsync patterns", () => {
+  expect(rsyncIgnoredExcludes("build/\0a*b[1]?.log\0two\nlines\0\0")).toBe("/build/\n/a[*]b[[]1][?].log\n/two?lines\n");
 });

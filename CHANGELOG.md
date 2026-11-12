@@ -32,6 +32,20 @@ release also lists how it was validated.
   `GET ?status`. The upload command gzips and retries parts, and waits for a compact or
   lean handoff to launch.
 
+### Fixed
+- `cs --server`, `cs term --sync` and `cs handoff` no longer delete tracked files from the
+  server's checkout when `.gitignore` re-includes them with `!` (such as `.env.example`
+  under `.env.*`): the upload now skips exactly what git ignores.
+- Claude Code's first-run screens (theme picker, security notes, folder trust) are reported
+  by `read_session` and `wait_for_session` as a question with `startup_prompt`, instead of
+  `running`, and a queued launch prompt is not typed into them. The folder-trust default
+  is "No, exit", which ended the session.
+- A compact handoff whose `claude -p` steps cannot reach the model now falls back within
+  the 15 minutes `cs handoff` and the upload command wait (each step is limited to 6
+  minutes, from 10), so the client hears the fallback.
+- `cs live` shows a Chat (ACP) Claude tool call by its command (`echo hello`), not the
+  adapter's generic first title (`Terminal`).
+
 ## [0.13.0] - 2026-11-12
 
 ### Added

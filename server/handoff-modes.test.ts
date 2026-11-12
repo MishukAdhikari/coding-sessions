@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  COMPACT_FROM_TOKENS, LEAN_ABOVE_TOKENS, SEARCH_MAX_BYTES, SEARCH_MAX_RESULTS, chooseHandoffMode, estimateTranscriptTokens,
+  COMPACT_FROM_TOKENS, HANDOFF_CLIENT_WAIT_MS, HANDOFF_POLL_MS, HANDOFF_STEP_TIMEOUT_MS, LEAN_ABOVE_TOKENS, SEARCH_MAX_BYTES, SEARCH_MAX_RESULTS, chooseHandoffMode, estimateTranscriptTokens,
   fmtTokens, isHandoffMode, leanFirstPrompt, searchTranscript, transcriptMessages,
 } from "./handoff-modes";
 
@@ -76,4 +76,10 @@ test("search is bounded: result count, snippet size and total bytes", () => {
   expect(bytes).toBeLessThanOrEqual(SEARCH_MAX_BYTES);
   // A huge query is cut, not echoed into a huge snippet.
   expect(searchTranscript(many, "a".repeat(5000)).results[0]!.snippet.length).toBeLessThan(1100);
+});
+
+test("both claude -p steps of a failing compact handoff finish before the client stops waiting", () => {
+  // compact fails → HANDOFF.md fails → full resume: the client must still hear about it.
+  expect(2 * HANDOFF_STEP_TIMEOUT_MS + 60_000).toBeLessThanOrEqual(HANDOFF_CLIENT_WAIT_MS);
+  expect(Number.isInteger(HANDOFF_CLIENT_WAIT_MS / HANDOFF_POLL_MS)).toBe(true);
 });

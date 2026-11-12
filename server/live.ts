@@ -112,7 +112,11 @@ export function acpFrames(events: AcpEvent[]): LiveFrame[] {
         continue;
       }
       flush();
-      if (u.sessionUpdate === "tool_call") {
+      // claude-agent-acp opens a call with a generic title ("Terminal") and empty input,
+      // then names it ("echo hello") in an update carrying the input: show that one.
+      const inputPending = u.rawInput && typeof u.rawInput === "object" && !Object.keys(u.rawInput).length;
+      const named = u.sessionUpdate === "tool_call_update" && typeof u.title === "string" && u.rawInput && typeof u.rawInput === "object" && Object.keys(u.rawInput).length;
+      if ((u.sessionUpdate === "tool_call" && !inputPending) || named) {
         const diff = diffSummary(u.content);
         out.push({ type: "tool", text: clip(`${u.title ?? u.kind ?? "Tool call"}${diff ? ` (${diff})` : ""}`), at });
       } else if (u.sessionUpdate === "tool_call_update" && u.status === "failed") {
