@@ -7,6 +7,8 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-12
+
 ### Added
 - MCP `add_project` and `remove_project`: register a project for Chat (ACP) mode without
   the app, by cloning a repo into a new workspace or naming a folder already under
@@ -249,7 +251,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.0
 [0.14.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.14.0
 [0.13.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.13.0
 [0.12.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.12.0
