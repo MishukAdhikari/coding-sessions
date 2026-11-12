@@ -86,14 +86,19 @@ Then:
    - **If they ran it:** the output ends with the link.
 
    They open it, press **Sign in with this link**, then add a passkey. It works once and expires in 30 minutes.
-2. Agents sign in from the app:
-   - **Claude Code, Codex, Command Code:** Settings → Agent authentication.
-   - **Presets:** Settings → Commands, or the server terminal. See `docs/agents.md`.
-3. `sudo coding-sessions doctor` checks everything and says how to fix what's wrong.
+2. Agents sign in from the app: **Settings → Agent authentication** lists every installed agent with its sign-in. Agents without a browser sign-in (Gemini CLI, Kimi Code, Qwen Code, opencode) offer **Sign in in a terminal**. See `docs/agents.md`.
+3. `sudo coding-sessions doctor` checks everything and says how to fix what's wrong. Permission errors (`EACCES`, "dubious ownership", "readonly database", a service that won't start after something ran as root): `sudo coding-sessions doctor --fix` repairs ownership and modes, asking first. Never fix them by hand with `chown -R` or `chmod -R`.
+4. On Docker, run agent commands as the service account: `docker compose exec -u cs app …`. With a bind mount, set `PUID` and `PGID` (`docs/docker.md`).
+5. To move work from a laptop to the server later, point them at `cs` in `docs/cli.md`: `cs handoff` continues the current Claude Code conversation on the server.
+
+## Repair or recover
+
+- **Forgotten admin password:** the user runs `sudo coding-sessions reset-password` in **their own** terminal. It prints a new password once and signs out every browser; passkeys and CLI tokens keep working. Never run it yourself: its output is a credential.
+- **Broken install or update:** `sudo coding-sessions doctor`, then `doctor --fix` with the user's yes; re-running `sudo coding-sessions setup` with the same flags also repairs.
 
 ## Never
 
 - **Credentials:** never ask for, print, store or paste the sign-in link, passwords, tokens or API keys. Never run `setup-link` yourself.
 - **Asking first:** never run setup, `uninstall` or anything that changes a server without the user's explicit yes in this conversation.
 - **Lockout risks:** never change SSH settings, disable root login, or reset the firewall. The CLI doesn't, and neither should you.
-- **Root:** never install agents as root. The CLI installs them as the service account.
+- **Root:** never install agents or run them as root, and never `npm i -g` as root. The CLI installs them as the service account; that is what keeps permissions working.
