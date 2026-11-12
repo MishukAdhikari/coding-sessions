@@ -171,6 +171,193 @@ as_service() {
   fi
 }
 
+# ---------- permissions ----------
+# One pass over every path Coding Sessions owns, with the owner and mode each must have.
+# `check` reports, `fix` repairs; both are safe to repeat. setup, update, agents install and
+# doctor --fix all run it. Rules it keeps:
+#   - root-only material (config, credentials, releases) stays root-owned and not writable by others;
+#   - in the service home, root never follows a path the account controls: ownership is
+#     changed with find -P -execdir chown -h, and modes and removals run as the account itself;
+#   - a symlink at a managed path, or a file owned by another real user, is reported with the
+#     one command that fixes it, never changed.
+# CS_PERM_PREFIX, CS_PERM_ROOT_USER and CS_PERM_SVC_USER exist for the tests only.
+PERM_WRONG=0 PERM_FIXED=0 PERM_STUCK=0
+perm_wrong() { bad "$1 — $2"; PERM_WRONG=$((PERM_WRONG + 1)); }
+perm_fixed() { ok "$1 — $2"; PERM_FIXED=$((PERM_FIXED + 1)); }
+perm_stuck() { bad "$1 — $2"; PERM_STUCK=$((PERM_STUCK + 1)); }
+perm_as_svc() { if [[ $(id -un) = "$PERM_SU" ]]; then "$@"; else runuser -u "$PERM_SU" -- "$@"; fi; }
+
+# perm_expect check|fix d|f PATH OWNER GROUP MODE [create]
+perm_expect() {
+  local fix=$1 kind=$2 p=$3 o=$4 g=$5 m=$6 create=${7:-} now
+  if [[ -L $p ]]; then
+    perm_stuck "$p" "is a symlink; Coding Sessions never follows links here. Move it aside: sudo mv '$p' '$p.moved'"; return
+  fi
+  if [[ ! -e $p ]]; then
+    [[ $create = create && $kind = d ]] || return 0
+    if [[ $fix != fix ]]; then perm_wrong "$p" "missing; expected a directory $o:$g $m"; return; fi
+    if [[ $o = "$PERM_SU" ]]; then perm_as_svc install -d -m "$m" -- "$p"; else install -d -o "$o" -g "$g" -m "$m" -- "$p"; fi
+    perm_fixed "$p" "created ($o:$g $m)"; return
+  fi
+  if [[ $kind = d && ! -d $p ]] || [[ $kind = f && ! -f $p ]]; then
+    perm_stuck "$p" "should be a $( [[ $kind = d ]] && echo directory || echo file ); move it aside: sudo mv '$p' '$p.moved'"; return
+  fi
+  now=$(stat -c '%U:%G %a' -- "$p")
+  [[ $now = "$o:$g ${m#0}" ]] && return 0
+  if [[ $fix != fix ]]; then perm_wrong "$p" "is $now, expected $o:$g $m"; return; fi
+  if [[ $o = "$PERM_SU" && $p != "$PERM_HOME" ]]; then
+    # Inside the home: ownership comes from the sweep (it ran first); the mode is set by the account.
+    perm_as_svc chmod "$m" -- "$p"
+  else
+    chown -h "$o:$g" -- "$p"; chmod "$m" -- "$p"
+  fi
+  perm_fixed "$p" "was $now, now $o:$g $m"
+}
+
+# Count lines on stdin per top-level entry under $1 and report each group once.
+perm_groups() { # base verb  (stdin: relative paths)
+  local base=$1 verb=$2 count top
+  while read -r count top; do
+    "$verb" "$base${top:+/$top}" "$count $( ((count == 1)) && echo path || echo paths) $3"
+  done < <(awk -F/ '{print $1}' | sort | uniq -c)
+}
+
+# Files under the home left behind by root (sudo npm i -g, an agent or git run as root) or by a
+# deleted account belong to the service account. Files of another real user are reported.
+perm_sweep_home() {
+  local fix=$1 H=$PERM_HOME su=$PERM_SU sg=$PERM_SG ru=$PERM_RU rg=$PERM_RG
+  [[ -d $H && ! -L $H ]] || return 0
+  local leftover=( \( \( ! -user "$su" \( -user "$ru" -o -nouser \) \) -o \( ! -group "$sg" \( -group "$rg" -o -nogroup \) \) \) )
+  local found; found=$(find -P "$H" -xdev -mindepth 1 "${leftover[@]}" -printf '%P\n' 2>/dev/null || true)
+  if [[ -n $found ]]; then
+    if [[ $fix = fix ]]; then
+      find -P "$H" -xdev -mindepth 1 "${leftover[@]}" -execdir chown -h "$su:$sg" {} + 2>/dev/null || true
+      perm_groups "$H" perm_fixed "owned by $ru (left by a command run as root), now $su" <<<"$found"
+    else
+      perm_groups "$H" perm_wrong "owned by $ru (left by a command run as root), expected $su" <<<"$found"
+    fi
+  fi
+  local user rest
+  while IFS=' ' read -r user rest; do
+    [[ -n $user ]] || continue
+    perm_stuck "$H/$rest" "owned by $user, another account; if it belongs to Coding Sessions: sudo chown -R $su:$sg '$H/$rest'"
+  done < <(find -P "$H" -xdev -mindepth 1 ! -user "$su" ! -user "$ru" ! -nouser -printf '%u %P\n' 2>/dev/null \
+            | awk '{split($2, p, "/"); k = $1 " " p[1]; if (!(k in s)) { s[k] = 1; print k }}' || true)
+  # Directories the account can't enter or write, and SQLite files it can't write
+  # ("attempt to write a readonly database").
+  local d
+  while IFS= read -r d; do
+    [[ -n $d ]] || continue
+    if [[ $fix = fix ]]; then perm_as_svc chmod u+rwx -- "$d" && perm_fixed "$d" "directory was not writable by $su, now u+rwx"
+    else perm_wrong "$d" "directory not writable by $su (expected u+rwx)"; fi
+  done < <(find -P "$H" -xdev -mindepth 1 -type d -user "$su" ! -perm -u=rwx -print 2>/dev/null || true)
+  while IFS= read -r d; do
+    [[ -n $d ]] || continue
+    if [[ $fix = fix ]]; then perm_as_svc chmod u+rw -- "$d" && perm_fixed "$d" "database was read-only, now writable by $su"
+    else perm_wrong "$d" "database is read-only for $su (attempt to write a readonly database)"; fi
+  done < <(find -P "$H/data" -xdev -maxdepth 2 -type f \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o -name '*.sqlite' \) ! -perm -u=rw -print 2>/dev/null || true)
+  # A control or terminal socket nothing listens on (left by a crash) blocks the next start
+  # (EADDRINUSE). Multiplexer sockets (screen, zmx, herdr) are never touched: they are live sessions.
+  if command -v ss >/dev/null; then
+    local listening s
+    listening=$(ss -Hxl 2>/dev/null | awk '{print $5}' || true)
+    while IFS= read -r s; do
+      [[ -n $s ]] || continue
+      grep -qxF -- "$s" <<<"$listening" && continue
+      if [[ $fix = fix ]]; then perm_as_svc rm -f -- "$s" && perm_fixed "$s" "stale socket (nothing listening), removed"
+      else perm_wrong "$s" "stale socket (nothing listening); it blocks a restart"; fi
+    done < <(find -P "$H/data" "$H/run/terminals" -xdev -type s -print 2>/dev/null || true)
+  fi
+}
+
+# Root-owned trees the service runs from must stay root-owned and not writable by others.
+perm_sweep_root_tree() {
+  local fix=$1 dir=$2 ru=$PERM_RU rg=$PERM_RG
+  [[ -d $dir && ! -L $dir ]] || return 0
+  local found; found=$(find -P "$dir" -xdev -mindepth 1 ! -type l \( ! -user "$ru" -o ! -group "$rg" -o -perm /022 \) -printf '%P\n' 2>/dev/null || true)
+  [[ -n $found ]] || return 0
+  if [[ $fix = fix ]]; then
+    find -P "$dir" -xdev -mindepth 1 ! -type l \( ! -user "$ru" -o ! -group "$rg" -o -perm /022 \) -exec chown -h "$ru:$rg" {} + -exec chmod go-w {} + 2>/dev/null || true
+    perm_groups "$dir" perm_fixed "not root-only, now $ru:$rg and not writable by others" <<<"$found"
+  else
+    perm_groups "$dir" perm_wrong "not root-only (expected $ru:$rg, not writable by others)" <<<"$found"
+  fi
+}
+
+# perm_pass check|fix [quiet] -> sets PERM_WRONG, PERM_FIXED, PERM_STUCK
+perm_pass() {
+  local fix=$1 pre=${CS_PERM_PREFIX:-}
+  PERM_WRONG=0 PERM_FIXED=0 PERM_STUCK=0
+  PERM_RU=${CS_PERM_ROOT_USER:-root} PERM_SU=${CS_PERM_SVC_USER:-cs-$INSTANCE}
+  id -u "$PERM_SU" >/dev/null 2>&1 || { perm_stuck "$PERM_SU" "the service account is missing; run: sudo coding-sessions setup"; return; }
+  PERM_RG=$(id -gn "$PERM_RU") PERM_SG=$(id -gn "$PERM_SU")
+  PERM_HOME=$pre/var/lib/coding-sessions/$INSTANCE
+  local E=$pre/etc/coding-sessions A=$pre/opt/coding-sessions/$INSTANCE L=$pre/usr/local/lib/coding-sessions
+  local ru=$PERM_RU rg=$PERM_RG su=$PERM_SU sg=$PERM_SG H=$PERM_HOME c d
+  # Root-only configuration and credentials.
+  perm_expect "$fix" d "$E" "$ru" "$rg" 0755
+  perm_expect "$fix" d "$E/instances" "$ru" "$rg" 0755
+  perm_expect "$fix" f "$E/instances/$INSTANCE" "$ru" "$rg" 0600
+  perm_expect "$fix" f "$E/$INSTANCE.env" "$ru" "$rg" 0600
+  perm_expect "$fix" f "$E/setup.conf" "$ru" "$rg" 0644
+  perm_expect "$fix" d "$E/credentials" "$ru" "$rg" 0700
+  perm_expect "$fix" d "$E/credentials/$INSTANCE" "$ru" "$rg" 0700
+  for c in admin-password token-encryption-key; do perm_expect "$fix" f "$E/credentials/$INSTANCE/$c" "$ru" "$rg" 0600; done
+  # The app, its releases and the managed Codex hooks.
+  for d in "$pre/opt/coding-sessions" "$A" "$A/releases" "$pre/var/lib/coding-sessions" "$pre/var/lib/coding-sessions/app-updates" "$L" "$L/bin" "$L/codex-hooks"; do
+    perm_expect "$fix" d "$d" "$ru" "$rg" 0755
+  done
+  perm_expect "$fix" d "$pre/var/cache/coding-sessions" "$ru" "$rg" 0700
+  perm_expect "$fix" d "$pre/var/cache/coding-sessions/$INSTANCE" "$ru" "$rg" 0700
+  perm_sweep_root_tree "$fix" "$A/releases"
+  perm_sweep_root_tree "$fix" "$L"
+  # The service account's home: everything in it is the account's, private to it.
+  perm_expect "$fix" d "$H" "$su" "$sg" 0700
+  perm_sweep_home "$fix"
+  for d in data run run/screen .config .local .local/bin .local/state; do perm_expect "$fix" d "$H/$d" "$su" "$sg" 0700 create; done
+  perm_expect "$fix" d "$H/credentials" "$su" "$sg" 0700
+  for c in admin-password token-encryption-key; do perm_expect "$fix" f "$H/credentials/$c" "$su" "$sg" 0600; done
+  # Agents install into ~/.local/bin, which the service needs on PATH.
+  local env=$E/$INSTANCE.env
+  if [[ -f $env && ! -L $env ]] && ! grep -qE "^PATH=(.*:)?$H/\.local/bin(:|$)" "$env"; then
+    if [[ $fix != fix ]]; then perm_wrong "$env" "PATH doesn't include $H/.local/bin, where agents are installed"
+    elif grep -q '^PATH=' "$env"; then sed -i "s|^PATH=|PATH=$H/.local/bin:|" "$env"; perm_fixed "$env" "added $H/.local/bin to PATH"
+    else printf 'PATH=%s/.local/bin:/opt/coding-sessions/%s/current/bin:/usr/local/bin:/usr/bin:/bin\n' "$H" "$INSTANCE" >> "$env"; perm_fixed "$env" "added PATH with $H/.local/bin"; fi
+  fi
+}
+
+perm_summary() {
+  if (( PERM_FIXED )); then say "  ${D}Repaired $PERM_FIXED path(s).${N}"; elif (( !PERM_STUCK )); then ok "owners and modes are right"; fi
+}
+
+# `permissions` and `doctor` share this: report, then (with fix) ask and repair.
+permissions_report() { # want_fix
+  local want_fix=$1
+  perm_pass check
+  if (( PERM_WRONG == 0 )); then
+    (( PERM_STUCK )) || ok "owners and modes of every Coding Sessions path"
+    return $(( PERM_STUCK > 0 ))
+  fi
+  if (( !want_fix )); then
+    say "    Fix: sudo coding-sessions doctor --fix"
+    return 1
+  fi
+  confirm "Repair these $PERM_WRONG permission problem(s)?" Y || { say "    Nothing was changed."; return 1; }
+  perm_pass fix
+  say "  ${D}Repaired $PERM_FIXED path(s).${N}"
+  REPAIRED=$((${REPAIRED:-0} + PERM_FIXED))
+  return $(( PERM_STUCK > 0 ))
+}
+
+cmd_permissions() {
+  [[ -n ${CS_PERM_PREFIX:-} ]] || need_root permissions
+  local fix=0
+  while (($#)); do case $1 in --fix) fix=1 ;; --yes|-y) ASSUME_YES=1 ;; --instance) INSTANCE=${2:?}; shift ;; *) die "usage: coding-sessions permissions [--fix] [--yes]" ;; esac; shift; done
+  [[ -n ${CS_PERM_PREFIX:-} ]] && INSTANCE=${INSTANCE:-personal} || load_instance
+  say "${B}Permissions ($INSTANCE)${N}"
+  permissions_report "$fix"
+}
+
 # Install this CLI from the source, stamped with the version it came from.
 install_cli() {
   local stamp=dev
@@ -318,6 +505,8 @@ set_app_updates() {
 install_agents() {
   [[ -n $1 && $1 != none ]] || return 0
   local list; list=$(tr ',' ' ' <<<"$1")
+  # npm writes into ~/.local as the service account: root-owned leftovers there would fail it with EACCES.
+  perm_pass fix
   as_service bash "$(app_dir)/deploy/install-provider-clis" $list
 }
 
@@ -452,11 +641,15 @@ cmd_setup() {
   install_packages
   install_caddy
   [[ $needs_node = yes ]] && install_node
+  # A re-run or upgrade first repairs what the installer would otherwise refuse.
+  if [[ -f /etc/coding-sessions/instances/$INSTANCE ]]; then step "Repairing owners and modes"; perm_pass fix; perm_summary; fi
   run_engine
   install_cli
   conf_save
   configure_caddy
   tune_system
+  step "Checking owners and modes"
+  perm_pass fix; perm_summary
   set_app_updates
   systemctl restart "coding-sessions@$INSTANCE.service"
   if [[ $AGENTS != none ]]; then step "Installing agents"; install_agents "$AGENTS"; fi
@@ -566,8 +759,17 @@ cmd_browser() { need_root browser; load_instance; [[ ${1:-install} = install ]] 
 
 cmd_doctor() {
   need_root doctor
+  local fix=0 REPAIRED=0
+  while (($#)); do case $1 in --fix) fix=1 ;; --yes|-y) ASSUME_YES=1 ;; *) die "usage: coding-sessions doctor [--fix] [--yes]" ;; esac; shift; done
   load_instance; detect_platform
   local problems=0 v
+  say "${B}Owners and modes${N}"
+  permissions_report "$fix" || problems=$((problems + 1))
+  if (( REPAIRED )); then
+    systemctl restart "coding-sessions@$INSTANCE.service"
+    for v in {1..15}; do curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$(sed -n 's/^PORT=//p' /etc/coding-sessions/$INSTANCE.env)/" && break; sleep 1; done
+    ok "restarted the service after the repair"
+  fi
   check() { if eval "$2"; then ok "$1"; else bad "$1 — $3"; problems=$((problems + 1)); fi; }
   say "${B}Checking Coding Sessions ($INSTANCE)${N}"
   check "service running" "systemctl is-active --quiet coding-sessions@$INSTANCE.service" "see: sudo coding-sessions logs"
@@ -581,7 +783,7 @@ cmd_doctor() {
   check "screen installed" "command -v screen >/dev/null" "run: sudo coding-sessions setup"
   check "disk has 5 GB+ free ($(disk_gb) GB)" "(( $(disk_gb) >= 5 ))" "new sessions are refused under 5 GB; free some space"
   check "memory + swap 2 GB+" "(( $(mem_mb) + $(swap_mb) >= 2000 ))" "add swap: sudo coding-sessions setup --swap"
-  if (( problems )); then say ""; say "$problems problem(s) found."; return 1; fi
+  if (( problems )); then say ""; say "$problems problem(s) found.$( ((fix)) || echo ' Owner and mode problems are repaired by: sudo coding-sessions doctor --fix')"; return 1; fi
   say ""; say "All good."
 }
 
@@ -593,6 +795,8 @@ cmd_update() {
   install_cli
   ok "CLI $SOURCE_REF"
   step "Updating the app"
+  step "Checking owners and modes"
+  perm_pass fix; perm_summary
   "$(app_dir)/deploy/update-app" "$INSTANCE" --now
   ok "app $(cat "$(app_dir)/.source-version" 2>/dev/null || echo updated)"
   if [[ ${1:-} = --agents ]]; then step "Updating agents"; cmd_agents update; fi
@@ -644,7 +848,7 @@ ${B}coding-sessions${N} $CLI_VERSION — set up and run a Coding Sessions server
        --no-link                         don't print the sign-in link (e.g. when an AI agent runs setup)
   sudo coding-sessions setup-link        one-time sign-in link (lost access, new device)
   sudo coding-sessions reset-password    new admin password; signs out browsers [--stdin] [--json]
-  sudo coding-sessions doctor            check everything, with fixes
+  sudo coding-sessions doctor [--fix]    check everything; --fix repairs owners and modes [--yes]
   sudo coding-sessions status            what's running, where, which version
   sudo coding-sessions activity [--json] when anything was last in use (CS_ACTIVITY_PORT)
   sudo coding-sessions agents [list]     installed agents and versions
@@ -666,7 +870,8 @@ main() {
     reset-password) cmd_reset_password "$@" ;;
     status) cmd_status ;;
     activity) cmd_activity "$@" ;;
-    doctor) cmd_doctor ;;
+    doctor) cmd_doctor "$@" ;;
+    permissions) cmd_permissions "$@" ;;
     agents|agent) cmd_agents "$@" ;;
     browser) cmd_browser "$@" ;;
     update|upgrade) cmd_update "$@" ;;

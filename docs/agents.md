@@ -12,7 +12,7 @@ These are third-party tools. Each comes from its own vendor and has its own acco
    # Ubuntu install
    sudo -u cs-personal -H /opt/coding-sessions/personal/current/deploy/install-provider-clis gemini kimi qwen opencode
    # Docker
-   docker compose exec app install-provider-clis gemini kimi qwen opencode
+   docker compose exec -u cs app install-provider-clis gemini kimi qwen opencode
    ```
 
    Or skip SSH: press **Install** next to the agent in **Settings → Agent authentication** (or **Settings → Commands**), or run `cs install gemini kimi` from your laptop. Install only the ones you want. Each comes from its official npm package, and the daily CLI update keeps the installed ones current.

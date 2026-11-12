@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# CI scenario, run as root on an installed server: break owners and modes the ways users
+# reported, then check that `coding-sessions doctor --fix --yes` alone brings everything back.
+set -euo pipefail
+H=/var/lib/coding-sessions/personal
+U=cs-personal
+step() { printf '\n== %s\n' "$*"; }
+
+step "Breaking permissions"
+systemctl stop coding-sessions@personal.service
+# Commands run as root in the service home: npm i -g, an agent, git.
+chown -R root:root "$H/data" "$H/.local" "$H/run"
+mkdir -p "$H/.codex" "$H/.claude" "$H/workspaces/repo"
+echo '{}' > "$H/.codex/root-auth.json"
+echo '{}' > "$H/.claude/root-settings.json"
+touch "$H/.local/bin/root-leftover"
+git -C "$H/workspaces/repo" init -q
+chmod 0400 "$H/data/app.db"
+chmod 0644 /etc/coding-sessions/personal.env
+chmod 0777 /etc/coding-sessions
+python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$H/data/stale.sock"
+sed -i "s|^PATH=$H/.local/bin:|PATH=|" /etc/coding-sessions/personal.env
+
+step "doctor reports each problem with its path and expected value"
+set +e
+coding-sessions doctor > doctor-before.txt 2>&1
+set -e
+cat doctor-before.txt
+grep -q "/etc/coding-sessions/personal.env — is root:root 644, expected root:root 0600" doctor-before.txt
+grep -q "$H/data/app.db — database is read-only" doctor-before.txt
+grep -q "left by a command run as root" doctor-before.txt
+grep -q "stale socket" doctor-before.txt
+grep -q "doctor --fix" doctor-before.txt
+test "$(stat -c %a /etc/coding-sessions/personal.env)" = 644   # doctor alone changes nothing
+
+step "doctor --fix --yes repairs it"
+set +e
+coding-sessions doctor --fix --yes > doctor-fix.txt 2>&1   # the fake domain's HTTPS still fails
+set -e
+cat doctor-fix.txt
+grep -q "restarted the service after the repair" doctor-fix.txt
+test -z "$(find "$H" ! -user "$U" -print -quit)"
+test -z "$(find "$H" ! -group "$U" -print -quit)"
+test "$(stat -c '%U %a' /etc/coding-sessions/personal.env)" = "root 600"
+test "$(stat -c '%U %a' /etc/coding-sessions)" = "root 755"
+test "$(stat -c %a "$H")" = 700
+test ! -e "$H/data/stale.sock"
+grep -q "^PATH=$H/.local/bin:" /etc/coding-sessions/personal.env
+coding-sessions permissions
+for _ in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:9121/ && break; sleep 1; done
+systemctl is-active --quiet coding-sessions@personal.service
+curl -fsS -o /dev/null http://127.0.0.1:9121/
+
+step "Agents install and run as the service account"
+touch "$H/.local/bin/another-root-leftover"   # what would make npm fail with EACCES
+coding-sessions agents install gemini
+coding-sessions agents | tee agents.txt
+grep -E '^ +gemini +[0-9]' agents.txt
+test "$(stat -c %U "$H/.local/bin/gemini")" = "$U"
+runuser -u "$U" -- env HOME="$H" "$H/.local/bin/gemini" --version
+test -z "$(find "$H" ! -user "$U" -print -quit)"
+
+step "Re-running doctor --fix changes nothing"
+set +e
+coding-sessions doctor --fix --yes > doctor-again.txt 2>&1
+set -e
+grep -q "owners and modes of every Coding Sessions path" doctor-again.txt
+! grep -q "restarted the service after the repair" doctor-again.txt
+echo "permission repair: OK"

@@ -58,7 +58,8 @@ ENV HOME=/home/cs \
     CS_CHILD_ENV=filtered \
     CS_AGENT_PERMISSIONS=standard
 
-USER cs
+# The entrypoint starts as root only to fix the volume's ownership (PUID/PGID), then runs
+# everything as cs. HOME stays /home/cs for both.
 VOLUME ["/home/cs"]
 EXPOSE 9121
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
