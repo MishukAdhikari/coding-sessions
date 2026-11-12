@@ -289,6 +289,17 @@ const handoffRouteDeps = {
 
 const mcpDeps: McpDeps = {
   setup: setupDeps,
+  projects: {
+    workspacesDir: join(homedir(), "workspaces"),
+    prepare: prepareSynced,
+    async status(name) {
+      const r = await syncedStatus(name);
+      return r.ok ? { ok: true, state: r.status.state } : r;
+    },
+    list: () => db.query("SELECT id, path, label FROM projects ORDER BY label").all() as Array<{ id: number; path: string; label: string }>,
+    insert: (path, label) => { db.query("INSERT OR IGNORE INTO projects (path, label) VALUES (?, ?)").run(path, label); },
+    remove: (id) => db.query("DELETE FROM projects WHERE id = ?").run(id).changes > 0,
+  },
   accounts: agentAccounts,
   sessionExtras(sessions) {
     const waiting = secretRequests.pendingByScreen();

@@ -24,6 +24,8 @@ Scripts and agents on the server itself can call the same tools without a token 
 | `press_keys` | Keys in order (`enter`, `escape`, `up`, `down`, `shift+tab`, `ctrl+c`, a digit…), for menus and questions. |
 | `wait_for_session` | Waits (≤ 90 s per call) until the agent stops working, asks, or the Session ends; returns the screen, a `reason` (`turn_finished`, `asking`, `ended`, `screen_settled`, `timeout`) and a `next` step. |
 | `list_projects` | Project allowlist (by id) and the agents this server runs. |
+| `add_project` | Register a project (Chat mode launches only into one) with no browser. `repo` (+ `name`, optional `branch`) clones into a new workspace with the app's own git and GitHub sign-in, as a repo launch does; `path` adds a folder that already exists under `~/workspaces`. Any other folder is refused: add it in the app's Projects. The app's own project checks apply. Returns the project id. |
+| `remove_project` | Remove a project from the list; its folder and files stay. |
 | `list_repos` | Repos a Fresh Launch can clone. |
 | `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, sends it once the agent is ready. If the agent is still starting when the call returns, `prompt_queued` is true and the server sends the prompt as soon as the agent is up. `mode`: `terminal` (default) or `acp` for [Chat (ACP) mode](agents.md#chat-acp-mode), project launches only. |
 | `resume_session` | Reopen an archived conversation. |
@@ -55,8 +57,10 @@ steps that must be a person's:
    a link where **the human** enters the value. Values never pass through the model.
 5. Ask the human whether Claude Code may trust the workspaces this app creates. Only on
    their yes: `trust_workspaces {enabled: true, confirm: true}`.
-6. `server_status` again until `ready` is true, then `handoff_session` or
-   `launch_session` (`mode: "acp"` for Chat).
+6. For Chat (ACP) mode: `add_project {repo: "owner/repo", name: "app"}`, then
+   `launch_session {name, project_id, mode: "acp"}`.
+7. `server_status` again until `ready` is true, then `handoff_session` or
+   `launch_session`.
 
 A CLI or MCP token can never read or set secret values (`/api/secrets` answers 403 with
 `code: browser_only`); use `request_secret`.
