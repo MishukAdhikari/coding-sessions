@@ -146,3 +146,24 @@ export function searchTranscript(jsonl: string, query: string, opts: { limit?: n
   }
   return { query, messages: msgs.length, matches, results, truncated };
 }
+
+/**
+ * Why a /compact fork left no compact boundary. `claude -p` can exit 0 with the API's
+ * refusal (a rejected key, no credit) as its result; that error is the useful answer.
+ */
+export function compactFailure(result: string | undefined, transcript: string): string {
+  let reason = (result ?? "").trim();
+  if (!reason) {
+    for (const line of transcript.split("\n")) {
+      if (!line.includes("isApiErrorMessage")) continue;
+      try {
+        const o = JSON.parse(line);
+        if (o?.isApiErrorMessage !== true) continue;
+        const content = o?.message?.content;
+        const text = Array.isArray(content) ? content.map((c: any) => typeof c?.text === "string" ? c.text : "").join(" ") : typeof content === "string" ? content : "";
+        if (text.trim()) reason = text.trim();
+      } catch {}
+    }
+  }
+  return reason ? `compaction failed: ${reason.slice(0, 300)}` : "the compacted conversation has no compact boundary";
+}

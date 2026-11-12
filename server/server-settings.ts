@@ -7,7 +7,7 @@ import { rmSync, writeFileSync } from "node:fs";
  * applies without a restart.
  */
 export type ServerSettingName =
-  | "defaultRepo" | "githubOwners" | "claudeAiEmail" | "agentPermissions" | "terminalMouse" | "updateChannel";
+  | "defaultRepo" | "githubOwners" | "claudeAiEmail" | "agentPermissions" | "terminalMouse" | "updateChannel" | "trustWorkspaces";
 
 export type SettingSource = "settings" | "server" | "default";
 
@@ -57,6 +57,10 @@ export const DEFINITIONS: Record<ServerSettingName, Definition> = {
     env: "CS_TERM_MOUSE", fallback: "on",
     normalize: oneOf(["on", "off"], "Terminal mouse must be on or off."),
   },
+  trustWorkspaces: {
+    env: "CS_TRUST_WORKSPACES", fallback: "off",
+    normalize: oneOf(["on", "off"], "Trust app workspaces must be on or off."),
+  },
   updateChannel: {
     env: "CS_APP_UPDATE_CHANNEL", fallback: "releases",
     normalize: oneOf(["releases", "main"], "Update channel must be releases or main."),
@@ -65,6 +69,9 @@ export const DEFINITIONS: Record<ServerSettingName, Definition> = {
 
 export const SETTING_NAMES = Object.keys(DEFINITIONS) as ServerSettingName[];
 const KEY_PREFIX = "server_setting:";
+const META_PREFIX = "server_setting_meta:";
+/** Who last changed a setting: the app (a signed-in browser) or an MCP client with the operator's confirmation. */
+export type SettingChangedBy = "app" | "mcp";
 
 export interface SettingsStore {
   get(key: string): string | null;
@@ -87,6 +94,7 @@ function serverValue(name: ServerSettingName, env: Record<string, string | undef
   if (raw === undefined) return null;
   if (name === "terminalMouse") return raw.trim() === "off" ? "off" : "on";
   if (name === "updateChannel") return raw.trim() === "main" ? "main" : "releases";
+  if (name === "trustWorkspaces") return raw.trim() === "on" ? "on" : "off";
   const normalized = DEFINITIONS[name].normalize(raw);
   return "value" in normalized ? normalized.value : null;
 }
@@ -100,6 +108,14 @@ export function createServerSettings(options: ServerSettingsOptions) {
     const normalized = DEFINITIONS[name].normalize(saved);
     if ("value" in normalized) overrides.set(name, normalized.value);
   }
+
+  const meta = (name: ServerSettingName): { by: SettingChangedBy; at: string } | null => {
+    try {
+      const raw = options.store.get(META_PREFIX + name);
+      const m = raw ? JSON.parse(raw) : null;
+      return m && (m.by === "app" || m.by === "mcp") && typeof m.at === "string" ? m : null;
+    } catch { return null; }
+  };
 
   const resolve = (name: ServerSettingName): { value: string; source: SettingSource } => {
     const override = overrides.get(name);
@@ -121,17 +137,20 @@ export function createServerSettings(options: ServerSettingsOptions) {
     get: (name: ServerSettingName): string => resolve(name).value,
     owners: (): string[] => resolve("githubOwners").value.split(",").filter(Boolean),
     unrestricted: (): boolean => resolve("agentPermissions").value === "unrestricted",
+    /** Claude Code's folder trust is pre-accepted for workspaces the app creates (repo, synced and handoff), never other paths. */
+    trustWorkspaces: (): boolean => resolve("trustWorkspaces").value === "on",
     mouseEnabled: (): boolean => resolve("terminalMouse").value !== "off",
     channelAvailable: (): boolean => !!options.channelFile,
 
     describe() {
       return Object.fromEntries(SETTING_NAMES.map((name) => {
         const { value, source } = resolve(name);
-        return [name, { value, source, serverValue: serverValue(name, env) ?? DEFINITIONS[name].fallback }];
-      })) as Record<ServerSettingName, { value: string; source: SettingSource; serverValue: string }>;
+        const changed = source === "settings" ? meta(name) : null;
+        return [name, { value, source, serverValue: serverValue(name, env) ?? DEFINITIONS[name].fallback, ...(changed ? { changedBy: changed.by, changedAt: changed.at } : {}) }];
+      })) as Record<ServerSettingName, { value: string; source: SettingSource; serverValue: string; changedBy?: SettingChangedBy; changedAt?: string }>;
     },
 
-    set(name: ServerSettingName, raw: unknown): { ok: true; value: string } | { ok: false; error: string } {
+    set(name: ServerSettingName, raw: unknown, by: SettingChangedBy = "app"): { ok: true; value: string } | { ok: false; error: string } {
       if (typeof raw !== "string" || raw.length > 1024) return { ok: false, error: "Send the new value as text." };
       if (name === "updateChannel" && !options.channelFile) {
         return { ok: false, error: "This server does not update itself, so the update channel cannot be changed here." };
@@ -142,6 +161,9 @@ export function createServerSettings(options: ServerSettingsOptions) {
         try { writeChannelFile(normalized.value); } catch { return { ok: false, error: "Could not save the update channel for the updater." }; }
       }
       options.store.set(KEY_PREFIX + name, normalized.value);
+      // Only an MCP change is recorded: the app (a signed-in browser) is the default author.
+      if (by === "mcp") options.store.set(META_PREFIX + name, JSON.stringify({ by, at: new Date().toISOString() }));
+      else options.store.delete(META_PREFIX + name);
       overrides.set(name, normalized.value);
       options.onChange?.(name);
       return { ok: true, value: normalized.value };
@@ -152,6 +174,7 @@ export function createServerSettings(options: ServerSettingsOptions) {
         try { writeChannelFile(undefined); } catch { return { ok: false, error: "Could not save the update channel for the updater." }; }
       }
       options.store.delete(KEY_PREFIX + name);
+      options.store.delete(META_PREFIX + name);
       overrides.delete(name);
       options.onChange?.(name);
       return { ok: true };

@@ -4,7 +4,7 @@ umask 077
 [[ $(id -u) != 0 ]] || { echo 'Run as the service account, not root (files root writes here break the agents with EACCES). On a server: sudo coding-sessions agents install NAME. In Docker: docker compose exec -u cs app install-provider-clis NAME' >&2; exit 1; }
 : "${HOME:?HOME must identify the instance service account}"
 export PATH="$HOME/.local/bin:$PATH"
-(($#)) || { echo 'Usage: install-provider-clis codex|claude|command-code|gemini|kimi|qwen|opencode [...]' >&2; exit 1; }
+(($#)) || { echo 'Usage: install-provider-clis codex|claude|command-code|gemini|kimi|qwen|opencode|claude-acp|codex-acp [...]' >&2; exit 1; }
 # npm package, binary and minimum Node.js version for each npm-installed agent.
 npm_agent() {
   case "$1" in
@@ -17,15 +17,68 @@ npm_agent() {
     *) return 1;;
   esac
 }
+
+# The Bun this instance runs on (CS_BUN, set by the app and by `coding-sessions agents`), else one on PATH.
+bun_bin() {
+  local b=${CS_BUN:-}
+  [[ -n $b && -x $b ]] || b=$(command -v bun 2>/dev/null || true)
+  [[ -n $b && -x $b ]] || b=$HOME/.bun/bin/bun
+  [[ -x $b ]] || return 1
+  printf '%s\n' "$b"
+}
+
+# Install an npm package with Bun into a private folder of the service account and put a
+# small launcher for its binary in ~/.local/bin that runs it under that Bun. No global npm,
+# no system Node.js, no root. Used for the ACP adapters, and for npm agents when Node.js is
+# missing or too old.
+bun_package() { # package bin
+  local package=$1 bin=$2 bun dir entry
+  bun=$(bun_bin) || { echo "Bun was not found for $package (set CS_BUN to the instance's Bun)." >&2; return 1; }
+  dir=$HOME/.local/share/coding-sessions/packages/$bin
+  mkdir -p "$dir" "$HOME/.local/bin"
+  [[ -f $dir/package.json ]] || printf '{"private":true}\n' > "$dir/package.json"
+  (cd "$dir" && "$bun" add "$package@latest")
+  entry=$(cd "$dir" && "$bun" -e '
+    const [pkg, bin] = process.argv.slice(1);
+    const path = require("node:path");
+    const dir = path.join("node_modules", pkg);
+    const manifest = require(path.resolve(dir, "package.json"));
+    const rel = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.[bin] ?? Object.values(manifest.bin ?? {})[0];
+    if (!rel) process.exit(1);
+    console.log(path.resolve(dir, rel));' "$package" "$bin") || { echo "$package has no binary named $bin." >&2; return 1; }
+  # The launcher keeps Bun first on PATH: an SDK that spawns "bun" or "node" finds this one.
+  local tmp; tmp=$(mktemp "$HOME/.local/bin/.$bin.XXXXXX")
+  printf '#!/bin/sh\n# Installed by Coding Sessions: %s under Bun.\nPATH=%q:"$PATH"\nexport PATH\nexec %q %q "$@"\n' \
+    "$package" "$(dirname "$bun")" "$bun" "$entry" > "$tmp"
+  chmod 0755 "$tmp"
+  mv -f "$tmp" "$HOME/.local/bin/$bin"
+}
+
+node_ok() { # minimum
+  command -v npm >/dev/null && command -v node >/dev/null || return 1
+  node -e 'const [a,b,c]=process.versions.node.split(".").map(Number),[x,y,z]=process.argv[1].split(".").map(Number);if(a*1e6+b*1e3+c<x*1e6+y*1e3+z)process.exit(1)' "$1"
+}
+
+acp_adapter() { # provider
+  case "$1" in
+    claude) bun_package @agentclientprotocol/claude-agent-acp claude-agent-acp && echo "ACP adapter claude-agent-acp installed";;
+    codex) bun_package @agentclientprotocol/codex-acp codex-acp && echo "ACP adapter codex-acp installed";;
+  esac
+}
+
 for provider in "$@"; do
   case "$provider" in
     codex|command-code|gemini|kimi|qwen|opencode)
       read -r package bin minimum <<<"$(npm_agent "$provider")"
-      command -v npm >/dev/null || { echo 'Install a supported Node.js release and npm first.' >&2; exit 1; }
-      node -e 'const [a,b,c]=process.versions.node.split(".").map(Number),[x,y,z]=process.argv[1].split(".").map(Number);if(a*1e6+b*1e3+c<x*1e6+y*1e3+z)process.exit(1)' "$minimum" \
-        || { echo "Node.js $minimum or newer is required for $provider." >&2; exit 1; }
-      npm install --global --prefix "$HOME/.local" "$package@latest"
-      "$HOME/.local/bin/$bin" --version;;
+      if node_ok "$minimum"; then
+        npm install --global --prefix "$HOME/.local" "$package@latest"
+      else
+        # Ubuntu's own Node.js is too old for these agents; Bun runs them instead.
+        echo "Node.js $minimum or newer was not found; installing $provider under Bun."
+        bun_package "$package" "$bin"
+      fi
+      "$HOME/.local/bin/$bin" --version </dev/null
+      [[ $provider != codex ]] || acp_adapter codex;;
     claude)
       installer=$(mktemp)
       trap 'rm -f -- "$installer"' EXIT
@@ -33,7 +86,10 @@ for provider in "$@"; do
       bash "$installer" latest
       rm -f -- "$installer"
       trap - EXIT
-      "$HOME/.local/bin/claude" --version;;
+      "$HOME/.local/bin/claude" --version
+      acp_adapter claude;;
+    claude-acp) acp_adapter claude;;
+    codex-acp) acp_adapter codex;;
     *) printf 'Unknown provider: %s\n' "$provider" >&2; exit 1;;
   esac
 done

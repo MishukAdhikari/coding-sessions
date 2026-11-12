@@ -1720,6 +1720,8 @@
       hint: "What automatic app updates install. Changing this asks you to confirm it's you." },
     { name: "agentPermissions", label: "Agent permissions", options: [["standard", "Standard: agents ask first"], ["unrestricted", "Unrestricted: no permission prompts"]], confirm: true,
       hint: "Changing this asks you to confirm it's you. Applies to sessions started afterwards; running sessions keep the mode they started with." },
+    { name: "trustWorkspaces", label: "Trust app workspaces", options: [["off", "Off: Claude Code asks about folder trust"], ["on", "On: trust workspaces this app creates"]], confirm: true,
+      hint: "On: Claude Code's folder-trust question is answered Yes for workspaces this app creates (from a repository, cs sync and handoff, under ~/workspaces), never for other folders. Changing this asks you to confirm it's you; an MCP client can turn it on only after the operator confirms." },
   ];
   let serverSettingsState = null;
   let cancelServerConfirm = null;
@@ -1769,7 +1771,9 @@
       hint.textContent = unavailable ? "Not available on this server. App updates need an install made with deploy/install-ubuntu." : def.hint;
       const source = document.createElement("p");
       source.className = "server-setting-source";
-      source.append(SERVER_SOURCE[setting.source] || "");
+      source.append(setting.source === "settings" && setting.changedBy === "mcp"
+        ? `Changed by an MCP client with the operator's confirmation${setting.changedAt ? ` (${new Date(setting.changedAt).toLocaleString()})` : ""}`
+        : SERVER_SOURCE[setting.source] || "");
       if (setting.source === "settings") {
         const reset = document.createElement("button");
         reset.type = "button";

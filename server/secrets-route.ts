@@ -32,7 +32,10 @@ export async function handleSecretsRoute(request: Request, deps: SecretsRouteDep
   const json = (value: unknown, status = 200) => Response.json(value, { status, headers: PRIVATE_NO_STORE_HEADERS });
   if (!hasBrowserSession(request, deps.cookieName, deps.checkBrowserSession)) {
     const anyAuthed = deps.isAuthenticated(request);
-    return json({ error: anyAuthed ? "Web session required." : "Unauthorized" }, anyAuthed ? 403 : 401);
+    // A CLI or MCP token may never read or set secret values: values never pass through a model.
+    return json(anyAuthed
+      ? { error: "Secrets can only be changed in the app's Settings (a signed-in browser). A CLI or MCP token cannot set or read them. From an agent, use the MCP tool request_secret {name, reason}: it returns a one-time link for the member to enter the value.", code: "browser_only", next: "request_secret" }
+      : { error: "Unauthorized" }, anyAuthed ? 403 : 401);
   }
   const method = request.method;
   if (method !== "GET" && request.headers.get("origin") !== deps.origin) return json({ error: "Same-origin request required." }, 403);

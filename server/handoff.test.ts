@@ -267,7 +267,7 @@ test("gzip parts are inflated, and a zip bomb stops at the part limit", () => {
   expect(gunzipPart(bomb)).toBeNull();
   expect(uploads.put(token, 1, bomb, { gzip: true })).toMatchObject({ ok: false, status: 413 });
   // Not gzip at all.
-  expect(uploads.put(token, 1, new TextEncoder().encode("plain"), { gzip: true })).toMatchObject({ ok: false, status: 413 });
+  expect(uploads.put(token, 1, new TextEncoder().encode("plain"), { gzip: true })).toMatchObject({ ok: false, status: 400, code: "bad_gzip" });
   // The upload is still usable: the bad parts were not appended.
   expect(uploads.finish(token, 1)).toMatchObject({ ok: true });
   expect(readFileSync(stagedTranscriptPath(ws, ID), "utf8")).toBe(text);

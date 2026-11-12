@@ -1,8 +1,15 @@
 import { expect, test } from "bun:test";
 import {
   COMPACT_FROM_TOKENS, HANDOFF_CLIENT_WAIT_MS, HANDOFF_POLL_MS, HANDOFF_STEP_TIMEOUT_MS, LEAN_ABOVE_TOKENS, SEARCH_MAX_BYTES, SEARCH_MAX_RESULTS, chooseHandoffMode, estimateTranscriptTokens,
-  fmtTokens, isHandoffMode, leanFirstPrompt, searchTranscript, transcriptMessages,
+  compactFailure, fmtTokens, isHandoffMode, leanFirstPrompt, searchTranscript, transcriptMessages,
 } from "./handoff-modes";
+
+test("compactFailure reports the API error instead of a missing boundary", () => {
+  expect(compactFailure("Invalid API key · Fix external API key", "")).toBe("compaction failed: Invalid API key · Fix external API key");
+  const line = JSON.stringify({ type: "assistant", isApiErrorMessage: true, message: { content: [{ type: "text", text: "API Error: 401 invalid x-api-key" }] } });
+  expect(compactFailure("", `{"type":"user"}\n${line}\n`)).toBe("compaction failed: API Error: 401 invalid x-api-key");
+  expect(compactFailure(undefined, "")).toBe("the compacted conversation has no compact boundary");
+});
 
 const line = (o: object) => JSON.stringify(o);
 const user = (content: unknown) => line({ type: "user", message: { role: "user", content } });

@@ -149,6 +149,7 @@ export class LiveFeed {
   cursor: number | null;
   private activity: string | null = null;
   private asking = false;
+  private startup: string | null = null;
   private prs = new Set<string>();
   private greeted = false;
   ended = false;
@@ -157,7 +158,8 @@ export class LiveFeed {
     this.cursor = after;
   }
 
-  step(session: LiveSessionView | null, read: ReadSource, secrets: readonly string[]): LiveBatch {
+  /** `startup`: the Claude Code first-run screen (theme, security notes, folder trust) the terminal is blocked on, if any. */
+  step(session: LiveSessionView | null, read: ReadSource, secrets: readonly string[], startup: StartupScreen | null = null): LiveBatch {
     const frames: LiveFrame[] = [];
     if (this.ended) return { frames, cursor: this.cursor, ended: true };
     if (!session) {
@@ -181,8 +183,14 @@ export class LiveFeed {
     frames.push(...(first ? w.frames.slice(-this.backlog) : w.frames));
     this.cursor = w.cursor;
 
+    // Claude Code's first-run screens are in no transcript; show each once, when it appears.
+    if (startup && startup.kind !== this.startup) {
+      frames.push({ type: "ask", text: `first-run screen: ${startup.question}`, options: [], answer: `answer in the app or this terminal (cs mirror ${session.name}); an agent: ${startup.how}` });
+    }
+    this.startup = startup?.kind ?? null;
+
     // Terminal agents ask in their terminal; Chat (ACP) asks come from its event log.
-    if (session.asking && !this.asking && session.mode !== "acp") {
+    if (session.asking && !this.asking && session.mode !== "acp" && !startup) {
       frames.push({ type: "ask", text: "the agent is waiting for your answer", options: [], answer: `answer in the app, or in this terminal: cs mirror ${session.name}` });
     }
     this.asking = session.asking;
@@ -203,12 +211,17 @@ export class LiveFeed {
 
 /* ---------- the hub: one shared tick for every open live socket ---------- */
 
+/** A first-run screen as server/claude-startup.ts reports it. */
+export interface StartupScreen { kind: string; question: string; how: string }
+
 export interface LiveSocketData { live: { id: string; after: number | null; feed?: LiveFeed } }
 
 export interface LiveHubDependencies {
   sessions: () => Promise<LiveSessionView[]>;
   read: ReadSource;
   secrets: () => Promise<string[]>;
+  /** The first-run screen a terminal Claude Code session is blocked on, read from its screen. */
+  startup?: (session: LiveSessionView) => Promise<StartupScreen | null>;
   intervalMs?: number;
 }
 
@@ -220,6 +233,11 @@ export function createLiveHub(deps: LiveHubDependencies) {
   let timer: ReturnType<typeof setInterval> | null = null;
   let ticking = false;
 
+  const startupOf = async (s: LiveSessionView | null): Promise<StartupScreen | null> => {
+    if (!s || !deps.startup || s.provider !== "claude" || s.mode === "acp" || FINAL.has(s.activity)) return null;
+    try { return await deps.startup(s); } catch { return null; }
+  };
+
   async function tick(only?: ServerWebSocket<LiveSocketData>) {
     if (ticking && !only) return;
     if (!only) ticking = true;
@@ -230,7 +248,8 @@ export function createLiveHub(deps: LiveHubDependencies) {
         const feed = ws.data.live.feed;
         if (!feed || !sockets.has(ws)) continue;
         let batch: LiveBatch;
-        try { batch = feed.step(byId.get(feed.id) ?? null, deps.read, secrets); } catch { continue; }
+        const session = byId.get(feed.id) ?? null;
+        try { batch = feed.step(session, deps.read, secrets, await startupOf(session)); } catch { continue; }
         if (batch.frames.length) try { ws.send(JSON.stringify(batch)); } catch {}
         if (batch.ended) { sockets.delete(ws); try { ws.close(1000, "session ended"); } catch {} }
       }
@@ -257,7 +276,8 @@ export function createLiveHub(deps: LiveHubDependencies) {
     async once(id: string, after: number | null): Promise<LiveBatch> {
       const [list, secrets] = await Promise.all([deps.sessions(), deps.secrets()]);
       const feed = new LiveFeed(id, after);
-      return feed.step(list.find((s) => s.id === id) ?? null, deps.read, secrets);
+      const session = list.find((s) => s.id === id) ?? null;
+      return feed.step(session, deps.read, secrets, await startupOf(session));
     },
   };
 }

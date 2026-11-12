@@ -7,6 +7,33 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+### Added
+- Set up a fresh server from your local agent over MCP, with no SSH: `server_status`
+  (readiness in one call, with what is missing and the exact next call), `setup_agents`
+  (install or update agents as the service account, a job to wait on), `doctor` (non-root
+  checks and repairs; root-only ones return the `sudo` command for a person) and
+  `trust_workspaces`. See [MCP](docs/mcp.md#set-up-a-fresh-server-from-your-laptop).
+- Installing Claude Code or Codex also installs its Chat (ACP) adapter
+  (`claude-agent-acp`, `codex-acp`), under the app's own Bun: no global npm and no system
+  Node.js. npm agents fall back to Bun when Node.js is missing or too old.
+  `coding-sessions agents install claude-acp|codex-acp` installs an adapter alone, and the
+  CLI update timer refreshes installed adapters.
+- A successful Claude Code install (app, MCP) completes its first-run onboarding (theme
+  picker, security notes) for the service account.
+- **Settings → Server settings → Trust app workspaces** (`CS_TRUST_WORKSPACES`): an
+  explicit operator choice to pre-accept Claude Code's folder trust for workspaces the app
+  creates (repo, `cs sync`, handoff), never other folders. Off by default. Changing it in
+  the app asks you to confirm it's you; over MCP it needs `confirm: true`, and Settings
+  shows that an MCP client changed it.
+- `cs live` shows Claude Code's first-run screens (theme, security notes, folder trust).
+
+### Fixed
+- A corrupt or truncated gzip handoff part is reported as `bad_gzip` (400), not `too_large`.
+- A handoff compaction refused by the API (a rejected key, no credit) reports the API's
+  error instead of "no compact boundary".
+- `/api/secrets` with a CLI or MCP token explains that secrets are set in the app or
+  through `request_secret` (`code: browser_only`), instead of a bare "Web session required".
+
 ## [0.14.0] - 2026-11-12
 
 ### Added
