@@ -16,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14 # same as the Dockerfile
       - run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
