@@ -1,6 +1,6 @@
 import { config } from "./config";
 import { loadTokenKey } from "./secrets";
-import { resolvePublicFile, requestClientIp, allowsApiMutation } from "./http-security";
+import { resolvePublicFile, requestClientIp, allowsApiMutation, internalErrorResponse } from "./http-security";
 import { db, deleteMeta, getMeta, setMeta } from "./db";
 import * as auth from "./auth";
 import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, adoptSyncedHandoff, managedSessionId, restartBlocker } from "./sessions";
@@ -293,6 +293,9 @@ const server = Bun.serve({
   hostname: config.listenHost,
   port: PORT,
   maxRequestBodySize: 1024 * 1024,
+  // Never Bun's development error page: it shows the stack and source to the caller.
+  development: false,
+  error: (err) => internalErrorResponse(err),
   async fetch(req, srv) {
     const url = new URL(req.url);
     const path = url.pathname;

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, parseServerArgs } from "./cs-lib";
+import { claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, parseServerArgs, symlinkedTranscripts } from "./cs-lib";
 import { adoptHandoffTranscript, mungeCwd } from "../server/handoff";
 
 const dirs: string[] = [];
@@ -43,6 +43,9 @@ test("findClaudeTranscript picks the newest regular transcript for the folder, s
   symlinkSync(join(home, "outside.jsonl"), join(dir, "link.jsonl"));
   utimesSync(join(home, "outside.jsonl"), 9000, 9000);
   expect(findClaudeTranscript(home, cwd)).toMatchObject({ id: ID, bytes: 6, path: join(dir, `${ID}.jsonl`) });
+  // The skipped link is still named, so cs handoff can say why it was not used.
+  expect(symlinkedTranscripts(home, cwd).map((l) => l.name)).toEqual(["link.jsonl"]);
+  expect(symlinkedTranscripts(home, "/nowhere")).toEqual([]);
 });
 
 test("fmtBytes shows a readable size", () => {

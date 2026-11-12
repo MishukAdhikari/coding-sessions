@@ -52,3 +52,13 @@ export function allowsApiMutation(req: Request, origin: string, cookieName: stri
   const cookie = req.headers.get("cookie") ?? "";
   return !cookie.split(";").some(part => part.trim().split("=", 1)[0] === cookieName);
 }
+
+/**
+ * The answer to an exception no route caught. Bun's own fallback is a development
+ * page carrying the stack and the server's source, so the server always uses this:
+ * a generic 500, with the detail only in the server's log.
+ */
+export function internalErrorResponse(err: unknown, log: (msg: string) => void = console.error): Response {
+  log(`unhandled request error: ${err instanceof Error ? err.stack || err.message : String(err)}`);
+  return Response.json({ error: "Internal server error.", code: "internal" }, { status: 500, headers: { "cache-control": "no-store" } });
+}

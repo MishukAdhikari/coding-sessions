@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  HANDOFF_DIR, HANDOFF_PART_BYTES, HANDOFF_UPLOAD_PATH, HANDOFF_UPLOAD_TTL_MS, HandoffUploads, adoptHandoffTranscript, handleHandoffUpload,
+  HANDOFF_DIR, HANDOFF_MAX_BYTES, HANDOFF_PART_BYTES, HANDOFF_UPLOAD_PATH, HANDOFF_UPLOAD_TTL_MS, HandoffUploads, adoptHandoffTranscript, handleHandoffUpload,
   handoffUploadCommand, mungeCwd, rewriteTranscriptCwd, stagedTranscriptPath, transcriptSessionId,
 } from "./handoff";
 
@@ -207,6 +207,19 @@ test("the generated upload command really uploads a transcript from disk to a li
   }
 });
 
+test("the upload command refuses an oversized transcript before uploading anything", async () => {
+  const home = temp();
+  const localDir = join(home, ".claude", "projects", mungeCwd("/w"));
+  mkdirSync(localDir, { recursive: true });
+  const f = join(localDir, `${ID}.jsonl`);
+  writeFileSync(f, "");
+  truncateSync(f, HANDOFF_MAX_BYTES + 1); // sparse: no real disk use
+  // Port 9 is closed: any attempt to upload would fail differently from the size message.
+  const p = Bun.spawn(["sh", "-c", handoffUploadCommand("http://127.0.0.1:9/x", "/w", ID)], { env: { ...process.env, HOME: home }, stderr: "pipe" });
+  expect(await p.exited).not.toBe(0);
+  expect(await new Response(p.stderr).text()).toContain("run /compact");
+});
+
 test("the upload command refuses a symlinked transcript and rejects unsafe ids", async () => {
   const root = temp();
   const home = join(root, "home");
@@ -217,4 +230,21 @@ test("the upload command refuses a symlinked transcript and rejects unsafe ids",
   const p = Bun.spawn(["sh", "-c", handoffUploadCommand("http://127.0.0.1:9/x", "/w", ID)], { env: { ...process.env, HOME: home }, stderr: "pipe" });
   expect(await p.exited).not.toBe(0);
   expect(() => handoffUploadCommand("http://x", "/w", "a'b")).toThrow();
+});
+
+test("a new link for the same workspace spends the earlier one, and a vanished staging folder is a 404, not a crash", () => {
+  const ws = temp();
+  const uploads = new HandoffUploads();
+  const first = uploads.create({ name: "app", workspace: ws, resumeId: null, prompt: null, autoMode: false });
+  const second = uploads.create({ name: "app", workspace: ws, resumeId: null, prompt: null, autoMode: false });
+  expect(uploads.put(first.token, 0, new Uint8Array(1))).toMatchObject({ ok: false, status: 404, code: "not_found" });
+  expect(uploads.put(second.token, 0, new TextEncoder().encode(transcript("/a")))).toMatchObject({ ok: true });
+
+  rmSync(join(ws, HANDOFF_DIR), { recursive: true, force: true });
+  expect(uploads.put(second.token, 1, new Uint8Array(1))).toMatchObject({ ok: false, status: 404 });
+
+  const third = uploads.create({ name: "app", workspace: ws, resumeId: ID, prompt: null, autoMode: false });
+  uploads.put(third.token, 0, new Uint8Array(1));
+  rmSync(join(ws, HANDOFF_DIR), { recursive: true, force: true });
+  expect(uploads.finish(third.token, 1)).toMatchObject({ ok: false, status: 404 });
 });
