@@ -63,7 +63,7 @@ test("ping and methods answer without touching a Session", async () => {
 
 test("every MCP tool name runs that tool's handler with params as its arguments", async () => {
   const listed = await handleRequest(deps(), { id: 1, method: "list_sessions", params: {} });
-  expect(listed).toEqual({ id: 1, result: { sessions: [], host: { cpu: 1 } } });
+  expect(listed).toEqual({ id: 1, result: { sessions: [], total: 0, truncated: false, host: { cpu: 1 } } });
   const repos = await handleRequest(deps({ listRepos: async () => ["me/a", "you/b"] }), { id: 2, method: "list_repos", params: { query: "YOU" } });
   expect(repos).toEqual({ id: 2, result: { repos: ["you/b"], total: 1 } });
   const launched = await handleRequest(deps(), { id: 3, method: "launch_session", params: { name: "x", project_id: 1 } });
@@ -72,7 +72,7 @@ test("every MCP tool name runs that tool's handler with params as its arguments"
 
 test("a tool's own refusal comes back as tool_error with the tool's message", async () => {
   const reply = await handleRequest(deps(), { id: 9, method: "read_session", params: { session_id: "m:cs-gone" } });
-  expect(reply).toEqual({ id: 9, error: { code: "tool_error", message: "No live session m:cs-gone. list_sessions shows the live ones." } });
+  expect(reply).toEqual({ id: 9, error: { code: "tool_error", message: "No live session m:cs-gone.\nNext: list_sessions shows the live ones (include_ended for archived ones, which resume_session reopens)." } });
   const thrown = await handleRequest(deps({ listSessions: async () => { throw new Error("boom"); } }), { id: 10, method: "list_sessions", params: {} });
   expect(thrown).toEqual({ id: 10, error: { code: "internal", message: "boom" } });
 });

@@ -14,6 +14,7 @@ import type { SessionProvider } from "./session-provider";
 import { SecretRequestError, type SecretRequests } from "./secret-requests";
 import type { RestartResult } from "./session-restart";
 import { SECRETS_GUIDANCE } from "./communicator-mcp";
+import { handoffUploadCommand, mungeCwd } from "./handoff";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version: "1.0.0" };
@@ -26,7 +27,10 @@ The additive activity field matches the web UI: running, waiting (needs input), 
 Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.
 A session launched with mode "acp" (Chat mode) talks to its agent over the Agent Client Protocol: send_message sends a prompt; when it is asking, read_session lists the agent's permission request with its options, and send_message with one option's name (or id) answers it; press_keys does not apply.
 ${SECRETS_GUIDANCE}
-A secret saved after a session started is already in that session's $CS_SECRETS_FILE; restart_session (end and resume the same conversation) is only for programs that read their environment once at start.`;
+A secret saved after a session started is already in that session's $CS_SECRETS_FILE; restart_session (end and resume the same conversation) is only for programs that read their environment once at start.
+Handing your own local work to the server: push your branch first, then handoff_session {name, repo, branch, cwd}. It prepares a workspace at that branch and returns a one-time upload command; run it in your local shell (it uploads your Claude Code transcript from disk; never paste the transcript into a tool call). The server session resumes your conversation with its full history; then you can stop. A person at a terminal uses \`cs handoff\` instead, which also carries uncommitted changes.
+Errors come back with isError and structuredContent.error {code, message, next}: code is one of invalid_argument, not_found, conflict, unavailable, failed; next says what to call instead.
+Bounds: list_sessions returns at most limit sessions (default 50, filter with agent, state or query); read_session and wait_for_session return at most 400 screen lines.`;
 
 export interface McpDeps {
   accounts?: {
@@ -56,6 +60,19 @@ export interface McpDeps {
     session(id: string): Promise<{ launchId: string | null; screen: string; sessionName: string; agent: string } | null>;
   };
   restart?(id: string): Promise<RestartResult>;
+  /** Per session: PR links found in its transcript, and the secret/connector requests it waits on. */
+  sessionExtras?(sessions: SessionInfo[]): Map<string, SessionExtras>;
+  /** Handoff of a local conversation (handoff_session); absent in deployments without it. */
+  handoff?: {
+    status(name: string): Promise<{ ok: true; status: { state: "live" | "resumable" | "none"; name: string; workspacePath: string } } | { ok: false; error: string }>;
+    prepare(name: string, repo: string, branch: string | null): Promise<{ ok: true; workspacePath: string } | { ok: false; error: string }>;
+    createUpload(ticket: { name: string; workspace: string; resumeId: string | null; prompt: string | null; autoMode: boolean }): { url: string; expiresAt: number };
+  };
+}
+
+export interface SessionExtras {
+  prs: Array<{ url: string; repo?: string; number?: number; state?: string; title?: string | null }>;
+  requests: Array<{ id: string; kind: string; name: string }>;
 }
 
 /* ---------- session state, as the tools describe it ---------- */
@@ -75,11 +92,13 @@ export function sessionState(s: SessionInfo | undefined, turnState: boolean): Se
   return "running";
 }
 
-function summarize(s: SessionInfo, turnState: boolean) {
+function summarize(s: SessionInfo, turnState: boolean, extras?: SessionExtras) {
   return {
     id: s.id,
+    session_id: s.id,
     name: s.name,
     agent: s.provider,
+    mode: s.mode === "acp" ? "acp" : "terminal",
     state: sessionState(s, turnState),
     activity: sessionActivity(s),
     ...(s.startupWaitingForTrust ? { startup_waiting_for_trust: true } : {}),
@@ -92,7 +111,12 @@ function summarize(s: SessionInfo, turnState: boolean) {
     uptime_sec: s.uptimeSec,
     claude_url: s.claudeUrl,
     error: s.errorMessage,
+    ...(extras ? { prs: extras.prs, pending_requests: extras.requests } : {}),
   };
+}
+
+function extrasFor(deps: McpDeps, sessions: SessionInfo[]): Map<string, SessionExtras> {
+  try { return deps.sessionExtras?.(sessions) ?? new Map(); } catch { return new Map(); }
 }
 
 function summarizeArchived(a: ArchivedInfo) {
@@ -134,14 +158,20 @@ export const TOOLS = [
   {
     name: "list_sessions",
     title: "List sessions",
-    description: "Live sessions with each one's agent, state and folder, plus the server's CPU, memory and free disk. include_ended adds archived (ended) sessions that resume_session can reopen.",
-    inputSchema: { type: "object", properties: { include_ended: { type: "boolean", description: "Also list archived sessions. Default false." } } },
+    description: "Live sessions with each one's id, agent, mode (terminal or acp), state, folder, PR links found in its conversation (prs, with GitHub state) and the secret/connector requests it waits on (pending_requests), plus the server's CPU, memory and free disk. Filter by agent, state or a name query; at most limit sessions (total says how many matched). include_ended adds archived (ended) sessions that resume_session can reopen.",
+    inputSchema: { type: "object", properties: {
+      include_ended: { type: "boolean", description: "Also list archived sessions. Default false." },
+      agent: { type: "string", description: "Only this agent: claude, codex, command-code or cmd:<slug>." },
+      state: { type: "string", enum: ["starting", "working", "asking", "waiting", "running", "ended"], description: "Only sessions in this state." },
+      query: { type: "string", description: "Case-insensitive substring of the name or folder." },
+      limit: { type: "integer", minimum: 1, maximum: 200, description: "Most sessions (and archived rows) to return. Default 50." },
+    } },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: "read_session",
     title: "Read a session's screen",
-    description: "The bottom of a session's terminal as plain text, and its state. Use it to see what the agent did, said or is asking.",
+    description: "The bottom of a session's terminal as plain text, and its state, mode, PR links and pending secret/connector requests. For a Chat (acp) session the screen is the chat transcript, ending with the agent's permission request and its options while it is asking (answer with send_message). Use it to see what the agent did, said or is asking.",
     inputSchema: {
       type: "object",
       properties: { session_id: sessionId, lines: { type: "integer", minimum: 5, maximum: 400, description: "Lines from the bottom. Default 80." } },
@@ -178,7 +208,7 @@ export const TOOLS = [
   {
     name: "wait_for_session",
     title: "Wait for a session",
-    description: "Wait until the session's agent stops working — it finished its turn, asks a question, or ended — then return its state and screen. Returns early with timed_out: true; call again to keep waiting. For an agent without turn state, or one working that cannot report a question, waits until its screen stops changing.",
+    description: "Wait until the session's agent stops working — it finished its turn, asks a question, or ended — then return its state, screen and reason: turn_finished, asking (read_session, then answer), ended, screen_settled (no turn state; the screen stopped changing), or timeout (timed_out: true; call again to keep waiting). For an agent without turn state, or one working that cannot report a question, waits until its screen stops changing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -222,6 +252,25 @@ export const TOOLS = [
       required: ["name"],
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "handoff_session",
+    title: "Hand your local conversation to the server",
+    description: "Continue your own local Claude Code conversation on the server, with its full history, without re-sending it as a prompt. Push your branch first: the server workspace is prepared from repo at branch (uncommitted local changes do not travel; commit and push them, or ask the person to run `cs handoff`). Returns a one-time upload command (15 minutes) to run in your local shell: it uploads your transcript file from disk in parts, then the server adopts it and launches the session resuming it, with prompt as the first new message. The command's output has the session_id. Never paste a transcript into a tool call. Claude Code only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Session name, 1-31 chars: letters, numbers, dashes. Must not be in use." },
+        repo: { type: "string", description: "owner/repo or a GitHub URL." },
+        branch: { type: "string", description: "The pushed branch to continue on." },
+        cwd: { type: "string", description: "Your local working directory (absolute). Locates your transcript under ~/.claude/projects/." },
+        transcript_id: { type: "string", description: "Your conversation id (the transcript's file name without .jsonl). Default: the newest transcript for cwd." },
+        prompt: { type: "string", description: "Optional first new message for the server session, e.g. what to do next." },
+        agent: { type: "string", enum: ["claude"], description: "claude (the only one supported for now)." },
+      },
+      required: ["name", "repo", "branch", "cwd"],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: "resume_session",
@@ -301,7 +350,19 @@ type ToolResult = { content: Array<{ type: "text"; text: string }>; structuredCo
 
 const ok = (data: Record<string, unknown>): ToolResult =>
   ({ content: [{ type: "text", text: JSON.stringify(data, null, 2) }], structuredContent: data });
-const fail = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true });
+export type ErrorCode = "invalid_argument" | "not_found" | "conflict" | "unavailable" | "failed";
+
+/** A tool error: plain text for every client, and {error: {code, message, next}} for agents. */
+const fail = (message: string, code: ErrorCode = "failed", next?: string): ToolResult => ({
+  content: [{ type: "text", text: next ? `${message}\nNext: ${next}` : message }],
+  structuredContent: { error: { code, message, ...(next ? { next } : {}) } },
+  isError: true,
+});
+
+const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}$/;
+const NAME_HINT = "Use 1-31 letters, numbers, dashes or underscores, starting with a letter or number.";
+const notFound = (id: string) => fail(id ? `No live session ${id}.` : "session_id is required.", id ? "not_found" : "invalid_argument",
+  "list_sessions shows the live ones (include_ended for archived ones, which resume_session reopens).");
 
 const int = (v: unknown, def: number, min: number, max: number) =>
   Number.isFinite(Number(v)) && v !== null && v !== "" ? Math.min(max, Math.max(min, Math.trunc(Number(v)))) : def;
@@ -345,7 +406,12 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
       || ((state === "running" || (hidden && state === "working")) && same >= 2);
     const timedOut = deps.now() >= deadline;
     if (done || timedOut) {
-      return { session_id: id, state, timed_out: !done, waited_sec: Math.round((deps.now() - started) / 1000), screen: screen?.ok ? screen.value : null };
+      const reason = !done ? "timeout"
+        : state === "ended" ? "ended"
+        : state === "asking" ? "asking"
+        : state === "waiting" ? "turn_finished"
+        : "screen_settled";
+      return { session_id: id, state, reason, timed_out: !done, waited_sec: Math.round((deps.now() - started) / 1000), screen: screen?.ok ? screen.value : null };
     }
     await deps.sleep(2000);
   }
@@ -410,12 +476,12 @@ async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Pr
  * the member, signed in to the app, can fulfil it.
  */
 async function secretTool(deps: McpDeps, name: string, args: Record<string, unknown>): Promise<ToolResult> {
-  if (!deps.secrets) return fail("Secret requests are unavailable on this server.");
+  if (!deps.secrets) return fail("Secret requests are unavailable on this server.", "unavailable");
   const { requests } = deps.secrets;
   let session: Awaited<ReturnType<NonNullable<McpDeps["secrets"]>["session"]>> = null;
   if (args.session_id !== undefined && args.session_id !== null && args.session_id !== "") {
     session = await deps.secrets.session(str(args.session_id));
-    if (!session) return fail(`No live managed session ${str(args.session_id)}. list_sessions shows the live ones.`);
+    if (!session) return fail(`No live managed session ${str(args.session_id)}. list_sessions shows the live ones.`, "not_found", "list_sessions, or leave session_id out.");
   }
   const caller = session ? { launchId: session.launchId, screen: session.screen } : null;
   try {
@@ -433,7 +499,10 @@ async function secretTool(deps: McpDeps, name: string, args: Record<string, unkn
       }
     }
   } catch (error) {
-    if (error instanceof SecretRequestError) return fail(error.message);
+    if (error instanceof SecretRequestError) {
+      const code: ErrorCode = error.status === 404 ? "not_found" : error.status === 409 ? "conflict" : error.status === 400 || error.status === 422 ? "invalid_argument" : "failed";
+      return fail(error.message, code);
+    }
     throw error;
   }
   return fail(`Unknown tool ${name}.`);
@@ -442,47 +511,84 @@ async function secretTool(deps: McpDeps, name: string, args: Record<string, unkn
 export async function callTool(deps: McpDeps, name: string, args: Record<string, unknown>): Promise<ToolResult> {
   switch (name) {
     case "agent_accounts":
-      return deps.accounts ? ok(await deps.accounts.list()) : fail("Agent account controls are unavailable.");
+      return deps.accounts ? ok(await deps.accounts.list()) : fail("Agent account controls are unavailable.", "unavailable");
     case "agent_auth": {
-      if (!deps.accounts) return fail("Agent account controls are unavailable.");
+      if (!deps.accounts) return fail("Agent account controls are unavailable.", "unavailable");
       const result = await deps.accounts.action(args.agent, args.action, args.code);
       return result.ok ? ok(result) : fail(typeof result.error === "string" ? result.error : "Account operation failed.");
     }
     case "list_sessions": {
-      const sessions = (await deps.listSessions()).map((s) => summarize(s, turnStateFor(deps, s.provider)));
-      const data: Record<string, unknown> = { sessions, host: deps.hostStats() };
-      if (args.include_ended === true) data.ended = deps.listArchive().map(summarizeArchived);
+      const agent = str(args.agent).trim();
+      const wanted = str(args.state).trim();
+      const q = str(args.query).trim().toLowerCase();
+      const limit = int(args.limit, 50, 1, 200);
+      const all = await deps.listSessions();
+      const matched = all
+        .map((s) => ({ s, state: sessionState(s, turnStateFor(deps, s.provider)) }))
+        .filter(({ s, state }) => (!agent || s.provider === agent) && (!wanted || state === wanted)
+          && (!q || s.name.toLowerCase().includes(q) || (s.project ?? "").toLowerCase().includes(q) || (s.projectLabel ?? "").toLowerCase().includes(q)));
+      const page = matched.slice(0, limit).map(({ s }) => s);
+      const extras = extrasFor(deps, page);
+      const sessions = page.map((s) => summarize(s, turnStateFor(deps, s.provider), extras.get(s.id) ?? { prs: [], requests: [] }));
+      const data: Record<string, unknown> = { sessions, total: matched.length, truncated: matched.length > page.length, host: deps.hostStats() };
+      if (args.include_ended === true) {
+        const ended = deps.listArchive()
+          .filter((a) => (!agent || a.provider === agent) && (!q || a.name.toLowerCase().includes(q) || (a.project ?? "").toLowerCase().includes(q)));
+        data.ended = ended.slice(0, limit).map(summarizeArchived);
+        data.ended_total = ended.length;
+      }
       return ok(data);
     }
 
     case "read_session": {
       const id = str(args.session_id);
       const s = await findSession(deps, id);
-      if (!s) return fail(`No live session ${id}. list_sessions shows the live ones.`);
+      if (!s) return notFound(id);
       const screen = await deps.readScreen(id, int(args.lines, 80, 5, 400));
       if (!screen.ok) return fail(screen.error);
-      return ok({ session_id: id, name: s.name, agent: s.provider, state: sessionState(s, turnStateFor(deps, s.provider)), screen: screen.value });
+      const state = sessionState(s, turnStateFor(deps, s.provider));
+      const extras = extrasFor(deps, [s]).get(s.id) ?? { prs: [], requests: [] };
+      const acp = s.mode === "acp";
+      const next = state === "asking"
+        ? (acp ? "send_message with one of the permission options above (its name or id)." : "press_keys for a menu, or send_message to answer.")
+        : state === "waiting" ? "send_message with the next instruction." : state === "ended" ? "resume_session (list_sessions include_ended)." : "wait_for_session";
+      return ok({
+        session_id: id, name: s.name, agent: s.provider, mode: acp ? "acp" : "terminal", state, screen: screen.value,
+        prs: extras.prs, pending_requests: extras.requests,
+        ...(extras.requests.length ? { note: "The session waits on the member for a secret or connector; poll secret_status / connector_status." } : {}),
+        next,
+      });
     }
 
     case "send_message": {
       const id = str(args.session_id);
       const text = str(args.text);
-      if (!text.trim() && args.submit === false) return fail("Nothing to send.");
+      if (!id) return notFound(id);
+      if (!text.trim() && args.submit === false) return fail("Nothing to send.", "invalid_argument", "Pass text, or submit: true to press Enter.");
       const r = await deps.sendText(id, text, args.submit !== false);
-      return r.ok ? ok({ session_id: id, sent: true, next: "wait_for_session" }) : fail(r.error);
+      if (r.ok) return ok({ session_id: id, sent: true, next: "wait_for_session" });
+      return (await findSession(deps, id)) ? fail(r.error) : notFound(id);
     }
 
     case "press_keys": {
       const id = str(args.session_id);
       const keys = Array.isArray(args.keys) ? args.keys.map(String).slice(0, 20) : [];
-      if (!keys.length) return fail("keys is empty.");
+      if (!id) return notFound(id);
+      if (!keys.length) return fail("keys is empty.", "invalid_argument", "Pass keys such as [\"enter\"] or [\"1\"].");
       const r = await deps.sendKeys(id, keys);
-      return r.ok ? ok({ session_id: id, pressed: keys }) : fail(r.error);
+      if (r.ok) return ok({ session_id: id, pressed: keys, next: "wait_for_session" });
+      return (await findSession(deps, id)) ? fail(r.error) : notFound(id);
     }
 
     case "wait_for_session": {
       const id = str(args.session_id);
-      return ok(await waitForSession(deps, id, int(args.timeout_seconds, 50, 5, 90), int(args.lines, 60, 5, 400)));
+      if (!id) return notFound(id);
+      const result = await waitForSession(deps, id, int(args.timeout_seconds, 50, 5, 90), int(args.lines, 60, 5, 400));
+      const next = result.reason === "timeout" ? "wait_for_session again"
+        : result.reason === "asking" ? "read_session, then answer with press_keys or send_message"
+        : result.reason === "ended" ? "resume_session (list_sessions include_ended) if the work is not done"
+        : "read_session or send_message";
+      return ok({ ...result, next });
     }
 
     case "list_projects":
@@ -497,15 +603,24 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
     case "launch_session": {
       const provider = (str(args.agent) || "claude") as SessionProvider;
       if (!deps.providers().some((p) => p.id === provider)) {
-        return fail(`Unknown agent “${provider}”. list_projects shows the agents this server runs.`);
+        return fail(`Unknown agent “${provider}”.`, "invalid_argument", "list_projects shows the agents this server runs.");
       }
+      const name = str(args.name).trim();
+      if (!NAME_RE.test(name)) return fail(`Bad name “${name}”. ${NAME_HINT}`, "invalid_argument");
       const repo = str(args.repo).trim() || null;
-      const projectId = args.project_id == null ? null : Number(args.project_id);
-      if (!repo && !Number.isInteger(projectId)) return fail("Give project_id (from list_projects) or repo.");
+      const projectId = args.project_id == null || args.project_id === "" ? null : Number(args.project_id);
+      if (repo && projectId !== null) return fail("Give project_id or repo, not both.", "invalid_argument");
+      if (!repo && !Number.isInteger(projectId)) return fail("Give project_id (from list_projects) or repo.", "invalid_argument", "list_projects or list_repos");
+      if (!repo && !deps.listProjects().some((p) => p.id === projectId)) {
+        return fail(`No project with id ${projectId}.`, "not_found", "list_projects shows the allowlisted projects.");
+      }
       const mode = args.mode === undefined || args.mode === null || args.mode === "" ? "terminal" : args.mode;
-      if (mode !== "terminal" && mode !== "acp") return fail('mode must be "terminal" or "acp".');
-      const r = await deps.launch({ name: str(args.name), provider, projectId: repo ? null : projectId, repo, remoteControl: args.remote_control !== false, mode });
-      if (!r.ok) return fail(r.error);
+      if (mode !== "terminal" && mode !== "acp") return fail('mode must be "terminal" or "acp".', "invalid_argument");
+      if (mode === "acp" && repo) return fail("Chat (acp) mode works for project launches only.", "invalid_argument", "Use project_id, or mode terminal with repo.");
+      const r = await deps.launch({ name, provider, projectId: repo ? null : projectId, repo, remoteControl: args.remote_control !== false, mode });
+      if (!r.ok) return /already running|already owns/i.test(r.error)
+        ? fail(r.error, "conflict", "Pick another name, or send_message to the running session (list_sessions).")
+        : fail(r.error);
       const prompt = str(args.prompt);
       if (!prompt.trim()) return ok({ session_id: r.id, launched: true, next: "send_message" });
       if (!(await waitUntilReady(deps, r.id))) {
@@ -523,11 +638,15 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
         : ok({ session_id: r.id, launched: true, prompt_sent: false, note: sent.error });
     }
 
+    case "handoff_session":
+      return handoffTool(deps, args);
+
     case "resume_session": {
       const id = Number(args.archive_id);
-      if (!Number.isInteger(id)) return fail("archive_id must be an integer.");
+      if (!Number.isInteger(id)) return fail("archive_id must be an integer.", "invalid_argument", "list_sessions with include_ended shows archive_id values.");
       const r = await deps.resume(id);
-      return r.ok ? ok({ resumed: true, next: "list_sessions" }) : fail(r.error);
+      if (!r.ok) return /no archived/i.test(r.error) ? fail(r.error, "not_found", "list_sessions with include_ended.") : fail(r.error);
+      return ok({ resumed: true, next: "list_sessions" });
     }
 
     case "list_secrets":
@@ -538,7 +657,7 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       return secretTool(deps, name, args);
 
     case "restart_session": {
-      if (!deps.restart) return fail("Restart is unavailable on this server.");
+      if (!deps.restart) return fail("Restart is unavailable on this server.", "unavailable");
       const id = str(args.session_id);
       const r = await deps.restart(id);
       return r.ok ? ok({ ...r, restarted: true, next: "wait_for_session" }) : fail(r.error);
@@ -550,7 +669,48 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       return r.ok ? ok({ session_id: id, ended: true }) : fail(r.error ?? "Couldn't end the session.");
     }
   }
-  return fail(`Unknown tool ${name}.`);
+  return fail(`Unknown tool ${name}.`, "invalid_argument", "tools/list shows the tools.");
+}
+
+/**
+ * handoff_session: prepare a Workspace from a pushed branch and hand back a one-time,
+ * chunked upload command. The transcript travels from the agent's disk to the server
+ * by that command, never through this tool call (no transcript text in the model's
+ * context or in MCP logs); the upload's last request adopts it and launches the resume.
+ */
+async function handoffTool(deps: McpDeps, args: Record<string, unknown>): Promise<ToolResult> {
+  if (!deps.handoff) return fail("Handoff is unavailable on this server.", "unavailable");
+  const agent = str(args.agent) || "claude";
+  if (agent !== "claude") return fail("Only Claude Code conversations can be handed off for now.", "invalid_argument", "Use launch_session with a prompt for other agents.");
+  const name = str(args.name).trim();
+  if (!NAME_RE.test(name)) return fail(`Bad name “${name}”. ${NAME_HINT}`, "invalid_argument");
+  const repo = str(args.repo).trim();
+  if (!repo) return fail("repo is required (owner/repo).", "invalid_argument", "list_repos");
+  const branch = str(args.branch).trim();
+  if (!branch) return fail("branch is required: the pushed branch to continue on.", "invalid_argument", "git push -u origin HEAD, then pass its name.");
+  const cwd = str(args.cwd).trim();
+  if (!cwd.startsWith("/")) return fail("cwd must be your absolute local working directory.", "invalid_argument");
+  const transcriptId = str(args.transcript_id).trim() || null;
+  if (transcriptId && !/^[a-zA-Z0-9_-]{1,128}$/.test(transcriptId)) return fail("transcript_id must be the transcript's file name without .jsonl.", "invalid_argument");
+
+  const st = await deps.handoff.status(name);
+  if (!st.ok) return fail(st.error, "invalid_argument");
+  if (st.status.state !== "none") {
+    return fail(`“${name}” already has a ${st.status.state === "live" ? "running session" : "server workspace"}.`, "conflict", "Pick another name.");
+  }
+  const prep = await deps.handoff.prepare(name, repo, branch);
+  if (!prep.ok) return fail(prep.error);
+  const prompt = str(args.prompt).trim() || null;
+  const { url, expiresAt } = deps.handoff.createUpload({ name, workspace: prep.workspacePath, resumeId: transcriptId, prompt, autoMode: false });
+  const dir = `~/.claude/projects/${mungeCwd(cwd)}`;
+  const transcriptPath = transcriptId ? `${dir}/${transcriptId}.jsonl` : null;
+  const command = handoffUploadCommand(url, cwd, transcriptId);
+  return ok({
+    name, workspace: prep.workspacePath, branch,
+    transcript: transcriptPath ?? `newest .jsonl in ${dir}`,
+    command, expires_at: new Date(expiresAt).toISOString(),
+    next: "Run command in your local shell (it prints JSON with session_id when the server session has started). Then stop working locally; follow the server session with wait_for_session and read_session.",
+  });
 }
 
 /* ---------- JSON-RPC over Streamable HTTP ---------- */

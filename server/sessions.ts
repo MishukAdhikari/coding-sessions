@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { adoptHandoffTranscript } from "./handoff";
 import { Communicator } from "./communicator";
 import { communicator, connectors } from "./communicator-runtime";
 import type { Connectors } from "./connectors";
@@ -1772,6 +1773,20 @@ export async function launchSynced(
   ).get(name, rid, rid) as { id: number } | null;
   if (archived) db.query("DELETE FROM archive WHERE id = ?").run(archived.id);
   return { ok: true };
+}
+
+/**
+ * Handoff: adopt the transcript staged in <name>'s Workspace (`.cs-handoff/<id>.jsonl`)
+ * as a server conversation, so launchSynced(name, prompt, id) resumes it.
+ */
+export function adoptSyncedHandoff(rawName: string, resumeId: string): { ok: true; bytes: number } | { ok: false; error: string; code: string } {
+  if (!NAME_RE.test(rawName)) return { ok: false, code: "invalid_argument", error: "Name must be 1-31 chars: letters, numbers, dashes." };
+  const name = prefixedName(rawName);
+  if (!FULL_NAME_RE.test(name)) return { ok: false, code: "invalid_argument", error: "Name is too long once the prefix is added." };
+  const ws = join(WORKSPACES_DIR, name.toLowerCase());
+  if (!isWorkspacePath(ws) || !existsSync(ws)) return { ok: false, code: "not_found", error: "Workspace is missing — prepare first." };
+  const r = adoptHandoffTranscript({ workspace: ws, resumeId, projectsDir: PROJECTS_DIR });
+  return r.ok ? { ok: true, bytes: r.bytes } : r;
 }
 
 export interface WorkspaceState {

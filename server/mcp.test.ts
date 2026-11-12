@@ -347,3 +347,172 @@ test("restart_session restarts through the dependency and reports refusals as er
   expect((await call(deps, "request_secret", { name: "A_B", reason: "needed" })).isError).toBe(true);
   expect((await call(deps, "restart_session", { session_id: "m:cs-demo" })).isError).toBe(true);
 });
+
+/* ---------- agent ergonomics: codes, filters, reasons, handoff ---------- */
+
+test("tools/list keeps every existing tool, adds handoff_session, and annotates read-only and destructive tools", async () => {
+  const { deps } = harness();
+  const tools = (await rpc(deps, "tools/list")).json.result.tools as any[];
+  const names = tools.map((t) => t.name);
+  for (const name of ["agent_accounts", "agent_auth", "list_sessions", "read_session", "send_message", "press_keys", "wait_for_session",
+    "list_projects", "list_repos", "launch_session", "resume_session", "list_secrets", "secret_status", "request_secret",
+    "request_connector", "connector_status", "restart_session", "end_session", "handoff_session"]) expect(names).toContain(name);
+  const by = Object.fromEntries(tools.map((t) => [t.name, t]));
+  for (const ro of ["list_sessions", "read_session", "wait_for_session", "list_projects", "list_repos", "list_secrets", "secret_status", "connector_status", "agent_accounts"]) {
+    expect(by[ro].annotations.readOnlyHint).toBe(true);
+  }
+  for (const d of ["end_session", "restart_session", "agent_auth"]) expect(by[d].annotations.destructiveHint).toBe(true);
+  expect(by.handoff_session.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+  expect(by.handoff_session.inputSchema.required).toEqual(["name", "repo", "branch", "cwd"]);
+  expect(Object.keys(by.list_sessions.inputSchema.properties)).toEqual(["include_ended", "agent", "state", "query", "limit"]);
+  const init = (await rpc(deps, "initialize", { protocolVersion: "2025-06-18" })).json.result.instructions as string;
+  expect(init).toContain("handoff_session");
+  expect(init).toContain("structuredContent.error");
+});
+
+test("errors carry a code and a next step in structuredContent, and the next step in the text", async () => {
+  const { deps } = harness();
+  const missing = await call(deps, "read_session", { session_id: "m:cs-nope" });
+  expect(missing.isError).toBe(true);
+  expect(missing.structuredContent.error).toMatchObject({ code: "not_found" });
+  expect(missing.structuredContent.error.next).toContain("list_sessions");
+  expect(missing.content[0].text).toContain("Next: list_sessions");
+  expect((await call(deps, "read_session", {})).structuredContent.error.code).toBe("invalid_argument");
+  expect((await call(deps, "resume_session", { archive_id: "x" })).structuredContent.error.code).toBe("invalid_argument");
+  expect((await call(deps, "press_keys", { session_id: "m:cs-demo", keys: [] })).structuredContent.error.code).toBe("invalid_argument");
+  expect((await call(deps, "send_message", { session_id: "m:cs-demo", text: " ", submit: false })).structuredContent.error.code).toBe("invalid_argument");
+  const gone = harness({ sendText: async () => ({ ok: false, error: "No such session." }), sendKeys: async () => ({ ok: false, error: "No such session." }) });
+  expect((await call(gone.deps, "send_message", { session_id: "m:cs-x", text: "hi" })).structuredContent.error.code).toBe("not_found");
+  expect((await call(gone.deps, "press_keys", { session_id: "m:cs-x", keys: ["enter"] })).structuredContent.error.code).toBe("not_found");
+  expect((await call(gone.deps, "send_message", { session_id: "m:cs-demo", text: "hi" })).structuredContent.error.code).toBe("failed");
+  expect((await call(harness({ resume: async () => ({ ok: false, error: "No archived session with that id." }) }).deps, "resume_session", { archive_id: 9 }))
+    .structuredContent.error.code).toBe("not_found");
+});
+
+test("launch_session validates name, target and mode with clear codes before launching", async () => {
+  const launched: string[] = [];
+  const { deps } = harness({ launch: async ({ name }) => { launched.push(name); return name === "taken" ? { ok: false, error: "A session named “k-taken” is already running." } : { ok: true, id: `m:cs-${name}` }; } });
+  const code = async (args: object) => (await call(deps, "launch_session", args)).structuredContent.error?.code;
+  expect(await code({ name: "bad name!", project_id: 1 })).toBe("invalid_argument");
+  expect(await code({ name: "-x", project_id: 1 })).toBe("invalid_argument");
+  expect(await code({ name: "ok", project_id: 1, repo: "me/a" })).toBe("invalid_argument");
+  expect(await code({ name: "ok", project_id: 99 })).toBe("not_found");
+  expect(await code({ name: "ok", repo: "me/a", mode: "acp" })).toBe("invalid_argument");
+  expect(await code({ name: "ok", project_id: 1, mode: "gui" })).toBe("invalid_argument");
+  expect(await code({ name: "ok", agent: "gpt", project_id: 1 })).toBe("invalid_argument");
+  expect(launched).toEqual([]);
+  expect(await code({ name: "taken", project_id: 1 })).toBe("conflict");
+  expect((await call(deps, "launch_session", { name: "fine", repo: "me/a" })).structuredContent).toMatchObject({ session_id: "m:cs-fine", launched: true });
+});
+
+test("list_sessions filters by agent, state and query, bounds by limit, and adds mode, PR links and pending requests", async () => {
+  const sessions = [
+    session({ id: "m:cs-a", name: "k-alpha", provider: "claude", waiting: true }),
+    session({ id: "m:cs-b", name: "k-beta", provider: "codex", busy: true, waiting: false, mode: "acp" }),
+    session({ id: "m:cs-c", name: "k-gamma", provider: "claude", busy: true, waiting: false, project: "/srv/shop" }),
+  ];
+  const { deps } = harness({
+    listSessions: async () => sessions,
+    listArchive: () => [
+      { id: 1, name: "k-old", provider: "claude", project: "/srv/demo", model: null, claudeUrl: null, endedAt: 0, canResume: true } as any,
+      { id: 2, name: "k-older", provider: "codex", project: "/srv/demo", model: null, claudeUrl: null, endedAt: 0, canResume: true } as any,
+    ],
+    sessionExtras: (list) => new Map(list.map((s) => [s.id, {
+      prs: s.id === "m:cs-a" ? [{ url: "https://github.com/me/a/pull/7", repo: "me/a", number: 7, state: "open", title: "Fix" }] : [],
+      requests: s.id === "m:cs-c" ? [{ id: "r1", kind: "secret", name: "API_KEY" }] : [],
+    }])),
+  });
+  const list = async (args: object) => (await call(deps, "list_sessions", args)).structuredContent;
+  const all = await list({});
+  expect(all.total).toBe(3);
+  expect(all.sessions[0]).toMatchObject({ id: "m:cs-a", session_id: "m:cs-a", mode: "terminal", prs: [{ number: 7, state: "open" }], pending_requests: [] });
+  expect(all.sessions[1].mode).toBe("acp");
+  expect(all.sessions[2].pending_requests).toEqual([{ id: "r1", kind: "secret", name: "API_KEY" }]);
+  expect((await list({ agent: "codex" })).sessions.map((s: any) => s.id)).toEqual(["m:cs-b"]);
+  expect((await list({ state: "working" })).sessions.map((s: any) => s.id)).toEqual(["m:cs-b", "m:cs-c"]);
+  expect((await list({ query: "SHOP" })).sessions.map((s: any) => s.id)).toEqual(["m:cs-c"]);
+  expect(await list({ limit: 1 })).toMatchObject({ total: 3, truncated: true });
+  expect((await list({ limit: 1 })).sessions).toHaveLength(1);
+  const ended = await list({ include_ended: true, agent: "codex" });
+  expect(ended.ended.map((a: any) => a.archive_id)).toEqual([2]);
+  expect(ended.ended_total).toBe(1);
+  // Without the dependency the lists stay empty rather than failing.
+  expect((await call(harness().deps, "list_sessions", {})).structuredContent.sessions[0]).toMatchObject({ prs: [], pending_requests: [] });
+});
+
+test("read_session returns mode, pending requests and the next step; a Chat session's permission request reads as asking", async () => {
+  const acp = session({ mode: "acp", asking: true, waiting: true });
+  const { deps } = harness({
+    listSessions: async () => [acp],
+    readScreen: async () => ({ ok: true, value: "Agent wants to run `rm -rf build`\nOptions: Allow once (allow) | Reject (reject)" }),
+    sessionExtras: () => new Map([[acp.id, { prs: [], requests: [{ id: "r2", kind: "connector", name: "KazTrack" }] }]]),
+  });
+  const r = (await call(deps, "read_session", { session_id: "m:cs-demo" })).structuredContent;
+  expect(r).toMatchObject({ mode: "acp", state: "asking", pending_requests: [{ name: "KazTrack" }] });
+  expect(r.screen).toContain("Allow once");
+  expect(r.next).toContain("send_message");
+  expect(r.note).toContain("secret_status");
+  const terminal = (await call(harness().deps, "read_session", { session_id: "m:cs-demo" })).structuredContent;
+  expect(terminal).toMatchObject({ mode: "terminal", state: "waiting", pending_requests: [] });
+  expect(terminal.next).toContain("send_message");
+});
+
+test("wait_for_session says why it stopped", async () => {
+  const reason = async (over: Partial<McpDeps>, timeout = 10) =>
+    (await call(harness(over).deps, "wait_for_session", { session_id: "m:cs-demo", timeout_seconds: timeout })).structuredContent;
+  expect(await reason({})).toMatchObject({ reason: "turn_finished", timed_out: false });
+  expect(await reason({ listSessions: async () => [session({ asking: true })] })).toMatchObject({ reason: "asking" });
+  expect(await reason({ listSessions: async () => [] })).toMatchObject({ reason: "ended", state: "ended" });
+  expect(await reason({ listSessions: async () => [session({ busy: true, waiting: false })] })).toMatchObject({ reason: "timeout", timed_out: true, next: "wait_for_session again" });
+  expect(await reason({ listSessions: async () => [session({ provider: "cmd:x" as any })] })).toMatchObject({ reason: "screen_settled", state: "running" });
+});
+
+function handoffHarness(state: "none" | "live" | "resumable" = "none") {
+  const tickets: any[] = [];
+  const prepared: any[] = [];
+  const h = harness({
+    handoff: {
+      status: async (name) => ({ ok: true, status: { state, name: `k-${name}`, workspacePath: `/home/u/workspaces/k-${name}` } }),
+      prepare: async (name, repo, branch) => { prepared.push([name, repo, branch]); return { ok: true, workspacePath: `/home/u/workspaces/k-${name}` }; },
+      createUpload: (t) => { tickets.push(t); return { url: "https://sessions.example.com/mcp/handoff/cshand_abcdefghijklmnopqrstuvwxyz", expiresAt: 900_000 }; },
+    },
+  });
+  return { ...h, tickets, prepared };
+}
+
+test("handoff_session prepares the branch and returns a one-time upload command, never asking for the transcript itself", async () => {
+  const h = handoffHarness();
+  const r = await call(h.deps, "handoff_session", { name: "login-fix", repo: "me/app", branch: "fix/login", cwd: "/Users/me/app", transcript_id: "abc-123", prompt: "now add tests" });
+  expect(r.isError).toBeUndefined();
+  const data = r.structuredContent;
+  expect(h.prepared).toEqual([["login-fix", "me/app", "fix/login"]]);
+  expect(h.tickets).toEqual([{ name: "login-fix", workspace: "/home/u/workspaces/k-login-fix", resumeId: "abc-123", prompt: "now add tests", autoMode: false }]);
+  expect(data.command).toContain("https://sessions.example.com/mcp/handoff/cshand_");
+  expect(data.command).toContain('"$HOME"/.claude/projects/-Users-me-app/abc-123.jsonl');
+  expect(data.transcript).toBe("~/.claude/projects/-Users-me-app/abc-123.jsonl");
+  expect(data.expires_at).toBe(new Date(900_000).toISOString());
+  expect(data.next).toContain("wait_for_session");
+  // No transcript id: the command picks the newest transcript for cwd.
+  const newest = (await call(h.deps, "handoff_session", { name: "x", repo: "me/app", branch: "b", cwd: "/Users/me/app" })).structuredContent;
+  expect(newest.command).toContain("ls -t");
+  expect(h.tickets[1].resumeId).toBeNull();
+  // The schema has no field for transcript content.
+  const tool = ((await rpc(h.deps, "tools/list")).json.result.tools as any[]).find((t) => t.name === "handoff_session");
+  expect(Object.keys(tool.inputSchema.properties)).toEqual(["name", "repo", "branch", "cwd", "transcript_id", "prompt", "agent"]);
+});
+
+test("handoff_session validates its input and refuses names already in use", async () => {
+  const h = handoffHarness();
+  const code = async (args: object, deps = h.deps) => (await call(deps, "handoff_session", args)).structuredContent.error?.code;
+  const base = { name: "a", repo: "me/app", branch: "b", cwd: "/w" };
+  expect(await code({ ...base, name: "bad name" })).toBe("invalid_argument");
+  expect(await code({ ...base, repo: "" })).toBe("invalid_argument");
+  expect(await code({ ...base, branch: "" })).toBe("invalid_argument");
+  expect(await code({ ...base, cwd: "relative/dir" })).toBe("invalid_argument");
+  expect(await code({ ...base, transcript_id: "../../etc/passwd" })).toBe("invalid_argument");
+  expect(await code({ ...base, agent: "codex" })).toBe("invalid_argument");
+  expect(h.prepared).toEqual([]);
+  expect(await code(base, handoffHarness("live").deps)).toBe("conflict");
+  expect(await code(base, handoffHarness("resumable").deps)).toBe("conflict");
+  expect(await code(base, harness().deps)).toBe("unavailable");
+});

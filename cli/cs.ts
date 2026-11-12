@@ -11,6 +11,7 @@ import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
+  claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
   parseServerArgs, prettyProject, RUN, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
@@ -849,6 +850,68 @@ async function cmdRun(getCfg: () => Config, args: string[]): Promise<void> {
   console.log(link ? `\nOpen in Claude:  ${link}` : "\nStarting up — it'll appear in the app and on your phone shortly.");
 }
 
+// Continue this folder's local Claude Code conversation on the server, with its
+// whole history: rsync the tree as a Synced Launch does, upload the transcript over
+// SSH (never in an HTTPS body), and launch resuming it. See docs/cli.md#handoff.
+async function cmdHandoff(cfg: Config, args: string[]): Promise<void> {
+  const opts = parseHandoffArgs(args);
+  if (opts.error) die(opts.error);
+  if (opts.agent === "codex") {
+    die("Codex handoff isn't supported yet: the server's Synced Launch runs Claude Code only, and resuming a Codex\n" +
+        "  rollout from another folder isn't verified. Use `cs --server \"<prompt>\"` to start fresh instead.");
+  }
+  if (!insideGitRepo()) die("not inside a git checkout — cd into your project first.");
+  if (!cfg.ssh) die("no SSH host configured — the tree and transcript go up over SSH. Add one with `cs login`.");
+
+  const cwd = process.cwd();
+  const t = findClaudeTranscript(homedir(), cwd);
+  if (!t) die(`no Claude Code conversation found for this folder (looked in ${claudeProjectDir(homedir(), cwd)}).`);
+  const branch = capture(["git", "branch", "--show-current"]).out;
+  const repo = repoSlug();
+  if (!repo) die("couldn't read the origin remote.");
+  const raw = sanitizeName(opts.name || branch);
+  if (!raw) die("couldn't derive a session name from the branch. Pass one: cs handoff <name>.");
+
+  console.log(`→ ${raw}   (${repo}${branch ? " @ " + branch : ""})`);
+  console.log(`Conversation ${t.id}  ${fmtBytes(t.bytes)}  (${t.path})`);
+  if (opts.compactHint || t.bytes > 5 * 1024 * 1024) {
+    console.log(paint("Tip: the server re-reads the whole conversation on its first turn. For a long one, run /compact\n" +
+      "  in the local session first, then hand off.", "33"));
+  }
+
+  const st = await api(cfg, `/api/synced/status?name=${encodeURIComponent(raw)}`);
+  if (st.state !== "none") {
+    die(`"${st.name}" already ${st.state === "live" ? "runs on the server" : "has a workspace on the server"}. ` +
+        `Hand off under another name: cs handoff <name>`);
+  }
+
+  process.stdout.write("Preparing workspace on the server… ");
+  const prep = await api(cfg, "/api/synced/prepare", { method: "POST", body: JSON.stringify({ name: raw, repo, branch }) });
+  console.log("done.");
+  const diff = localDivergence(branch);
+  if (diff) {
+    console.log(`Syncing local changes up (${diff}; gitignored paths skipped)…`);
+    if (rsyncWorkTreeUp(cfg, prep.workspacePath) !== 0) die("rsync failed — check your SSH access to the server.");
+  } else {
+    console.log(`Workspace matches origin/${branch} — no upload needed.`);
+  }
+
+  console.log(`Uploading the conversation (${fmtBytes(t.bytes)}) over SSH…`);
+  const up = Bun.spawn(["ssh", "-o", "BatchMode=yes", cfg.ssh, handoffReceiveCommand(prep.workspacePath, t.id)], {
+    stdin: Bun.file(t.path), stdout: "inherit", stderr: "inherit",
+  });
+  if (await up.exited !== 0) die("transcript upload failed — check your SSH access to the server.");
+
+  const instruction = opts.instruction;
+  process.stdout.write(instruction ? "Launching, resuming with your instruction… " : "Launching, resuming the conversation… ");
+  await api(cfg, "/api/synced/launch", { method: "POST", body: JSON.stringify({ name: raw, prompt: instruction, resumeId: t.id, handoff: true }) });
+  console.log("started.");
+
+  const link = await pollClaudeUrl(cfg, st.name);
+  console.log(link ? `\nOpen in Claude:  ${link}` : "\nStarting up — it'll appear in the app and on your phone shortly.");
+  console.log(`The server session ${st.name} now carries this conversation. You can stop the local agent.`);
+}
+
 async function cmdUpgrade(): Promise<void> {
   if (capture(["git", "-C", REPO_DIR, "rev-parse", "--is-inside-work-tree"]).out !== "true") {
     die(`can't self-update — ${REPO_DIR} isn't a git checkout. Update it however you installed it.`);
@@ -994,6 +1057,10 @@ USAGE
   cs --server --auto …           start claude in auto mode
   cs --server=<name> "..."       run on another saved server (also -S <name>)
 
+  cs handoff [name] ["<next>"]   continue this folder's Claude Code conversation on the
+                                   server with its full history (tree + transcript over SSH);
+                                   --compact-hint, --agent claude (codex: not yet)
+
   cs list [--json]               list sessions running on the server
   cs end <name> [-y]             end a running session (-y skips the confirm)
   cs open [name]                 print, open, and copy the claude.ai link
@@ -1033,6 +1100,7 @@ try {
     case "ssh": await cmdSsh(cfg(), args[0]); break;
     case "term": case "attach": await cmdTerm(cfg(), args); break;
     case "mirror": await cmdMirror(cfg(), args[0]); break;
+    case "handoff": await cmdHandoff(cfg(), args); break;
     case "pull": process.exit(run(["git", "pull"])); break;
     case "server": await cmdServer(args); break;
     case "login": await cmdLogin(chosenServer); break;
