@@ -7,18 +7,18 @@
  * Launch additionally rsyncs your working tree up over SSH. Agents talk to the
  * server through MCP instead — `cs mcp add` sets that up. See docs/cli.md.
  */
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
-  claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
+  rsyncIgnoredExcludes, rsyncWorkTreeArgs, claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
   parseServerArgs, prettyProject, RUN, renderLiveFrame, newLiveRenderState, liveBackoffMs, liveSocketUrl, type LiveFrame, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
 import { runClient } from "../server/socket-client";
 import { HANDOFF_MAX_BYTES } from "../server/handoff";
-import { chooseHandoffMode, estimateTranscriptTokens, fmtTokens } from "../server/handoff-modes";
+import { HANDOFF_CLIENT_WAIT_MS, HANDOFF_POLL_MS, chooseHandoffMode, estimateTranscriptTokens, fmtTokens } from "../server/handoff-modes";
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "cs");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -381,16 +381,17 @@ async function cmdSsh(cfg: Config, nameArg: string | undefined): Promise<void> {
 // `--filter=:- .gitignore` deletes vendor/** on the receiver.) The `P` rules keep
 // those inherited artifacts while `--delete` still prunes genuinely-removed files.
 function rsyncWorkTreeUp(cfg: Config, workspacePath: string): number {
-  return run([
-    "rsync", "-az", "--delete",
-    "--filter=:- .gitignore",
-    "--filter=P /vendor",
-    "--filter=P /node_modules",
-    "--filter=P /.env",
-    "--exclude=.git/worktrees",
-    "-e", "ssh",
-    "./", `${cfg.ssh}:${workspacePath}/`,
-  ]);
+  // git lists what it ignores and rsync skips exactly that (see rsyncIgnoredExcludes).
+  const ls = Bun.spawnSync(["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { stdout: "pipe", stderr: "inherit" });
+  if (ls.exitCode !== 0) return ls.exitCode || 1;
+  const dir = mkdtempSync(join(tmpdir(), "cs-rsync-"));
+  try {
+    const file = join(dir, "exclude");
+    writeFileSync(file, rsyncIgnoredExcludes(ls.stdout.toString()), { mode: 0o600 });
+    return run(rsyncWorkTreeArgs(file, `${cfg.ssh}:${workspacePath}/`));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Ensure <name>'s workspace exists on the server and, on first creation only,
@@ -1014,8 +1015,8 @@ async function cmdHandoff(cfg: Config, args: string[]): Promise<void> {
     : planned === "compact" ? "Compacting a copy on the server, then resuming (a minute or two)… "
     : "Writing HANDOFF.md on the server, then starting a fresh session (a minute or two)… ");
   let job = await api(cfg, "/api/synced/launch", { method: "POST", body: JSON.stringify({ name: raw, prompt: instruction, resumeId: t.id, handoff: true, mode: opts.mode }) });
-  for (let i = 0; job.state === "preparing" && i < 180; i++) {
-    await Bun.sleep(5000);
+  for (let i = 0; job.state === "preparing" && i < HANDOFF_CLIENT_WAIT_MS / HANDOFF_POLL_MS; i++) {
+    await Bun.sleep(HANDOFF_POLL_MS);
     job = await api(cfg, `/api/synced/handoff?name=${encodeURIComponent(raw)}`);
   }
   if (job.state === "failed") die(`the handoff failed on the server: ${job.error ?? "unknown error"}`);

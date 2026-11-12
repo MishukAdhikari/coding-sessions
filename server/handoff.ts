@@ -14,7 +14,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { appendFileSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, constants as fsc } from "node:fs";
 import { join } from "node:path";
-import { HANDOFF_ORIGIN_FILE, type HandoffMode, type RequestedHandoffMode } from "./handoff-modes";
+import { HANDOFF_CLIENT_WAIT_MS, HANDOFF_ORIGIN_FILE, HANDOFF_POLL_MS, type HandoffMode, type RequestedHandoffMode } from "./handoff-modes";
 
 export const HANDOFF_DIR = ".cs-handoff";
 export const HANDOFF_MAX_BYTES = 256 * 1024 * 1024;
@@ -353,6 +353,6 @@ export function handoffUploadCommand(uploadUrl: string, cwd: string, transcriptI
     `for p in "$d"/p*; do gzip -c "$p" > "$p.gz" && ${curl} -X PUT -H 'content-type: application/octet-stream' --data-binary @"$p.gz" ${q(uploadUrl)}"?part=$i&gz=1" >/dev/null || { rm -rf "$d"; exit 1; }; i=$((i+1)); done`,
     `rm -rf "$d"; r=$(curl -sS --fail -X POST ${q(uploadUrl)}"?done=$i") || exit 1; echo "$r"`,
     // compact and lean prepare on the server first; wait (up to 15 minutes) for the launch.
-    `case "$r" in *'"state":"preparing"'*) n=0; while [ $n -lt 180 ]; do sleep 5; n=$((n+1)); s=$(curl -sS ${q(uploadUrl)}"?status") || continue; case "$s" in *'"state":"preparing"'*) ;; *) echo "$s"; break;; esac; done;; esac`,
+    `case "$r" in *'"state":"preparing"'*) n=0; while [ $n -lt ${HANDOFF_CLIENT_WAIT_MS / HANDOFF_POLL_MS} ]; do sleep ${HANDOFF_POLL_MS / 1000}; n=$((n+1)); s=$(curl -sS ${q(uploadUrl)}"?status") || continue; case "$s" in *'"state":"preparing"'*) ;; *) echo "$s"; break;; esac; done;; esac`,
   ].join("\n") + "\n)";
 }

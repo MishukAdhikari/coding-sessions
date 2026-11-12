@@ -157,7 +157,13 @@ first, so they take a minute or two; `cs handoff` waits for the launch.
 
 On a server in standard permission mode, a fresh workspace still shows Claude Code's
 folder-trust prompt on the first interactive start, as any Synced Launch does: answer
-it in the app (or with `read_session` and `press_keys`).
+it in the app (or with `read_session` and `press_keys`). Its default choice is
+**No, exit**, which ends the session, so pick **Yes, I trust this folder**
+(`press_keys ["down", "enter"]`), never a bare Enter. On a server where Claude Code has
+never run interactively, the theme picker and security notes come first (Enter on each).
+`read_session` and `wait_for_session` report these screens as `state: "asking"` with a
+`startup_prompt` (`theme`, `security_notes` or `folder_trust`) saying how to answer, and a
+queued launch prompt waits until they are answered instead of being typed into them.
 
 Codex (`--agent codex`) is refused for now: the server's Synced Launch runs Claude
 Code only, and resuming a Codex rollout from another folder is not verified yet.

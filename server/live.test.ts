@@ -48,6 +48,18 @@ describe("frames", () => {
     expect(f[2]).toMatchObject({ text: "Edit a.ts (a.ts +2 -1)" });
     expect(f[3]).toMatchObject({ options: ["Allow", "Reject"] });
   });
+
+  test("an ACP tool call named in a later update shows its real title once (claude-agent-acp)", () => {
+    // As claude-agent-acp wrote them on a server: generic title first, then the command.
+    const up = (update: object, seq: number): AcpEvent => ({ seq, at: "t", kind: "update", update } as AcpEvent);
+    const f = acpFrames([
+      up({ toolCallId: "t1", sessionUpdate: "tool_call", rawInput: {}, status: "pending", title: "Terminal", kind: "execute", content: [] }, 6),
+      up({ toolCallId: "t1", sessionUpdate: "tool_call_update", rawInput: { command: "echo hello-acp" }, title: "echo hello-acp" }, 7),
+      up({ toolCallId: "t1", sessionUpdate: "tool_call_update", rawInput: { command: "echo hello-acp", description: "Print" }, content: [] }, 8),
+      up({ toolCallId: "t1", sessionUpdate: "tool_call_update", status: "completed", rawOutput: "hello-acp" }, 12),
+    ]);
+    expect(f).toEqual([{ type: "tool", text: "echo hello-acp", at: "t" }]);
+  });
 });
 
 describe("LiveFeed", () => {

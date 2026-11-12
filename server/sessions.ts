@@ -1,6 +1,6 @@
 import { config } from "./config";
 import { adoptHandoffTranscript, mungeCwd, type HandoffJob } from "./handoff";
-import { COMPACT_FOCUS, HANDOFF_DOC, HANDOFF_DOC_PROMPT, HANDOFF_ORIGIN_FILE, chooseHandoffMode, estimateTextTokens, estimateTranscriptTokens, leanFirstPrompt, searchTranscript, type RequestedHandoffMode, type TranscriptSearch } from "./handoff-modes";
+import { COMPACT_FOCUS, HANDOFF_DOC, HANDOFF_DOC_PROMPT, HANDOFF_ORIGIN_FILE, HANDOFF_STEP_TIMEOUT_MS, chooseHandoffMode, estimateTextTokens, estimateTranscriptTokens, leanFirstPrompt, searchTranscript, type RequestedHandoffMode, type TranscriptSearch } from "./handoff-modes";
 import { Communicator } from "./communicator";
 import { communicator, connectors } from "./communicator-runtime";
 import type { Connectors } from "./connectors";
@@ -2215,7 +2215,7 @@ export async function killAll(): Promise<{ killed: number }> {
 /* ---------- handoff modes: full, compact, lean (docs/cli.md#handoff) ---------- */
 
 const handoffJobs = new Map<string, HandoffJob>();
-const HANDOFF_PRINT_TIMEOUT_MS = 10 * 60_000;
+const HANDOFF_PRINT_TIMEOUT_MS = HANDOFF_STEP_TIMEOUT_MS;
 
 /** What `claude -p --output-format json` answered. */
 export interface ClaudePrintResult { ok: boolean; session_id?: string; result?: string; error?: string }

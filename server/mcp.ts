@@ -9,6 +9,7 @@
 import type { ArchivedInfo, SessionInfo } from "./sessions";
 import type { IoResult } from "./session-io";
 import { isCodexInputReady } from "./codex-startup";
+import { claudeStartupPrompt, type ClaudeStartupPrompt } from "./claude-startup";
 import { sessionActivity } from "./session-activity";
 import type { SessionProvider } from "./session-provider";
 import { SecretRequestError, type SecretRequests } from "./secret-requests";
@@ -385,6 +386,12 @@ async function findSession(deps: McpDeps, id: string): Promise<SessionInfo | und
  * identical screens in a row do — and so they do for a "working" agent that cannot
  * report a question, so an approval prompt does not hold the caller until timeout.
  */
+/** A Claude Code terminal session blocked on a first-run screen (theme, security notes, folder trust). */
+function startupPromptOf(s: SessionInfo | undefined, screen: string): ClaudeStartupPrompt | null {
+  if (!s || s.status === "ended" || s.provider !== "claude" || s.mode === "acp" || !screen) return null;
+  return claudeStartupPrompt(screen);
+}
+
 export async function waitForSession(deps: McpDeps, id: string, timeoutSec: number, lines: number) {
   const started = deps.now();
   const deadline = started + timeoutSec * 1000;
@@ -397,13 +404,16 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
     const turnState = entry?.turnState ?? false;
     // A "working" state can hide a question or approval prompt the agent never reports.
     const hidden = turnState && entry?.asking === false;
-    const state = sessionState(s, turnState);
-    const screen = state === "ended" ? null : await deps.readScreen(id, lines);
+    const reported = sessionState(s, turnState);
+    const screen = reported === "ended" ? null : await deps.readScreen(id, lines);
     const text = screen?.ok ? screen.value : "";
+    // Claude Code's first-run screens are in no transcript: the turn state misses them.
+    const startup = startupPromptOf(s, text);
+    const state: SessionState = startup ? "asking" : reported;
     same = text && text === last ? same + 1 : 0;
     last = text;
     const settled = deps.now() - started >= SETTLE_MS;
-    const done = state === "ended"
+    const done = state === "ended" || !!startup
       || (settled && (state === "waiting" || state === "asking"))
       || ((state === "running" || (hidden && state === "working")) && same >= 2);
     const timedOut = deps.now() >= deadline;
@@ -413,7 +423,10 @@ export async function waitForSession(deps: McpDeps, id: string, timeoutSec: numb
         : state === "asking" ? "asking"
         : state === "waiting" ? "turn_finished"
         : "screen_settled";
-      return { session_id: id, state, reason, timed_out: !done, waited_sec: Math.round((deps.now() - started) / 1000), screen: screen?.ok ? screen.value : null };
+      return {
+        session_id: id, state, reason, timed_out: !done, waited_sec: Math.round((deps.now() - started) / 1000),
+        ...(startup ? { startup_prompt: startup } : {}), screen: screen?.ok ? screen.value : null,
+      };
     }
     await deps.sleep(2000);
   }
@@ -459,7 +472,8 @@ async function waitUntilReady(deps: McpDeps, id: string, timeoutMs = 60_000): Pr
     if (s?.status === "running" && s.phase !== "failed" && !s.startupWaitingForTrust
       && (!preHookCodex || (s.phase === "awaiting_session_start" && s.startupInputReady))) {
       const screen = await deps.readScreen(id, 40);
-      const text = screen.ok && (!preHookCodex || isCodexInputReady(screen.value)) ? screen.value.trim() : "";
+      // Never type into Claude Code's first-run screens: Enter on the trust question exits.
+      const text = screen.ok && (!preHookCodex || isCodexInputReady(screen.value)) && !startupPromptOf(s, screen.value) ? screen.value.trim() : "";
       same = text && text === last ? same + 1 : 0;
       last = text;
       if (same >= 2) return true;
@@ -548,14 +562,17 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       if (!s) return notFound(id);
       const screen = await deps.readScreen(id, int(args.lines, 80, 5, 400));
       if (!screen.ok) return fail(screen.error);
-      const state = sessionState(s, turnStateFor(deps, s.provider));
+      const startup = startupPromptOf(s, screen.value);
+      const state: SessionState = startup ? "asking" : sessionState(s, turnStateFor(deps, s.provider));
       const extras = extrasFor(deps, [s]).get(s.id) ?? { prs: [], requests: [] };
       const acp = s.mode === "acp";
-      const next = state === "asking"
+      const next = startup ? startup.how
+        : state === "asking"
         ? (acp ? "send_message with one of the permission options above (its name or id)." : "press_keys for a menu, or send_message to answer.")
         : state === "waiting" ? "send_message with the next instruction." : state === "ended" ? "resume_session (list_sessions include_ended)." : "wait_for_session";
       return ok({
-        session_id: id, name: s.name, agent: s.provider, mode: acp ? "acp" : "terminal", state, screen: screen.value,
+        session_id: id, name: s.name, agent: s.provider, mode: acp ? "acp" : "terminal", state,
+        ...(startup ? { startup_prompt: startup } : {}), screen: screen.value,
         prs: extras.prs, pending_requests: extras.requests,
         ...(extras.requests.length ? { note: "The session waits on the member for a secret or connector; poll secret_status / connector_status." } : {}),
         next,
