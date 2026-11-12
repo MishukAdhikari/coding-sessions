@@ -11,12 +11,13 @@ import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
-  claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs,
+  claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
   parseServerArgs, prettyProject, RUN, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
 import { runClient } from "../server/socket-client";
+import { HANDOFF_MAX_BYTES } from "../server/handoff";
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "cs");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -865,7 +866,19 @@ async function cmdHandoff(cfg: Config, args: string[]): Promise<void> {
 
   const cwd = process.cwd();
   const t = findClaudeTranscript(homedir(), cwd);
-  if (!t) die(`no Claude Code conversation found for this folder (looked in ${claudeProjectDir(homedir(), cwd)}).`);
+  const links = symlinkedTranscripts(homedir(), cwd);
+  if (!t) {
+    die(links.length
+      ? `the only Claude Code transcripts for this folder are symlinks (${links[0]!.name}); cs handoff refuses symlinks.\n` +
+        `  Replace it with the file itself, then try again.`
+      : `no Claude Code conversation found for this folder (looked in ${claudeProjectDir(homedir(), cwd)}).`);
+  }
+  if (t.bytes > HANDOFF_MAX_BYTES) {
+    die(`the conversation is ${fmtBytes(t.bytes)}; the server takes at most ${fmtBytes(HANDOFF_MAX_BYTES)}. Run /compact in the local session first.`);
+  }
+  if (links.length && links[0]!.mtimeMs > t.mtimeMs) {
+    console.log(paint(`Note: skipped the newer symlinked transcript ${links[0]!.name} (symlinks are refused); handing off ${t.id}.`, "33"));
+  }
   const branch = capture(["git", "branch", "--show-current"]).out;
   const repo = repoSlug();
   if (!repo) die("couldn't read the origin remote.");

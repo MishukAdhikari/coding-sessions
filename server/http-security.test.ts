@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolvePublicFile, requestClientIp, allowsApiMutation, parseTrustedProxies } from "./http-security";
+import { resolvePublicFile, requestClientIp, allowsApiMutation, parseTrustedProxies, internalErrorResponse } from "./http-security";
 
 test("static files cannot traverse, expose dotfiles, or escape through symlinks", () => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "xs-static-"));
@@ -54,4 +54,15 @@ test("forwarded addresses are trusted from configured proxy ranges, such as a co
   expect(requestClientIp(req, "172.31.250.3", true)).toBe("172.31.250.3");
   expect(parseTrustedProxies("")).toEqual([]);
   expect(() => parseTrustedProxies("172.31.250.0/99")).toThrow("CS_TRUSTED_PROXIES");
+});
+
+test("an unhandled error answers a generic 500 without the stack or source", async () => {
+  const logged: string[] = [];
+  const res = internalErrorResponse(new Error("ENOENT: /var/lib/secret/path"), (m) => logged.push(m));
+  expect(res.status).toBe(500);
+  const body = await res.text();
+  expect(body).not.toContain("ENOENT");
+  expect(body).not.toContain("/var/lib");
+  expect(JSON.parse(body)).toEqual({ error: "Internal server error.", code: "internal" });
+  expect(logged.join("")).toContain("ENOENT");
 });

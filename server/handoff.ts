@@ -126,6 +126,9 @@ export class HandoffUploads {
 
   create(ticket: Omit<HandoffTicket, "expiresAt">): { token: string; expiresAt: number } {
     this.expire();
+    // A new link for a Workspace replaces any earlier one: its staging folder is wiped
+    // below, so the earlier link could only fail. Spend it now with a clear answer.
+    for (const [t, u] of this.uploads) if (u.workspace === ticket.workspace) this.uploads.delete(t);
     const token = `cshand_${randomBytes(32).toString("base64url")}`;
     const expiresAt = this.now() + HANDOFF_UPLOAD_TTL_MS;
     const stageDir = join(ticket.workspace, HANDOFF_DIR);
@@ -154,9 +157,15 @@ export class HandoffUploads {
       this.discard(token);
       return { ok: false, status: 413, code: "too_large", error: `The transcript is over ${this.maxBytes} bytes. Run /compact locally and try again.` };
     }
-    const st = lstatSync(u.tmp);
-    if (st.isSymbolicLink() || !st.isFile()) { this.discard(token); return { ok: false, status: 409, code: "unsafe_path", error: "Upload file replaced; refusing." }; }
-    appendFileSync(u.tmp, chunk);
+    try {
+      const st = lstatSync(u.tmp);
+      if (st.isSymbolicLink() || !st.isFile()) { this.discard(token); return { ok: false, status: 409, code: "unsafe_path", error: "Upload file replaced; refusing." }; }
+      appendFileSync(u.tmp, chunk);
+    } catch {
+      // The staging folder went away under the link (the Workspace was removed or reset).
+      this.discard(token);
+      return { ok: false, status: 404, code: "not_found", error: "This upload link is unknown, used or expired. Call handoff_session again." };
+    }
     u.parts++; u.bytes += chunk.byteLength;
     return { ok: true, parts: u.parts, bytes: u.bytes };
   }
@@ -173,12 +182,18 @@ export class HandoffUploads {
     if (parts !== u.parts) { rmSync(join(u.workspace, HANDOFF_DIR), { recursive: true, force: true }); return { ok: false, status: 409, code: "conflict", error: `Got ${u.parts} parts, the command said ${parts}. Call handoff_session again.` }; }
     if (!u.bytes) { rmSync(join(u.workspace, HANDOFF_DIR), { recursive: true, force: true }); return { ok: false, status: 400, code: "invalid_argument", error: "Nothing was uploaded." }; }
     let id = u.resumeId;
-    if (!id) {
-      const head = readFileSync(u.tmp, "utf8").slice(0, 256 * 1024);
-      id = transcriptSessionId(head);
-      if (!id) { rmSync(join(u.workspace, HANDOFF_DIR), { recursive: true, force: true }); return { ok: false, status: 400, code: "invalid_argument", error: "Couldn't read the conversation id from the transcript; pass transcript_id." }; }
+    try {
+      if (!id) {
+        const head = readFileSync(u.tmp, "utf8").slice(0, 256 * 1024);
+        id = transcriptSessionId(head);
+        if (!id) { rmSync(join(u.workspace, HANDOFF_DIR), { recursive: true, force: true }); return { ok: false, status: 400, code: "invalid_argument", error: "Couldn't read the conversation id from the transcript; pass transcript_id." }; }
+      }
+      renameSync(u.tmp, stagedTranscriptPath(u.workspace, id));
+    } catch {
+      // The staging folder went away under the link (the Workspace was removed or reset).
+      rmSync(join(u.workspace, HANDOFF_DIR), { recursive: true, force: true });
+      return { ok: false, status: 404, code: "not_found", error: "The upload is gone from the server (its workspace was reset). Call handoff_session again." };
     }
-    renameSync(u.tmp, stagedTranscriptPath(u.workspace, id));
     const { parts: _p, bytes: _b, tmp: _t, done: _d, ...ticket } = u;
     return { ok: true, ticket: { ...ticket, resumeId: id } };
   }
@@ -255,6 +270,8 @@ export function handoffUploadCommand(uploadUrl: string, cwd: string, transcriptI
   return "(\n" + [
     `f=${file}`,
     `[ -f "$f" ] && [ ! -L "$f" ] || { echo "no transcript at $f" >&2; exit 1; }`,
+    // Refuse an oversized transcript before sending a byte, not after minutes of upload.
+    `[ "$(wc -c < "$f")" -le ${HANDOFF_MAX_BYTES} ] || { echo "the transcript is over ${HANDOFF_MAX_BYTES} bytes; run /compact locally first" >&2; exit 1; }`,
     `d=$(mktemp -d) && split -b ${HANDOFF_PART_BYTES} "$f" "$d/p" && i=0`,
     `for p in "$d"/p*; do curl -sS --fail -X PUT -H 'content-type: application/octet-stream' --data-binary @"$p" ${q(uploadUrl)}"?part=$i" >/dev/null || { rm -rf "$d"; exit 1; }; i=$((i+1)); done`,
     `rm -rf "$d"; curl -sS --fail -X POST ${q(uploadUrl)}"?done=$i"`,

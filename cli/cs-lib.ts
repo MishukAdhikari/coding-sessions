@@ -266,6 +266,26 @@ export function findClaudeTranscript(home: string, cwd: string): LocalTranscript
   return best;
 }
 
+/**
+ * Symlinked transcripts in the folder, newest first, by the link's own mtime.
+ * findClaudeTranscript never follows them, so `cs handoff` names them instead of
+ * silently handing off an older conversation or claiming there is none.
+ */
+export function symlinkedTranscripts(home: string, cwd: string): Array<{ name: string; mtimeMs: number }> {
+  const dir = claudeProjectDir(home, cwd);
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return []; }
+  const out: Array<{ name: string; mtimeMs: number }> = [];
+  for (const f of names) {
+    if (!f.endsWith(".jsonl")) continue;
+    try {
+      const st = lstatSync(`${dir}/${f}`);
+      if (st.isSymbolicLink()) out.push({ name: f, mtimeMs: st.mtimeMs });
+    } catch {}
+  }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
 export function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
