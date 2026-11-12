@@ -87,6 +87,7 @@ cs end <name> [-y]            end one
 cs open [name]                print, open and copy its claude.ai link
 cs term [name] [--sync]       interactive claude on the server that survives disconnects
 cs mirror [name]              join a live session in your terminal, next to the app
+cs live [name] [--json]       follow a session's progress: messages, tool calls, questions
 cs ssh [name]                 shell on the server, in the session's folder
 cs mcp add|status|remove      let Claude Code / Codex drive sessions over MCP
 cs socket <method> [json|-]   on the server: call a tool over the local control socket (socket.md)
@@ -163,6 +164,49 @@ Code only, and resuming a Codex rollout from another folder is not verified yet.
 
 An agent without a terminal can do the same through MCP: `handoff_session` (see
 [MCP](mcp.md#handoff)).
+
+## Live
+
+```text
+cs live [name] [--json]
+cs --live [name]
+cs --server --live "<prompt>"
+cs handoff --live ["<next>"]
+```
+
+Follows what a session is doing, from your terminal, without attaching to it:
+
+```text
+● live: fix-login (claude)  Ctrl-C detaches; the session keeps running
+◇ running
+› fix the flaky login test
+◆ The test races the session cookie. Making the wait explicit.
+  ⚙ Read server/auth.test.ts
+  ⚙ Bash bun test server/auth.test.ts
+? the agent is waiting for your answer
+  → answer in the app, or in this terminal: cs mirror fix-login
+⇢ PR you/app#42  https://github.com/you/app/pull/42
+◇ finished
+```
+
+- `name` defaults to this branch's session, or the only one running. On attach you see the
+  last 20 entries, then everything new as it happens.
+- One line per tool call (`Read path`, `Bash command`, an Edit with its file and `+/-` lines
+  in Chat mode); long messages are cut at 12 lines. Questions and permission requests are
+  highlighted with their options and where to answer them; `cs live` itself only watches.
+- Ctrl-C detaches; the session keeps running. `cs live` exits on its own when the session
+  ends (exit 1 if it failed).
+- `--json` prints one JSON frame per line (`hello`, `state`, `message`, `tool`, `ask`, `pr`,
+  `notice`, `end`), for scripts.
+- `--live` on `cs --server` or `cs handoff` launches as usual, then follows the session.
+
+It works for Claude Code, Codex and Chat (ACP) sessions; other agents show their state changes
+and PR links only. The server reads the same transcript or chat log as the app's chat view and
+pushes it over a WebSocket at `GET /api/sessions/<id>/live`, signed in with your CLI token
+(a browser's cookie works too, from the app's own origin only). After a drop `cs` reconnects
+from where it stopped. With `--ssh-api` it polls the same endpoint over SSH every 2 seconds
+instead. Stored secret values and common token shapes (`sk-`, `ghp_`, `github_pat_`, `xox…-`,
+AWS keys, `Bearer …`) are replaced with `[redacted]` on the server before they reach you.
 
 ## MCP for your agents
 

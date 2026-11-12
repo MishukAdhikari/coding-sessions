@@ -35,7 +35,12 @@ import { handleConnectorsRoute } from "./connectors-route";
 import { ConnectorOAuth } from "./connector-oauth";
 import { handleConnectorOAuthPublic } from "./connector-oauth-route";
 import * as sessionIo from "./session-io";
-import { defaultTranscriptRoots, resolveTranscript } from "./transcript";
+import { defaultTranscriptRoots, readTranscriptWindow, resolveTranscript } from "./transcript";
+import { acpFrames, createLiveHub, LIVE_ROUTE_RE, transcriptFrames, type LiveSocketData, type SourceWindow } from "./live";
+import { readEventWindow } from "./acp/event-log";
+import { checkPrivateDir } from "./acp/paths";
+import { findAcpSession } from "./acp/route";
+import { sessionActivity } from "./session-activity";
 import { createPrLinkTracker, type PrLink } from "./pr-links";
 import { createPrStatusCache, type PrStatus } from "./pr-status";
 import { handleTranscriptRoute } from "./transcript-route";
@@ -298,12 +303,37 @@ const activitySignal = createActivitySignal({
 });
 
 /** Per-socket state for a browser terminal relayed to its ttyd. */
-interface TermSocketData {
-  term: { id: string; socketPath: string; path: string; proto: string | null; mouse: boolean };
+interface TermSocketData extends Partial<LiveSocketData> {
+  term?: { id: string; socketPath: string; path: string; proto: string | null; mouse: boolean };
   buf?: (string | Buffer)[] | null;
   uws?: WebSocket;
   filter?: { mouse: boolean };
 }
+
+/* ---------- cs live: one session's progress, pushed over a WebSocket (server/live.ts) ---------- */
+
+function readLiveSource(id: string, after: number | null): SourceWindow {
+  const acp = findAcpSession(db, config.dataDir, id);
+  if (acp.ok) {
+    if (!checkPrivateDir(acp.paths.dir).ok) return { frames: [], cursor: after, reset: false };
+    const w = readEventWindow(acp.paths.events, after);
+    return { frames: acpFrames(w.events), cursor: w.cursor, reset: w.reset };
+  }
+  const resolved = resolveTranscript(db, id, transcriptRoots);
+  if (!resolved.ok || !resolved.value.path) return { frames: [], cursor: after, reset: false };
+  const w = readTranscriptWindow(resolved.value.path, resolved.value.provider, after);
+  return { frames: transcriptFrames(w.messages), cursor: w.cursor, reset: w.reset };
+}
+
+const liveHub = createLiveHub({
+  sessions: async () => withPrLinks(await listSessions()).map((s) => ({
+    id: s.id, name: s.name, provider: String(s.provider), mode: s.mode ?? "terminal",
+    activity: s.activity ?? sessionActivity(s), asking: Boolean(s.asking),
+    prs: s.prs.map((p) => ({ url: p.url, repo: p.repo, number: p.number })),
+  })),
+  read: readLiveSource,
+  secrets: async () => Object.values(await currentSecretEnv()),
+});
 
 const server = Bun.serve<TermSocketData>({
   hostname: config.listenHost,
@@ -529,6 +559,20 @@ const server = Bun.serve<TermSocketData>({
     /* ----- everything below requires auth ----- */
 
     if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
+
+    const liveMatch = method === "GET" ? path.match(LIVE_ROUTE_RE) : null;
+    if (liveMatch) {
+      let id: string;
+      try { id = decodeURIComponent(liveMatch[1]!); } catch { return json({ error: "No such session." }, 404); }
+      const rawAfter = url.searchParams.get("after");
+      const after = rawAfter !== null && /^\d{1,15}$/.test(rawAfter) ? Number(rawAfter) : null;
+      if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") return json(await liveHub.once(id, after));
+      // A browser always sends Origin: refuse other sites riding the cookie. The CLI sends none.
+      const origin = req.headers.get("origin");
+      if (origin && origin !== auth.ORIGIN) return new Response("Forbidden", { status: 403 });
+      if (liveHub.full()) return json({ error: "Too many live feeds open. Close one and retry." }, 429);
+      return srv.upgrade(req, { data: { live: { id, after } } }) ? undefined : new Response("Upgrade failed", { status: 400 });
+    }
 
     const acpResponse = await handleAcpRoute(req, {
       database: db, dataDir: config.dataDir,
@@ -951,6 +995,7 @@ const server = Bun.serve<TermSocketData>({
   websocket: {
     open(ws) {
       const d = ws.data;
+      if (d?.live) { liveHub.open(ws as unknown as Bun.ServerWebSocket<LiveSocketData>); return; }
       const info = d?.term;
       if (!info) { ws.close(); return; }
       terminal.markOpen(info.id);
@@ -970,6 +1015,7 @@ const server = Bun.serve<TermSocketData>({
     },
     message(ws, message) {
       const d = ws.data;
+      if (d?.live) return; // the live feed only pushes
       const uws = d?.uws as WebSocket | undefined;
       if (!uws) return;
       // Upstream: on screen bridges, drop mouse reports that still slip through.
@@ -979,6 +1025,7 @@ const server = Bun.serve<TermSocketData>({
     },
     close(ws) {
       const d = ws.data;
+      if (d?.live) { liveHub.close(ws as unknown as Bun.ServerWebSocket<LiveSocketData>); return; }
       if (d?.term?.id) { terminal.markClose(d.term.id); activitySignal.touch(); }
       try { d?.uws?.close(); } catch {}
     },

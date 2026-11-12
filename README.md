@@ -228,6 +228,7 @@ Open your domain, sign in with that password and add a passkey. [Running with Do
 4. **Optional: work from your own terminal.** Install the [`cs` command-line client](docs/cli.md) and run `cs server add personal https://sessions.example.com`. It signs in through your browser, with no token to copy. Then:
    - `cs --server "<prompt>"` hands your current branch to a session on the server;
    - `cs handoff` continues this folder's Claude Code conversation on the server;
+   - `cs live` follows a session's progress in your terminal: its messages, tool calls, questions and PR links;
    - `cs install gemini kimi` installs agents;
    - `cs mcp add` connects Claude Code or Codex to the server.
 
