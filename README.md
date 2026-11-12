@@ -15,6 +15,7 @@ never sleeps. Drive them from your phone, your terminal, or another agent.
 
 - **Close the laptop, keep shipping.** Sessions run on your server, not your machine. Pick them up from your phone, a browser or your terminal.
 - **Hand off a branch in one command.** `cs --server "fix the flaky checkout test"` sends your branch, uncommitted work included, to a session on the server.
+- **Or hand off the conversation itself.** `cs handoff` moves the Claude Code conversation you're having in this folder to the server, whole history included, and carries on there with `claude --resume`. Your tree travels as with `cs --server`; the transcript goes over SSH. Codex isn't supported yet. See [handoff](docs/cli.md#handoff).
 - **Answer from anywhere.** See which session is waiting on you, read its screen and reply from your phone.
 - **Chat instead of a terminal.** Open a Codex or Claude Code session as a chat: your prompts, its replies and its tool calls as messages, a reply box, and a banner when it's waiting on you. Menu-style approvals still open the terminal.
 - **Or start it as a chat.** Pick **Chat (ACP)** when you start a session and Claude Code, Codex, Command Code, Gemini CLI, Qwen Code, opencode or Kimi Code run over the [Agent Client Protocol](https://agentclientprotocol.com): streamed replies, tool calls with diffs, the agent's plan, and permission requests you answer with one tap. It survives restarts like any session. See [agents](docs/agents.md#chat-acp-mode).
@@ -22,7 +23,7 @@ never sleeps. Drive them from your phone, your terminal, or another agent.
 - **Connect a tool once.** Sign in to an MCP server one time and every agent shares it.
 - **Keys without the chat.** When an agent needs an API key or an MCP sign-in, it sends you a one-time link: paste the key (or sign in) in the app and every session can use it, running ones included. Agents never ask for keys in chat. See [secret requests](docs/security.md#secret-and-connector-requests).
 - **Bring more agents.** One-click presets add Gemini CLI, Kimi Code, Qwen Code and opencode, with the same built-in MCP. They're third-party tools; see [agents](docs/agents.md).
-- **Steer it from other agents.** Claude Code, Codex or the Claude app can launch and drive sessions over MCP.
+- **Steer it from other agents.** Claude Code, Codex or the Claude app can launch and drive sessions over MCP. They can filter the session list, see why a wait ended (`turn_finished`, `asking`, `timeout`…), get errors with a code and the next call to make, and hand their own conversation over with `handoff_session`. See [MCP](docs/mcp.md).
 - **Looks after itself.** Docker or Ubuntu install, passkey sign-in, and daily updates that roll back if a release won't start.
 
 Self-hosted and [MIT licensed](LICENSE): your server, your agent accounts, your data.
@@ -82,7 +83,7 @@ Three ways in, one set of sessions — the sessions can talk to each other, and 
 | | From | Good for |
 | --- | --- | --- |
 | **Web app** | Phone or browser | Starting, watching and answering sessions; a live terminal on each one |
-| **[`cs` CLI](docs/cli.md)** | Your terminal | Handing your current branch to the server, mirroring a session in your terminal |
+| **[`cs` CLI](docs/cli.md)** | Your terminal | Handing your current branch or Claude Code conversation to the server, mirroring a session in your terminal |
 | **[MCP](docs/mcp.md)** | Claude Code, Codex, the Claude app | Letting one agent launch, message and read others |
 | **[Built-in MCP](docs/mcp.md#built-in-session-communicator)** | Every session, automatically | Agents finding each other and trading messages — "ask the Codex session to review this" — with no setup or tokens |
 
@@ -226,6 +227,7 @@ Open your domain, sign in with that password and add a passkey. [Running with Do
 3. **Start a session.** Pick a repository and an agent. If Codex stops at **Folder trust required**, open the terminal and review the folder yourself; the app never accepts trust for you.
 4. **Optional: work from your own terminal.** Install the [`cs` command-line client](docs/cli.md) and run `cs server add personal https://sessions.example.com`. It signs in through your browser, with no token to copy. Then:
    - `cs --server "<prompt>"` hands your current branch to a session on the server;
+   - `cs handoff` continues this folder's Claude Code conversation on the server;
    - `cs install gemini kimi` installs agents;
    - `cs mcp add` connects Claude Code or Codex to the server.
 
@@ -235,13 +237,17 @@ Open your domain, sign in with that password and add a passkey. [Running with Do
 On the server, the `coding-sessions` command handles the rest:
 
 ```text
-sudo coding-sessions doctor              check everything, with fixes
+sudo coding-sessions doctor [--fix]      check everything; --fix repairs owners and modes
 sudo coding-sessions status              URL, versions, services, updates
 sudo coding-sessions agents install gemini kimi
 sudo coding-sessions update [--agents]   update the app (and agents)
 sudo coding-sessions setup               repair, or change your choices
 sudo coding-sessions uninstall           remove; --purge deletes data too
 ```
+
+Seeing `EACCES`, `dubious ownership` or `attempt to write a readonly database`? Run
+`sudo coding-sessions doctor --fix`. It repairs owners and modes of everything Coding Sessions
+owns, so you never need `chown` or `chmod` by hand. See [troubleshooting](docs/install.md#troubleshooting).
 
 ## Configuration and secrets
 
@@ -307,6 +313,6 @@ Agents update daily at 00:00 UTC if you said yes to daily updates during setup. 
 
 Manual installs update, roll back and retire as described in [deploy/README.md](deploy/README.md).
 
-## Development and security reports
+## Contributing and security reports
 
-See [local development](docs/local-dev.md) for Bun setup, HTTPS, tests, and Linux-specific verification. Report vulnerabilities privately following [SECURITY.md](SECURITY.md).
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, tests and the pull request flow; [local development](docs/local-dev.md) has the details on HTTPS, providers and Linux-specific checks. What changed in each release is in [CHANGELOG.md](CHANGELOG.md). Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately following [SECURITY.md](SECURITY.md).
