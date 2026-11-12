@@ -1,0 +1,69 @@
+name: Bug report
+description: Something doesn't work as the docs say it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems go through [SECURITY.md](https://github.com/MishukAdhikari/coding-sessions/blob/main/SECURITY.md), not here.
+        **Redact** passwords, tokens, cookies, keys, transcripts and private repository contents from everything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a Codex session in a project
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From Settings › App updates, `sudo coding-sessions status`, or the image tag.
+      placeholder: v0.13.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it's installed
+      options:
+        - One-command installer (Ubuntu or Debian)
+        - Docker
+        - Manual install (deploy/README.md)
+        - Local development
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Server OS
+      placeholder: Ubuntu 24.04, amd64
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Web app / PWA
+        - Terminal sessions
+        - Chat (ACP)
+        - cs CLI
+        - MCP
+        - Connectors or secrets
+        - Installer or updates
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: "`sudo coding-sessions doctor` and `sudo coding-sessions logs` often help. Redacted, please."
+      render: text

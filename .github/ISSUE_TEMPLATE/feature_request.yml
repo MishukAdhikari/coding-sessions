@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest something Coding Sessions should do.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+      description: How it could work, from your side (app, `cs` CLI, MCP, server).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried
+  - type: markdown
+    attributes:
+      value: |
+        Coding Sessions is built for one trusted operator per Unix account ([trust model](https://github.com/MishukAdhikari/coding-sessions#trust-model)). Ideas that need multi-tenant isolation are likely out of scope.
