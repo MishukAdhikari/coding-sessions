@@ -15,8 +15,8 @@ if [[ $(id -u) = 0 ]]; then
   [[ $(id -u cs) = "$want_uid" ]] || usermod -o -u "$want_uid" cs
   [[ ! -L $HOME ]] || { echo "$HOME must not be a symlink" >&2; exit 1; }
   # Only what isn't cs's already (a fresh bind mount, files a root `docker exec` left behind).
-  # -h: a link in the volume is re-owned itself, never what it points at.
-  find -P "$HOME" -xdev \( ! -user cs -o ! -group cs \) -exec chown -h cs:cs {} + 2>/dev/null || true
+  # -h: a link in the volume is re-owned itself, never what it points at; hard-linked files are skipped.
+  find -P "$HOME" -xdev \( -type d -o ! -type f -o -links 1 \) \( ! -user cs -o ! -group cs \) -exec chown -h cs:cs {} + 2>/dev/null || true
   exec setpriv --reuid=cs --regid=cs --init-groups --inh-caps=-all --bounding-set=-all -- "$0" "$@"
 fi
 [[ -w $HOME ]] || { echo "$HOME isn't writable by uid $(id -u). Start the container without --user (it fixes ownership itself), or set PUID/PGID to the owner of the mounted folder." >&2; exit 1; }

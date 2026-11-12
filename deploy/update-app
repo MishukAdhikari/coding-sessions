@@ -67,7 +67,7 @@ install -d -o root -g root -m 0755 "$status_dir"
 # Repair owners and modes first (root-owned leftovers in the home, a read-only database), so
 # the new release starts cleanly. Only when the coding-sessions CLI is installed.
 if [[ -x /usr/local/bin/coding-sessions && ! -L /usr/local/bin/coding-sessions ]]; then
-  /usr/local/bin/coding-sessions permissions --fix --yes --instance "$instance" >/dev/null 2>&1 || true
+  /usr/local/bin/coding-sessions permissions --fix --yes --instance "$instance" || printf 'update-app: the permission repair reported problems; run: sudo coding-sessions doctor\n' >&2
 fi
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 current_version() { cat "$app_root/current/.source-version" 2>/dev/null || echo unknown; }

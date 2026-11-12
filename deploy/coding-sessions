@@ -196,7 +196,8 @@ perm_expect() {
   if [[ ! -e $p ]]; then
     [[ $create = create && $kind = d ]] || return 0
     if [[ $fix != fix ]]; then perm_wrong "$p" "missing; expected a directory $o:$g $m"; return; fi
-    if [[ $o = "$PERM_SU" ]]; then perm_as_svc install -d -m "$m" -- "$p"; else install -d -o "$o" -g "$g" -m "$m" -- "$p"; fi
+    if [[ $o = "$PERM_SU" ]]; then perm_as_svc install -d -m "$m" -- "$p" 2>/dev/null; else install -d -o "$o" -g "$g" -m "$m" -- "$p"; fi \
+      || { perm_stuck "$p" "couldn't be created as $o; check who owns $(dirname -- "$p"): ls -ld '$(dirname -- "$p")'"; return; }
     perm_fixed "$p" "created ($o:$g $m)"; return
   fi
   if [[ $kind = d && ! -d $p ]] || [[ $kind = f && ! -f $p ]]; then
@@ -207,7 +208,8 @@ perm_expect() {
   if [[ $fix != fix ]]; then perm_wrong "$p" "is $now, expected $o:$g $m"; return; fi
   if [[ $o = "$PERM_SU" && $p != "$PERM_HOME" ]]; then
     # Inside the home: ownership comes from the sweep (it ran first); the mode is set by the account.
-    perm_as_svc chmod "$m" -- "$p"
+    perm_as_svc chmod "$m" -- "$p" 2>/dev/null \
+      || { perm_stuck "$p" "is $now and $o can't change it (another owner or file system); if it belongs to Coding Sessions: sudo chown -R $o:$g '$p'"; return; }
   else
     chown -h "$o:$g" -- "$p"; chmod "$m" -- "$p"
   fi
@@ -227,7 +229,8 @@ perm_groups() { # base verb  (stdin: relative paths)
 perm_sweep_home() {
   local fix=$1 H=$PERM_HOME su=$PERM_SU sg=$PERM_SG ru=$PERM_RU rg=$PERM_RG
   [[ -d $H && ! -L $H ]] || return 0
-  local leftover=( \( \( ! -user "$su" \( -user "$ru" -o -nouser \) \) -o \( ! -group "$sg" \( -group "$rg" -o -nogroup \) \) \) )
+  # Hard links (-links > 1) are left alone: one could point at a root-owned file outside the home.
+  local leftover=( \( -type d -o ! -type f -o -links 1 \) \( \( ! -user "$su" \( -user "$ru" -o -nouser \) \) -o \( ! -group "$sg" \( -group "$rg" -o -nogroup \) \) \) )
   local found; found=$(find -P "$H" -xdev -mindepth 1 "${leftover[@]}" -printf '%P\n' 2>/dev/null || true)
   if [[ -n $found ]]; then
     if [[ $fix = fix ]]; then
@@ -261,12 +264,13 @@ perm_sweep_home() {
   if command -v ss >/dev/null; then
     local listening s
     listening=$(ss -Hxl 2>/dev/null | awk '{print $5}' || true)
+    # Only the app's own sockets: the control socket and the web terminals' bridges.
     while IFS= read -r s; do
       [[ -n $s ]] || continue
       grep -qxF -- "$s" <<<"$listening" && continue
       if [[ $fix = fix ]]; then perm_as_svc rm -f -- "$s" && perm_fixed "$s" "stale socket (nothing listening), removed"
       else perm_wrong "$s" "stale socket (nothing listening); it blocks a restart"; fi
-    done < <(find -P "$H/data" "$H/run/terminals" -xdev -type s -print 2>/dev/null || true)
+    done < <(find -P "$H/data" "$H/run/terminals" -xdev -type s \( -name cs.sock -o -name s.sock \) -print 2>/dev/null || true)
   fi
 }
 

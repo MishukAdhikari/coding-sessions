@@ -103,7 +103,7 @@ jobs:
           curl -fsS -o /dev/null http://127.0.0.1:9121/
           test "$(docker exec app ps -o user= -p "$(docker exec app pgrep -f 'bun server/index.ts' | head -n 1)")" = cs
           test -z "$(sudo find home ! -uid 1234 -print -quit)"
-          test -s home/data/app.db
+          sudo test -s home/data/app.db
       - name: Files a root exec left behind are handed back on restart
         run: |
           set -x
