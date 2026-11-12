@@ -1,4 +1,6 @@
 import { childEnvironment } from "./child-env";
+import { agentBin } from "./agent-bin";
+import { AGENT_PRESETS, type AgentPresetId } from "./agent-presets";
 import { readCodexAccount } from "./account-identity";
 import { accountLoginSince, forgetAccountLogin, isAccountProvider, type AccountProvider } from "./account-history";
 import { codexAuth } from "./codex-auth";
@@ -43,15 +45,22 @@ export function parseAccount(provider: AccountProvider, value: unknown): Omit<Ac
 
 async function run(argv: string[], env: Record<string, string> = {}): Promise<Result> {
   try {
-    const child = Bun.spawn(argv, { env: childEnvironment(env), stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    // Same lookup as `which`, so an installed CLI outside PATH is also the one run.
+    const [bin, ...rest] = argv;
+    const child = Bun.spawn([agentBin(bin!) ?? bin!, ...rest], { env: childEnvironment(env), stdin: "ignore", stdout: "pipe", stderr: "ignore" });
     const timer = setTimeout(() => child.kill(9), 15_000);
     try { return { out: await new Response(child.stdout).text(), code: await child.exited }; }
     finally { clearTimeout(timer); }
   } catch { return { code: 127, out: "" }; }
 }
 
+/** A preset agent found on this server, whatever installed it: the app, or someone by hand. */
+export type TerminalAgentInfo = { id: AgentPresetId; label: string; installed: boolean; envVar: string | null; loginHint: string };
+
 export interface AccountDependencies {
   which(provider: AccountProvider): boolean;
+  /** Whether a binary is on PATH or in ~/.local/bin. */
+  binInstalled?(bin: string): boolean;
   run(argv: string[], env?: Record<string, string>): Promise<Result>;
   codexAccount(): Promise<unknown>;
   commandEnv(): Record<string, string>;
@@ -65,7 +74,7 @@ export interface AccountDependencies {
 }
 
 const defaults: AccountDependencies = {
-  which: (provider) => !!Bun.which(provider), run, codexAccount: readCodexAccount,
+  which: (provider) => !!agentBin(provider), run, codexAccount: readCodexAccount,
   commandEnv: commandCodeEnv,
   clearCommandToken: () => { clearCommandCodeToken(); },
   since: accountLoginSince, forget: forgetAccountLogin,
@@ -113,7 +122,14 @@ export function createAgentAccounts(deps: AccountDependencies = defaults) {
   }
   return {
     account,
-    async list() { return { accounts: await Promise.all([account("codex"), account("claude"), account("command-code")]) }; },
+    async list() {
+      const installed = deps.binInstalled ?? ((bin: string) => !!agentBin(bin));
+      // Every agent gets its own row: one agent being installed never stands in for another.
+      const agents: TerminalAgentInfo[] = AGENT_PRESETS.map(p => ({
+        id: p.id, label: p.label, installed: installed(p.bin), envVar: p.envVar, loginHint: p.loginHint,
+      }));
+      return { accounts: await Promise.all([account("codex"), account("claude"), account("command-code")]), agents };
+    },
     async action(providerValue: unknown, action: unknown, code?: unknown): Promise<Record<string, unknown>> {
       if (!isAccountProvider(providerValue)) return { ok: false, error: "Choose Codex, Claude, or Command Code." };
       const provider = providerValue;

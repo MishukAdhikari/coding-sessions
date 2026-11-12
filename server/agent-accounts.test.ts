@@ -2,6 +2,49 @@ import { expect, test } from "bun:test";
 import { createAgentAccounts, parseAccount, type AccountDependencies } from "./agent-accounts";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 
+const ALL_BINS = ["codex", "claude", "command-code", "gemini", "kimi", "qwen", "opencode"];
+function installedOnly(bins: string[], loggedIn = false) {
+  const set = new Set(bins);
+  return harness({
+    which: (p) => set.has(p), binInstalled: (b) => set.has(b),
+    codexAccount: async () => ({ account: loggedIn ? { type: "chatgpt", email: "c@example.test" } : null }),
+    async run() { return { code: 0, out: JSON.stringify({ loggedIn, authenticated: loggedIn }) }; },
+  });
+}
+
+test("every agent has its own row, installed or not, whatever else is installed", async () => {
+  for (const bin of ALL_BINS) {
+    for (const others of [[], ALL_BINS.filter(b => b !== bin)]) {
+      for (const present of [false, true]) {
+        const { controller } = installedOnly(present ? [bin, ...others] : others);
+        const { accounts, agents } = await controller.list();
+        expect(accounts.map(a => a.provider)).toEqual(["codex", "claude", "command-code"]);
+        expect(agents.map(a => a.id)).toEqual(["gemini", "kimi", "qwen", "opencode"]);
+        const rows = [...accounts.map(a => ({ id: a.provider as string, installed: a.installed })), ...agents];
+        expect(rows.find(r => r.id === bin)!.installed).toBe(present);
+      }
+    }
+  }
+});
+
+test("built-in sign-in status is read per agent: signed in, signed out, not installed", async () => {
+  for (const loggedIn of [true, false]) {
+    const { accounts } = await installedOnly(["codex", "claude", "command-code"], loggedIn).controller.list();
+    for (const a of accounts) expect([a.installed, a.loggedIn]).toEqual([true, loggedIn]);
+  }
+  const { accounts } = await installedOnly([]).controller.list();
+  for (const a of accounts) expect([a.installed, a.loggedIn]).toEqual([false, null]);
+});
+
+test("Codex keeps its device sign-in with opencode installed", async () => {
+  const { calls, controller } = installedOnly(["codex", "opencode"]);
+  const { accounts, agents } = await controller.list();
+  expect(accounts.find(a => a.provider === "codex")).toMatchObject({ installed: true, loggedIn: false });
+  expect(agents.find(a => a.id === "opencode")).toMatchObject({ installed: true, envVar: null });
+  expect(await controller.action("codex", "login")).toMatchObject({ ok: true });
+  expect(calls).toContain("start:codex");
+});
+
 function harness(overrides: Partial<AccountDependencies> = {}) {
   const calls: string[] = [];
   let loggedIn = true;

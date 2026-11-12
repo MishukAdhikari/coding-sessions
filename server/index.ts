@@ -632,7 +632,7 @@ const server = Bun.serve({
       const body = await req.json().catch(() => ({}));
       const target = body.kind === "attach"
         ? { kind: "attach" as const, screen: String(body.screen ?? "") }
-        : { kind: "shell" as const, cwd: body.cwd ? String(body.cwd) : undefined };
+        : { kind: "shell" as const, cwd: body.cwd ? String(body.cwd) : undefined, login: typeof body.login === "string" ? body.login : undefined };
       const r = await terminal.open(target);
       return r.ok ? json({ ok: true, id: r.id, url: r.url, mux: r.mux }) : json({ error: r.error }, 422);
     }

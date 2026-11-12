@@ -1,4 +1,5 @@
 import { childEnvironment } from "./child-env";
+import { agentBin } from "./agent-bin";
 import { accessSync, constants, lstatSync } from "node:fs";
 import { isAbsolute, normalize } from "node:path";
 import { isCodexSessionId } from "./codex-state";
@@ -225,7 +226,7 @@ function inspectManagedPath(path: string): CodexManagedPathInspection | null {
 }
 
 export const defaultCodexPreflightDependencies: CodexPreflightDependencies = {
-  which: () => Bun.which("codex"),
+  which: () => agentBin("codex"),
   run: defaultRun,
   readText: async (path) => {
     try {

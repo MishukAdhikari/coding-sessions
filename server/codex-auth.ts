@@ -1,4 +1,5 @@
 import { childEnvironment } from "./child-env";
+import { agentBin } from "./agent-bin";
 import { readCodexIdentity } from "./account-identity";
 import { recordAccountLogin } from "./account-history";
 
@@ -62,7 +63,7 @@ const APPROVED_VERIFICATION_HOSTS = new Set([
 ]);
 
 export const bunCodexAuthProcessRunner: CodexAuthProcessRunner = {
-  which: () => Bun.which("codex"),
+  which: () => agentBin("codex"),
   spawn(argv) {
     const process = Bun.spawn([...argv], {
       env: childEnvironment(),

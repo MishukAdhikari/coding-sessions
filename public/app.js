@@ -1933,6 +1933,7 @@
     registeredCommands,
     reloadCapabilities: loadCapabilities,
     escapeHtml,
+    openTerminal: (body, label) => openWebTerminal(body, label),
   });
 
   /* ---------- projects ---------- */

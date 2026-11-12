@@ -1,4 +1,5 @@
 import { childEnvironment } from "./child-env";
+import { agentBin } from "./agent-bin";
 function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : {};
 }
@@ -22,7 +23,7 @@ export async function readClaudeIdentity(): Promise<string | null> {
 }
 
 export async function readCodexAccount(): Promise<unknown> {
-  const child = Bun.spawn(["codex", "app-server", "--stdio"], {
+  const child = Bun.spawn([agentBin("codex") ?? "codex", "app-server", "--stdio"], {
     env: childEnvironment(), stdin: "pipe", stdout: "pipe", stderr: "ignore",
   });
   const timer = setTimeout(() => child.kill(9), 15_000);
