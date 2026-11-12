@@ -70,6 +70,28 @@ macOS doesn't prove them (see [local development](docs/local-dev.md#verification
 | `docs/` | User docs: install, CLI, MCP, agents, connectors, security |
 | `scripts/` | Helper scripts |
 
+### Settings search (Cmd+K)
+
+The command palette (`public/command-palette.js`, Cmd+K on a Mac, Ctrl+K elsewhere, or the
+search button in the top bar) reads its index from the page, so a new setting is searchable
+without touching it. Keep to this markup:
+
+- A Settings page is a `.sheet` with `data-settings="<id of the Settings row that opens it>"`
+  (the Settings sheet itself names `btn-menu`). Sheets without it aren't searched.
+- Inside it, each visible `input`, `select`, `textarea`, `.row-btn`, `.proj-row`, `h3` and
+  heading-style `label.label` is an entry. Give fields a `<label>` (or `aria-label`); the
+  `.hint` right after a field becomes its description. A select's option names are searchable.
+- `data-search="words"` adds synonyms ("password" on the passkey row). On a sheet it applies
+  to every entry in it. `data-search-skip` leaves an element and its contents out.
+- `data-command="Label"` on a button outside Settings makes it an action that clicks it; on a
+  `select`, one action per option.
+- Rows a sheet renders only when opened (agents, connectors, secret names, tokens) need a
+  loader in the `preload` list in `app.js`, so they are indexed before the sheet is visited.
+  Only names and visible details are read: never put a secret value in the page.
+
+The shortcut is left alone in a `textarea`, a rich editor, a terminal (`.xterm`) and anything
+inside `data-own-cmdk`; on a Mac, Ctrl+K in a text field stays the system's delete-to-end-of-line.
+
 ## Pull requests
 
 1. Fork the repo, or branch if you have access, from an up-to-date `main`:

@@ -33,7 +33,7 @@
 <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1320x2868-dark.png">
 <script src="/theme.js?v=2"></script>
 <script src="/native.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=50">
+<link rel="stylesheet" href="/app.css?v=51">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -93,15 +93,18 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <div class="host-row"><span class="host-k">RAM</span><span class="host-meter"><i id="host-mem-bar"></i></span><span class="host-v" id="host-mem">—</span></div>
       <div class="host-row"><span class="host-k">DISK</span><span class="host-meter"><i id="host-disk-bar"></i></span><span class="host-v" id="host-disk">—</span></div>
     </div>
-    <button id="btn-menu" class="icon-btn" aria-label="Settings">
+    <button id="btn-palette" class="icon-btn" type="button" aria-label="Search settings and actions" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    </button>
+    <button id="btn-menu" class="icon-btn" aria-label="Settings" data-command="Open settings">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="0.5"/><circle cx="12" cy="12" r="0.5"/><circle cx="12" cy="19" r="0.5"/></svg>
     </button>
   </header>
 
   <nav id="tabs" class="tabs" aria-label="Filter sessions">
-    <button class="tab" data-tab="active">Active <span class="tab-n" id="tabn-active"></span></button>
-    <button class="tab" data-tab="ended">Ended <span class="tab-n" id="tabn-ended"></span></button>
-    <button class="tab" data-tab="all">All</button>
+    <button class="tab" data-tab="active" data-command="Show active sessions">Active <span class="tab-n" id="tabn-active"></span></button>
+    <button class="tab" data-tab="ended" data-command="Show ended sessions">Ended <span class="tab-n" id="tabn-ended"></span></button>
+    <button class="tab" data-tab="all" data-command="Show all sessions">All</button>
   </nav>
 
   <form id="session-search-form" class="session-search" role="search" aria-label="Sessions">
@@ -147,7 +150,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   </div>
 
   <footer class="dock">
-    <button id="btn-new" class="btn btn-primary btn-big">Start a session</button>
+    <button id="btn-new" data-command="New session" data-search="start launch create session" class="btn btn-primary btn-big">Start a session</button>
   </footer>
 </section>
 
@@ -260,7 +263,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <button class="btn btn-ghost btn-big" data-close>Keep it</button>
 </div>
 
-<div id="sheet-menu" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-menu-heading" tabindex="-1" hidden>
+<div id="sheet-menu" class="sheet" data-settings="btn-menu" data-search="settings preferences options configuration" role="dialog" aria-modal="true" aria-labelledby="sheet-menu-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-menu-heading">Coding Sessions</h2>
   <section class="settings-section" aria-labelledby="settings-preferences">
@@ -282,9 +285,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <path d="m19 5-1.256 1.256" />
   <path d="M20 12h2" />
 </svg>
-Appearance</label><span class="appearance-select"><select id="theme-preference"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></div>
+Appearance</label><span class="appearance-select"><select id="theme-preference" data-command="Appearance" data-search="theme dark mode light mode color scheme night"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></div>
     <label class="ws-row">
-    <input type="checkbox" id="chk-notify">
+    <input type="checkbox" id="chk-notify" data-search="notifications alerts push nudge">
     <span>Notify me when a session needs my answer</span>
   </label>
   </section>
@@ -319,7 +322,7 @@ Agent authentication…</span><span id="connection-agents" class="connection-sta
     <button id="btn-projects" class="row-btn connection-row"><span>Projects…</span><span id="connection-projects" class="connection-status" role="status">Checking…</span><span id="connection-projects-detail" class="connection-detail"></span></button>
     <div class="menu-group">
     <label class="label" for="input-prefix">Session name prefix</label>
-    <input id="input-prefix" class="field" type="text" placeholder="e.g. srv-" maxlength="12"
+    <input id="input-prefix" data-search="name naming prefix" class="field" type="text" placeholder="e.g. srv-" maxlength="12"
            autocomplete="off" autocapitalize="off" spellcheck="false">
     <p class="hint">Added to every new session name, so server work is easy to identify.</p>
   </div>
@@ -331,7 +334,7 @@ Agent authentication…</span><span id="connection-agents" class="connection-sta
     <button id="btn-cli-access" class="row-btn connection-row"><span>CLI &amp; MCP access…</span><span id="connection-cli" class="connection-status" role="status">Checking…</span><span id="connection-cli-detail" class="connection-detail"></span></button>
     <button id="btn-github-auth" class="row-btn connection-row"><span>GitHub access (gh)…</span><span id="connection-github" class="connection-status" role="status">Checking…</span><span id="connection-github-detail" class="connection-detail"></span></button>
     <button id="btn-browser-auth" class="row-btn connection-row"><span>Claude.ai browser…</span><span id="connection-browser" class="connection-status" role="status">Checking…</span><span id="connection-browser-detail" class="connection-detail"></span></button>
-    <button id="btn-add-passkey" class="row-btn connection-row"><span>Add Face ID / Touch ID</span><span id="connection-passkey" class="connection-status" role="status">Checking…</span><span id="connection-passkey-detail" class="connection-detail"></span></button>
+    <button id="btn-add-passkey" data-search="passkey passkeys password security face id touch id webauthn biometric login sign in device" class="row-btn connection-row"><span>Add Face ID / Touch ID</span><span id="connection-passkey" class="connection-status" role="status">Checking…</span><span id="connection-passkey-detail" class="connection-detail"></span></button>
   </section>
   <section class="settings-section" aria-labelledby="settings-server-config">
     <h3 id="settings-server-config">Server settings</h3>
@@ -357,7 +360,7 @@ Agent authentication…</span><span id="connection-agents" class="connection-sta
 </svg>
 CLI updates…</span><span id="connection-updates" class="connection-status" role="status">Checking…</span><span id="connection-updates-detail" class="connection-detail"></span></button>
     <button id="btn-app-updates" class="row-btn connection-row"><span>App updates…</span><span id="connection-app-updates" class="connection-status" role="status">Checking…</span><span id="connection-app-updates-detail" class="connection-detail"></span></button>
-    <button id="btn-web-terminal" class="row-btn connection-row"><span class="connection-action"><svg aria-hidden="true" class="menu-icon"
+    <button id="btn-web-terminal" data-search="shell ssh terminal console" class="row-btn connection-row"><span class="connection-action"><svg aria-hidden="true" class="menu-icon"
   xmlns="http://www.w3.org/2000/svg"
   width="18"
   height="18"
@@ -372,13 +375,13 @@ CLI updates…</span><span id="connection-updates" class="connection-status" rol
   <path d="m4 17 6-6-6-6" />
 </svg>
 Open a terminal on the server…</span><span class="connection-detail">Interactive server shell. Opens in a new tab.</span></button>
-    <button id="btn-clear-archive" class="row-btn connection-row"><span>Clear ended history…</span><span id="connection-history" class="connection-status" role="status">Checking…</span><span id="connection-history-detail" class="connection-detail"></span></button>
-    <button id="btn-end-all" class="row-btn row-danger connection-row"><span>End all sessions…</span><span id="connection-sessions" class="connection-status" role="status">Checking…</span><span id="connection-sessions-detail" class="connection-detail"></span></button>
+    <button id="btn-clear-archive" data-search="history ended archive delete" class="row-btn connection-row"><span>Clear ended history…</span><span id="connection-history" class="connection-status" role="status">Checking…</span><span id="connection-history-detail" class="connection-detail"></span></button>
+    <button id="btn-end-all" data-search="kill stop all sessions" class="row-btn row-danger connection-row"><span>End all sessions…</span><span id="connection-sessions" class="connection-status" role="status">Checking…</span><span id="connection-sessions-detail" class="connection-detail"></span></button>
   </section>
-  <div class="settings-footer"><button id="btn-logout" class="row-btn">Sign out<span class="connection-detail logout-detail">Signs out of this browser. Agent sessions keep running.</span></button></div>
+  <div class="settings-footer"><button id="btn-logout" data-search="log out logout sign out" class="row-btn">Sign out<span class="connection-detail logout-detail">Signs out of this browser. Agent sessions keep running.</span></button></div>
 </div>
 
-<div id="sheet-cli-updates" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-updates-heading" tabindex="-1" hidden>
+<div id="sheet-cli-updates" class="sheet" data-settings="btn-cli-updates" data-search="upgrade version claude code codex command code cli auto update" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-updates-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-cli-updates-heading">CLI updates</h2>
   <p class="sheet-body">Keep Codex, Claude Code, and Command Code up to date on this server.</p>
@@ -420,7 +423,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <div id="secret-request-content" class="sr-content"></div>
 </div>
 
-<div id="sheet-server-settings" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-server-settings-heading" tabindex="-1" hidden>
+<div id="sheet-server-settings" class="sheet" data-settings="btn-server-settings" data-search="server configuration config" role="dialog" aria-modal="true" aria-labelledby="sheet-server-settings-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-server-settings-heading">Server settings</h2>
   <p class="sheet-body">Change how this server behaves without editing its configuration. A value changed here wins over the server's configuration until you reset it. Changes apply right away, no restart.</p>
@@ -429,7 +432,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-app-updates" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-app-updates-heading" tabindex="-1" hidden>
+<div id="sheet-app-updates" class="sheet" data-settings="btn-app-updates" data-search="upgrade version release coding sessions auto update" role="dialog" aria-modal="true" aria-labelledby="sheet-app-updates-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-app-updates-heading">App updates</h2>
   <p class="sheet-body">Keep this server on the latest Coding Sessions release from GitHub.</p>
@@ -443,7 +446,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-agent-auth" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-agent-auth-heading" tabindex="-1" hidden>
+<div id="sheet-agent-auth" class="sheet" data-settings="btn-agent-auth" data-search="login sign in account accounts install agents claude codex command code" role="dialog" aria-modal="true" aria-labelledby="sheet-agent-auth-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-agent-auth-heading">Agent authentication</h2>
   <p class="sheet-body">View and manage the accounts used by agents on this server.</p>
@@ -534,7 +537,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button id="btn-codex-auth-close" class="btn btn-ghost btn-big" hidden>Done</button>
 </div>
 
-<div id="sheet-github" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-github-heading" tabindex="-1" hidden>
+<div id="sheet-github" class="sheet" data-settings="btn-github-auth" data-search="gh github token personal access token pat repository login" role="dialog" aria-modal="true" aria-labelledby="sheet-github-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-github-heading">GitHub access</h2>
   <p class="sheet-body">Paste a personal access token so sessions can use <code>gh</code> and push over https. The token is stored by the GitHub CLI on the server — never in this app.</p>
@@ -549,7 +552,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-browser" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-browser-heading" tabindex="-1" hidden>
+<div id="sheet-browser" class="sheet" data-settings="btn-browser-auth" data-search="claude.ai browser login chrome" role="dialog" aria-modal="true" aria-labelledby="sheet-browser-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-browser-heading">Claude.ai browser</h2>
   <p class="sheet-body">A signed-in browser on the server deletes chats from Claude when you ask for it while ending a session. Sign in again if deletions start failing.</p>
@@ -570,7 +573,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button id="btn-browser-cancel" class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-projects" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-projects-heading" tabindex="-1" hidden>
+<div id="sheet-projects" class="sheet" data-settings="btn-projects" data-search="folders repositories workspaces" role="dialog" aria-modal="true" aria-labelledby="sheet-projects-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-projects-heading">Projects</h2>
   <p class="sheet-body">Sessions can only start inside these folders.</p>
@@ -586,7 +589,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   </form>
 </div>
 
-<div id="sheet-commands" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-commands-heading" tabindex="-1" hidden>
+<div id="sheet-commands" class="sheet" data-settings="btn-commands" data-search="presets custom agents commands" role="dialog" aria-modal="true" aria-labelledby="sheet-commands-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-commands-heading">Commands</h2>
   <p class="sheet-body">Add another CLI agent and it joins Claude, Codex and Command Code in the agent picker, with a managed session, a web terminal and history. Presets also connect the agent to Coding Sessions over MCP and follow the server's permission mode. Commands have no remote control, chat link, or conversation resume.</p>
@@ -605,7 +608,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-secrets" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-secrets-heading" tabindex="-1" hidden>
+<div id="sheet-secrets" class="sheet" data-settings="btn-secrets" data-search="api keys tokens env environment variables credentials passwords vault" role="dialog" aria-modal="true" aria-labelledby="sheet-secrets-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-secrets-heading">Secrets</h2>
   <p class="sheet-body">API tokens and keys every new session receives as environment variables. Values are encrypted on the server and never shown again. Running sessions keep the values they started with.</p>
@@ -665,7 +668,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-connect" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-connect-heading" tabindex="-1" hidden>
+<div id="sheet-connect" class="sheet" data-settings="btn-connect" data-search="mcp connector claude.ai chatgpt remote mcp oauth" role="dialog" aria-modal="true" aria-labelledby="sheet-connect-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-connect-heading">Connect Claude or Codex</h2>
   <p class="sheet-body">Each app signs in once with your passkey and an Allow, then drives your sessions as tools. Only press Allow right after you started the connection yourself.</p>
@@ -701,7 +704,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-cli" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-heading" tabindex="-1" hidden>
+<div id="sheet-cli" class="sheet" data-settings="btn-cli-access" data-search="cli token tokens mcp access cs api key" role="dialog" aria-modal="true" aria-labelledby="sheet-cli-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-cli-heading">CLI &amp; MCP access</h2>
   <p class="sheet-body">Tokens for the <code>cs</code> command-line client. Each one has full control of your sessions — treat it like a password.</p>
@@ -733,7 +736,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-connectors" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-connectors-heading" tabindex="-1" hidden>
+<div id="sheet-connectors" class="sheet" data-settings="btn-connectors" data-search="mcp servers external connectors tools oauth integrations" role="dialog" aria-modal="true" aria-labelledby="sheet-connectors-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-connectors-heading">External MCP connectors</h2>
   <p class="sheet-body">Connect MCP servers and choose which tools your agents can use. Access stays off until you grant it.</p>
@@ -848,6 +851,22 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+<!-- ========== Command palette (command-palette.js) ========== -->
+<div id="palette" class="palette" hidden>
+  <div class="palette-box" role="dialog" aria-modal="true" aria-labelledby="palette-heading">
+    <h2 id="palette-heading" class="sr-only">Search settings, actions and sessions</h2>
+    <div class="palette-field">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="palette-input" type="text" role="combobox" aria-expanded="false" aria-controls="palette-list" aria-autocomplete="list" aria-label="Search settings, actions and sessions" placeholder="Search settings, actions, sessions…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+      <kbd id="palette-shortcut" class="palette-kbd" aria-hidden="true">⌘K</kbd>
+      <button class="palette-close" type="button" data-palette-close>Close</button>
+    </div>
+    <ul id="palette-list" class="palette-list" role="listbox" aria-label="Results"></ul>
+    <p id="palette-status" class="sr-only" role="status" aria-live="polite"></p>
+  </div>
+</div>
+
+<script src="/command-palette.js?v=1"></script>
 <script src="/agent-auth.js?v=12"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=3"></script>
@@ -856,6 +875,6 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/secrets.js?v=2"></script>
 <script src="/secret-request.js?v=1"></script>
 <script src="/launch-mode.js?v=1"></script>
-<script src="/app.js?v=63"></script>
+<script src="/app.js?v=64"></script>
 </body>
 </html>
