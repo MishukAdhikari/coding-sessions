@@ -82,7 +82,7 @@ export interface SetupSnapshot {
   app: { version: string | null; channel: string; auto_updates: boolean | null };
   permissions: "standard" | "unrestricted";
   trust_workspaces: { enabled: boolean; changed_by?: string; changed_at?: string };
-  agents: Array<{ id: string; label: string; installed: boolean; version: string | null; signed_in?: boolean | null; acp_adapter?: boolean }>;
+  agents: Array<{ id: string; label: string; installed: boolean; version: string | null; signed_in?: boolean | null; api_key?: boolean; acp_adapter?: boolean }>;
   claude_onboarding: boolean | null;
   browser: boolean;
   host: unknown;
@@ -616,7 +616,7 @@ export async function serverStatus(deps: McpDeps, setup: SetupDeps) {
     if (!a?.installed) continue;
     const name = a.id === "claude" ? "Claude Code" : "Codex";
     if (a.acp_adapter === false) missing.push({ item: `${name} Chat (ACP) adapter`, why: `Chat mode for ${name} needs its ACP adapter.`, next: installing ? "setup_agents {wait_seconds: 60}" : `setup_agents {agents: ["${a.id}-acp"]}` });
-    if (a.signed_in === false) missing.push({ item: `${name} sign-in`, why: `${name} is installed but not signed in.`, human: true,
+    if (a.signed_in === false && !a.api_key) missing.push({ item: `${name} sign-in`, why: `${name} is installed but not signed in.`, human: true,
       next: `agent_auth {agent: "${a.id}", action: "login"} returns a sign-in link for the human to open${a.id === "claude" ? " (then submit_code with the code they get)" : ""}; or, for an API key, request_secret {name: "${a.id === "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"}", reason} and give the human the link.` });
   }
   if (claude?.installed && snap.claude_onboarding === false) {

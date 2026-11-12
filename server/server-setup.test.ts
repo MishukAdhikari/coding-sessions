@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeOnboardingDone, completeClaudeOnboarding, runDoctor, type DoctorDeps } from "./server-setup";
+import { approveClaudeApiKey, claudeOnboardingDone, completeClaudeOnboarding, runDoctor, type DoctorDeps } from "./server-setup";
 import { handleMcpPost, type McpDeps, type SetupDeps } from "./mcp";
 import { LiveFeed } from "./live";
 
@@ -27,7 +27,19 @@ test("onboarding refuses to overwrite a state file it cannot parse", () => {
   expect(readFileSync(join(h, ".claude.json"), "utf8")).toBe("{not json");
 });
 
-const doctorDeps = (h: string, over: Partial<DoctorDeps> = {}): DoctorDeps => ({
+test("a stored API key is approved by its last 20 characters, moving it out of rejected", () => {
+  const h = home();
+  const key = "sk-ant-api03-" + "x".repeat(10) + "ABCDEFGHIJKLMNOPQRST";
+  writeFileSync(join(h, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, customApiKeyResponses: { approved: [], rejected: ["ABCDEFGHIJKLMNOPQRST"] } }));
+  expect(approveClaudeApiKey(key, h)).toBe(true);
+  const text = readFileSync(join(h, ".claude.json"), "utf8");
+  expect(JSON.parse(text).customApiKeyResponses).toEqual({ approved: ["ABCDEFGHIJKLMNOPQRST"], rejected: [] });
+  expect(text).not.toContain("sk-ant");
+  expect(approveClaudeApiKey(key, h)).toBe(false);
+  expect(approveClaudeApiKey("short", h)).toBe(false);
+});
+
+const doctorDeps =(h: string, over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   home: h, uid: process.getuid!(), which: () => "/usr/bin/x",
   host: () => ({ diskFreeGb: 20, memTotalGb: 4 }), browserInstalled: () => true,
   claudeInstalled: () => true, claudeVersion: () => null, ...over,

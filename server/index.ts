@@ -100,11 +100,13 @@ const agentInstaller = createAgentInstaller({
 /** server_status, setup_agents, doctor and trust_workspaces over MCP (server/server-setup.ts). */
 const setupDeps: McpDeps["setup"] = {
   async snapshot() {
-    const [versions, accounts, update] = await Promise.all([
+    const [versions, accounts, update, secretNames] = await Promise.all([
       cliUpdates.versions(true),
       agentAccounts.list().catch(() => ({ accounts: [] as Array<{ provider: string; loggedIn: boolean | null }> })),
       appUpdates.status().catch(() => null),
+      currentSecretEnv().then((env) => new Set(Object.keys(env))).catch(() => new Set<string>()),
     ]);
+    const KEY_SECRET: Record<string, string> = { claude: "ANTHROPIC_API_KEY", codex: "OPENAI_API_KEY" };
     const signedIn = new Map((accounts.accounts as Array<{ provider: string; loggedIn: boolean | null }>).map((a) => [a.provider, a.loggedIn]));
     const trust = serverSettings.describe().trustWorkspaces;
     return {
@@ -116,6 +118,7 @@ const setupDeps: McpDeps["setup"] = {
         return {
           id: a.id, label: a.label, installed: !!version || !!agentBin(a.id), version,
           ...(signedIn.has(a.id) ? { signed_in: signedIn.get(a.id) ?? null } : {}),
+          ...(KEY_SECRET[a.id] ? { api_key: secretNames.has(KEY_SECRET[a.id]!) } : {}),
           ...(a.id === "claude" ? { acp_adapter: !!agentBin("claude-agent-acp") } : a.id === "codex" ? { acp_adapter: !!agentBin("codex-acp") } : {}),
         };
       }),

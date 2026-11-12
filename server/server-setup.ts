@@ -54,6 +54,31 @@ export function completeClaudeOnboarding(home = homedir(), version: string | nul
   return { ok: true, changed: true };
 }
 
+/**
+ * Mark an API key as approved the way Claude Code records the "use this API key?" answer
+ * (the key's last 20 characters in customApiKeyResponses.approved). Called only for the
+ * ANTHROPIC_API_KEY the operator stored in Coding Sessions for its agents. Without it, a
+ * Claude Code whose onboarding was completed above silently rejects the key ("Not logged
+ * in"). Only the suffix Claude Code itself stores is written; nothing is returned.
+ */
+export function approveClaudeApiKey(key: string, home = homedir()): boolean {
+  const suffix = key.trim().slice(-20);
+  if (suffix.length < 20) return false;
+  const file = claudeStateFile(home);
+  if (existsSync(file) && lstatSync(file).isSymbolicLink()) return false;
+  const state = existsSync(file) ? readJson(file) : {};
+  if (!state) return false;
+  const responses = (state.customApiKeyResponses && typeof state.customApiKeyResponses === "object" ? state.customApiKeyResponses : {}) as { approved?: unknown; rejected?: unknown };
+  const approved = Array.isArray(responses.approved) ? responses.approved.filter((v): v is string => typeof v === "string") : [];
+  const rejected = Array.isArray(responses.rejected) ? responses.rejected.filter((v): v is string => typeof v === "string") : [];
+  if (approved.includes(suffix) && !rejected.includes(suffix)) return false;
+  state.customApiKeyResponses = { ...responses, approved: [...approved.filter((v) => v !== suffix), suffix], rejected: rejected.filter((v) => v !== suffix) };
+  const tmp = `${file}.cs-${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  renameSync(tmp, file);
+  return true;
+}
+
 /* ---------- doctor: non-root checks and repairs ---------- */
 
 export type FindingStatus = "ok" | "warn" | "fail";
