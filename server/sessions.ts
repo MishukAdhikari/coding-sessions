@@ -242,7 +242,7 @@ function claudeModelFor(pid: number, cwd: string | null, etimes: number): string
   const text = path ? readTranscriptTail(path) : null;
   if (text) {
     const ms = [...text.matchAll(/"model"\s*:\s*"(claude-[a-z0-9.-]+)"/g)];
-    if (ms.length) model = friendlyModel(ms[ms.length - 1][1]);
+    if (ms.length) model = friendlyModel(ms[ms.length - 1]![1]!);
   }
   modelCache.set(pid, { at: Date.now(), model });
   return model;
@@ -408,7 +408,7 @@ export function isCodexProc(args: string): boolean {
   const tokens = args.trim().split(/\s+/).filter(Boolean);
   if (!/(^|\/)codex$/.test(tokens[0] ?? "")) return false;
   for (let index = 1; index < tokens.length; index++) {
-    const token = tokens[index];
+    const token = tokens[index]!;
     if (CODEX_OPTIONS_WITH_VALUES.has(token)) {
       index++;
       continue;
@@ -609,7 +609,7 @@ export interface ManagedCommandStart {
 export async function startManagedCommand(options: ManagedCommandStart): Promise<{ ok: true } | { ok: false; error: string }> {
   const slug = commandSlug(options.provider);
   const command = slug ? findCommand(slug) : null;
-  if (!command) return { ok: false, error: "That command is no longer registered." };
+  if (!slug || !command) return { ok: false, error: "That command is no longer registered." };
 
   const resolved = resolveBin(command.bin);
   if (!resolved.ok) return { ok: false, error: resolved.error };
@@ -625,7 +625,7 @@ export async function startManagedCommand(options: ManagedCommandStart): Promise
         launch = presetLaunch(preset, { unrestricted, connectors: withConnectors });
         return launch.env;
       },
-      env: commandEnv(slug!),
+      env: commandEnv(slug),
       command: () => `${options.setupPrefix ?? ""}${buildCommandLaunch({ bin: resolved.path, args: [...command.args, ...launch.args] }, options.projectPath)}`,
     });
   }

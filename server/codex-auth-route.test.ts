@@ -37,7 +37,7 @@ function harness() {
   return { calls, dependencies };
 }
 
-function request(path: string, method = "GET", headers: HeadersInit = {}): Request {
+function request(path: string, method = "GET", headers: Record<string, string> = {}): Request {
   return new Request(`https://example.test${path}`, { method, headers });
 }
 

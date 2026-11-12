@@ -84,7 +84,7 @@ test("MCP account tools expose sanitized account status and delegate explicit ac
 
 test("list_sessions reports state and the archive on request", async () => {
   const { deps } = harness({
-    listArchive: () => [{ id: 7, provider: "codex", name: "old", initial: "O", project: "/x", claudeUrl: null, remoteControl: false, resumeId: "r", model: null, startedAt: 1, endedAt: 2, workspacePresent: true, canResume: true }],
+    listArchive: () => [{ id: 7, provider: "codex", name: "old", initial: "O", project: "/x", claudeUrl: null, remoteControl: false, resumeId: "r", model: null, startedAt: 1, endedAt: 2, workspacePresent: true, canResume: true, mode: "terminal" }],
   });
   const r = await call(deps, "list_sessions", { include_ended: true });
   expect(r.structuredContent.sessions[0].state).toBe("waiting");

@@ -46,7 +46,7 @@ Every change that touches behavior comes with tests, and `bun test` must pass. T
 next to the code they cover (`server/mcp.ts` → `server/mcp.test.ts`). Mock external CLIs
 and accounts: never log out a real account or use a real workspace as a fixture.
 
-`bunx tsc --noEmit` currently reports existing type errors on `main`; don't add new ones.
+`bun run typecheck` must pass with zero errors; CI enforces it.
 
 The installer has its own Python tests (some only run on Linux; CI runs them all):
 

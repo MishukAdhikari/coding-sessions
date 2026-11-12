@@ -31,7 +31,7 @@ test("session subprocesses receive the mux directory set after Bun started", asy
   expect(expected).toBeTruthy();
   const result = await run([process.execPath, "-e", "process.stdout.write(process.env.ZMX_DIR ?? '')"]);
   expect(result.code).toBe(0);
-  expect(result.out).toBe(expected);
+  expect(result.out).toBe(expected!);
   const override = await run([process.execPath, "-e", "process.stdout.write(process.env.ZMX_DIR ?? '')"], { ZMX_DIR: "/tmp/test-mux-override" });
   expect(override.out).toBe("/tmp/test-mux-override");
   expect(process.env.ZMX_DIR).toBe(expected);
@@ -188,7 +188,7 @@ test("Codex preflight completes before launch ownership or screen state is mutat
 test("launch ownership exists before screen starts and advances only to awaiting SessionStart", async () => {
   const database = new Database(":memory:");
   applyDatabaseSchema(database);
-  let screenCommand: string[] | null = null;
+  let screenCommand = null as string[] | null;
   const runtime: ManagedCodexRuntime = {
     database,
     dbPath: "/var/lib/coding-sessions/app.db",

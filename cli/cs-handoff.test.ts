@@ -98,13 +98,13 @@ test("cs handoff end to end with a stubbed server: rsync, SSH upload, adopt and 
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
-      const body = req.method === "POST" ? await req.json() : null;
+      const body = req.method === "POST" ? (await req.json() as { resumeId?: string }) : null;
       calls.push({ path: url.pathname, body });
       if (req.headers.get("authorization") !== "Bearer cs_test") return Response.json({ error: "no" }, { status: 401 });
       if (url.pathname === "/api/synced/status") return Response.json({ state: "none", name: "k-handoff-test", workspacePath: ws, claudeUrl: null, resumeId: null });
       if (url.pathname === "/api/synced/prepare") return Response.json({ ok: true, workspacePath: ws });
       if (url.pathname === "/api/synced/launch") {
-        const r = adoptHandoffTranscript({ workspace: ws, resumeId: body.resumeId, projectsDir: serverProjects });
+        const r = adoptHandoffTranscript({ workspace: ws, resumeId: String(body?.resumeId), projectsDir: serverProjects });
         return r.ok ? Response.json({ ok: true }) : Response.json({ error: r.error }, { status: 422 });
       }
       if (url.pathname === "/api/sessions") return Response.json({ sessions: [{ name: "k-handoff-test", claudeUrl: "https://claude.ai/code/session_x" }] });

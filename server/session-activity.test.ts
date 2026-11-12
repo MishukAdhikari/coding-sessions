@@ -47,7 +47,7 @@ test("Codex hook lifecycle distinguishes ready, work, input and a finished turn"
     ["SessionStart", "ready"], ["UserPromptSubmit", "running"],
     ["PermissionRequest", "waiting"], ["PostToolUse", "running"],
     ["Stop", "finished"], ["UserPromptSubmit", "running"],
-  ]) {
+  ] as const) {
     const input = parseCodexHookInput({ session_id: sessionId, cwd: "/srv/demo", hook_event_name: event })!;
     expect(applyCodexHook(db, "cs-demo", launchId, input, 1000)).toBe(true);
     const row = db.query("SELECT turn_state, last_event, updated_at FROM codex_launch_state").get() as { turn_state: string; last_event: string; updated_at: number };

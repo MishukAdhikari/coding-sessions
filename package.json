@@ -10,7 +10,8 @@
   "scripts": {
     "start": "bun run server/index.ts",
     "dev": "bun --hot server/index.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
   },
   "devDependencies": {
     "@types/bun": "latest"
