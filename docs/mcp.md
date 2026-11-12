@@ -17,11 +17,12 @@ Scripts and agents on the server itself can call the same tools without a token 
 
 | Tool | What it does |
 | --- | --- |
-| `list_sessions` | Live Sessions with agent, state and folder, plus Host Pressure. `include_ended` adds the Archive. |
-| `read_session` | The bottom of a Session's terminal as plain text, and its state. |
+| `list_sessions` | Live Sessions with id, agent, `mode` (`terminal` or `acp`), state, folder, `prs` (PR links from the conversation, with GitHub state) and `pending_requests` (secrets/connectors it waits on), plus Host Pressure. Filters: `agent`, `state`, `query` (name or folder); `limit` (default 50, max 200) with `total` and `truncated`. `include_ended` adds the Archive (same filters and limit). |
+| `read_session` | The bottom of a Session's terminal as plain text (a Chat session's transcript, ending with a pending permission request and its options), its state, mode, PR links, pending requests and a `next` step. |
+| `handoff_session` | Hand your own local Claude Code conversation to the server; see [Handoff](#handoff). |
 | `send_message` | Types a message and presses Enter. Multi-line text goes in as one bracketed paste. |
 | `press_keys` | Keys in order (`enter`, `escape`, `up`, `down`, `shift+tab`, `ctrl+c`, a digit…), for menus and questions. |
-| `wait_for_session` | Waits (≤ 90 s per call) until the agent stops working, asks, or the Session ends; returns the screen. |
+| `wait_for_session` | Waits (≤ 90 s per call) until the agent stops working, asks, or the Session ends; returns the screen, a `reason` (`turn_finished`, `asking`, `ended`, `screen_settled`, `timeout`) and a `next` step. |
 | `list_projects` | Project allowlist (by id) and the agents this server runs. |
 | `list_repos` | Repos a Fresh Launch can clone. |
 | `launch_session` | Launch in a Project or a fresh Workspace; with `prompt`, sends it once the agent is ready. If the agent is still starting when the call returns, `prompt_queued` is true and the server sends the prompt as soon as the agent is up. `mode`: `terminal` (default) or `acp` for [Chat (ACP) mode](agents.md#chat-acp-mode), project launches only. |
@@ -33,6 +34,39 @@ Scripts and agents on the server itself can call the same tools without a token 
 | `request_connector` | A one-time link where the member connects a remote MCP server with a token or an OAuth sign-in in their own browser. |
 | `connector_status` | A connector's state, auth mode and granted tools, and the latest request for it. Never credentials. |
 | `restart_session` | End a Session and resume the same conversation so it starts with the current secrets. Refused, with nothing ended, when it could not come back. |
+
+**Errors.** A failed call has `isError: true`, a plain-text message (with `Next: …`
+when there is an obvious next call) and `structuredContent.error = {code, message, next?}`.
+`code` is one of `invalid_argument`, `not_found`, `conflict`, `unavailable`, `failed`.
+`launch_session` checks the name (1-31 letters, numbers, `-`, `_`), that exactly one of
+`project_id` / `repo` is given and the project exists, and that `acp` is not combined
+with `repo`, before it launches anything. Tool names and parameters are unchanged from
+earlier versions; new fields are additive.
+
+### Handoff
+
+`handoff_session {name, repo, branch, cwd, transcript_id?, prompt?}` lets an agent on a
+laptop continue its own conversation on the server. It cannot rsync, so:
+
+1. Push the branch first; the workspace is prepared from `repo` at `branch`
+   (uncommitted changes do not travel; a person at a terminal uses `cs handoff`, which
+   rsyncs them).
+2. The tool returns a `command` and `expires_at` (15 minutes). The agent runs the
+   command in its own shell. It reads `~/.claude/projects/<cwd>/<id>.jsonl` (the newest
+   one when `transcript_id` is omitted), refuses a symlink, splits it into 768 KB parts
+   and `PUT`s them to a one-time link `…/mcp/handoff/<token>?part=N`, then `POST`s
+   `?done=N`.
+3. The server writes the parts to a 0600 file in the workspace's `.cs-handoff/`, adopts
+   it as for `cs handoff` (cwd rewritten, moved into its transcript folder), launches
+   `claude --resume <id>` with `prompt` as the first new message, and answers the last
+   request with `{session_id, resume_id}`. Follow it with `wait_for_session`.
+
+Why a one-time upload link rather than transcript chunks in tool arguments: the
+transcript (which can hold secrets the agent printed, and is often megabytes) never
+enters the model's context or MCP client logs, and the link is a single-use,
+15-minute, 256-bit token that only appends parts in order (256 MB cap) to one staging
+file. Claude Code only; Codex is refused for now. Behind Cloudflare Access,
+`/mcp/handoff/*` needs the same Bypass as `/mcp`.
 
 **Secrets never go through MCP.** No tool takes or returns a secret value. To get one,
 call `request_secret` and give the member the link; they paste the value in the app
@@ -126,6 +160,7 @@ CLI's token refresh) can't pass an Access login. These paths then need a **Bypas
 policy — the app's own OAuth guards them instead:
 
 - `sessions.example.com/mcp`
+- `sessions.example.com/mcp/handoff/*` (one-time handoff upload links)
 - `sessions.example.com/.well-known/oauth-protected-resource`
 - `sessions.example.com/.well-known/oauth-authorization-server`
 - `sessions.example.com/oauth/register`

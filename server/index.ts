@@ -3,7 +3,8 @@ import { loadTokenKey } from "./secrets";
 import { resolvePublicFile, requestClientIp, allowsApiMutation } from "./http-security";
 import { db, deleteMeta, getMeta, setMeta } from "./db";
 import * as auth from "./auth";
-import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, managedSessionId, restartBlocker } from "./sessions";
+import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, adoptSyncedHandoff, managedSessionId, restartBlocker } from "./sessions";
+import { HANDOFF_UPLOAD_PATH, HandoffUploads, handleHandoffUpload } from "./handoff";
 import * as claudeAuth from "./claude-auth";
 import { codexAuth } from "./codex-auth";
 import * as claudeChat from "./claude-chat";
@@ -205,8 +206,31 @@ function isMcpAuthed(req: Request): boolean {
   return oauth.checkAccessToken(db, token) || auth.checkCliToken(token);
 }
 
+const handoffUploads = new HandoffUploads();
+const handoffRouteDeps = {
+  uploads: handoffUploads,
+  adopt: adoptSyncedHandoff,
+  launch: (name: string, prompt: string | null, resumeId: string, opts: { autoMode: boolean }) => launchSynced(name, prompt, resumeId, opts),
+  sessionId: managedSessionId,
+};
+
 const mcpDeps: McpDeps = {
   accounts: agentAccounts,
+  sessionExtras(sessions) {
+    const waiting = secretRequests.pendingByScreen();
+    return new Map(withPrLinks(sessions).map((s) => [s.id, {
+      prs: s.prs.map((p) => ({ url: p.url, repo: p.repo, number: p.number, state: p.state, title: p.title })),
+      requests: s.id.startsWith("m:") ? waiting.get(s.id.slice(2)) ?? [] : [],
+    }]));
+  },
+  handoff: {
+    status: syncedStatus,
+    prepare: prepareSynced,
+    createUpload(ticket) {
+      const { token, expiresAt } = handoffUploads.create(ticket);
+      return { url: `${auth.ORIGIN}${HANDOFF_UPLOAD_PATH}${token}`, expiresAt };
+    },
+  },
   listSessions,
   listArchive,
   hostStats,
@@ -323,6 +347,9 @@ const server = Bun.serve({
 
     if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req, { requests: secretRequests });
     if (path === "/mcp/connectors") return handleConnectorRequest(connectors, req);
+
+    // One-time handoff upload links from handoff_session: the token in the path is the credential.
+    if (path.startsWith(HANDOFF_UPLOAD_PATH)) return handleHandoffUpload(req, handoffRouteDeps);
 
     if (path === "/mcp") {
       if (!isMcpAuthed(req)) return mcpUnauthorized(auth.ORIGIN);
@@ -661,6 +688,12 @@ const server = Bun.serve({
 
     if (path === "/api/synced/launch" && method === "POST") {
       const body = await req.json().catch(() => ({}));
+      // cs handoff: the transcript was uploaded over SSH into the Workspace; adopt it first.
+      if (body.handoff === true) {
+        if (!body.resumeId) return json({ error: "A handoff needs resumeId.", code: "invalid_argument" }, 422);
+        const adopted = adoptSyncedHandoff(String(body.name ?? ""), String(body.resumeId));
+        if (!adopted.ok) return json({ error: adopted.error, code: adopted.code }, 422);
+      }
       const r = await launchSynced(String(body.name ?? ""), body.prompt ? String(body.prompt) : null, body.resumeId ? String(body.resumeId) : null, { autoMode: body.autoMode === true });
       return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
     }

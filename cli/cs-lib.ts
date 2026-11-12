@@ -1,4 +1,5 @@
 /* Pure helpers for the `cs` CLI, kept apart so they can be tested without a server. */
+import { lstatSync, readdirSync } from "node:fs";
 
 export const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
@@ -152,7 +153,7 @@ export const tokenEnvFor = (server: string | undefined, isDefault: boolean) =>
   isDefault || !server ? "CS_TOKEN" : `CS_TOKEN_${server.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 
 /** Subcommands that run on a server and take --server=<name> / -S <name> to choose it. */
-export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "attach", "mirror", "doctor", "mcp", "install", "login"]);
+export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "attach", "mirror", "doctor", "mcp", "install", "login", "handoff"]);
 
 /**
  * Pull the server choice out of argv without disturbing anything else.
@@ -201,4 +202,80 @@ export function parseServerArgs(argv: string[]): { sub: string | undefined; args
   const { out, chose } = pick(argv, true, true);
   if (chose && !out.includes("--server") && !out.includes("-s")) out.unshift("--server");
   return { sub: RUN, args: out, server };
+}
+
+/* ---------- cs handoff ---------- */
+
+export interface HandoffArgs {
+  name: string | null;
+  instruction: string | null;
+  compactHint: boolean;
+  agent: "claude" | "codex";
+  error?: string;
+}
+
+const HANDOFF_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}$/;
+
+/**
+ * `cs handoff [name] ["<next instruction>"] [--compact-hint] [--agent claude|codex]`.
+ * A first word that is a valid session name is the name when an instruction follows
+ * it, or when it is the only word; anything else is the instruction.
+ */
+export function parseHandoffArgs(args: string[]): HandoffArgs {
+  const out: HandoffArgs = { name: null, instruction: null, compactHint: false, agent: "claude" };
+  const words: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--compact-hint") out.compactHint = true;
+    else if (a === "--agent" || a.startsWith("--agent=")) {
+      const v = a === "--agent" ? args[++i] : a.slice(8);
+      if (v !== "claude" && v !== "codex") return { ...out, error: "--agent takes claude or codex." };
+      out.agent = v;
+    } else if (a === "--name" || a === "-n") out.name = args[++i] ?? null;
+    else if (/^-{1,2}[a-zA-Z]/.test(a) && !/\s/.test(a)) return { ...out, error: `unknown option ${a}` };
+    else words.push(a);
+  }
+  if (!out.name && words.length && HANDOFF_NAME.test(words[0]!)) out.name = words.shift()!;
+  out.instruction = words.join(" ").trim() || null;
+  if (out.name && !HANDOFF_NAME.test(out.name)) return { ...out, error: "name must be 1-31 letters, numbers, dashes or underscores." };
+  return out;
+}
+
+export interface LocalTranscript { path: string; id: string; bytes: number; mtimeMs: number }
+
+/** Claude Code's transcript folder for a cwd: every non-alphanumeric becomes "-". */
+export const claudeProjectDir = (home: string, cwd: string) => `${home}/.claude/projects/${cwd.replace(/[^a-zA-Z0-9]/g, "-")}`;
+
+/**
+ * The newest Claude Code conversation for `cwd`: the most recently written
+ * `<id>.jsonl` in ~/.claude/projects/<munged cwd>/. Symlinks and odd names are skipped.
+ */
+export function findClaudeTranscript(home: string, cwd: string): LocalTranscript | null {
+  const dir = claudeProjectDir(home, cwd);
+  let best: LocalTranscript | null = null;
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return null; }
+  for (const f of names) {
+    const m = /^([a-zA-Z0-9_-]{1,128})\.jsonl$/.exec(f);
+    if (!m) continue;
+    let st;
+    try { st = lstatSync(`${dir}/${f}`); } catch { continue; }
+    if (!st.isFile() || st.isSymbolicLink() || st.size === 0) continue;
+    if (!best || st.mtimeMs > best.mtimeMs) best = { path: `${dir}/${f}`, id: m[1]!, bytes: st.size, mtimeMs: st.mtimeMs };
+  }
+  return best;
+}
+
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The remote command that receives a transcript on stdin into the Workspace's staging folder, 0600. */
+export function handoffReceiveCommand(workspacePath: string, id: string): string {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new Error("bad transcript id");
+  const dir = `${workspacePath}/.cs-handoff`;
+  const part = `${dir}/${id}.jsonl.part`;
+  return `umask 077 && rm -rf ${shq(dir)} && mkdir -m 700 ${shq(dir)} && cat > ${shq(part)} && mv ${shq(part)} ${shq(`${dir}/${id}.jsonl`)}`;
 }

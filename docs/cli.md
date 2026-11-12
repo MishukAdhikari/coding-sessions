@@ -81,6 +81,7 @@ becomes the default. The old file stays next to it as `config.json.v1.bak`.
 ```text
 cs --server "<prompt>"        run on the server, seeded with your working tree
 cs --server --attach "..."    …then attach this terminal to it (rerun to reattach)
+cs handoff [name] ["<next>"]  continue this folder's Claude Code conversation on the server
 cs list [--json]              sessions running on the server
 cs end <name> [-y]            end one
 cs open [name]                print, open and copy its claude.ai link
@@ -97,6 +98,38 @@ cs                            anything else goes to your local `claude`
 copies its base checkout, then `cs` uploads your local changes over `rsync`, skipping
 gitignored paths. After that the server's copy is the source of truth — the work comes
 back through git (`cs pull`).
+
+## Handoff
+
+```text
+cs handoff [name] ["<next instruction>"] [--compact-hint] [--agent claude]
+```
+
+Continues the Claude Code conversation you are having in this folder on the server,
+with its whole history, instead of re-explaining it in a prompt:
+
+1. finds the newest conversation for this folder in `~/.claude/projects/<folder>/`
+   and prints its id and size;
+2. prepares a workspace and rsyncs your tree exactly as `cs --server` does
+   (uncommitted changes and unpushed commits travel);
+3. uploads the transcript over your SSH connection, never in an HTTPS request body,
+   into the workspace's `.cs-handoff/` folder (`umask 077`, a 0600 file). The server
+   refuses symlinks, rewrites the transcript's `cwd` fields to the workspace path, moves
+   it into its own transcript folder and removes `.cs-handoff/`;
+4. launches `claude --resume <id>` there, with your instruction as the first new
+   message, and prints the claude.ai link. The local agent can stop.
+
+`name` defaults to the branch and must not already run or have a workspace on the
+server. The server re-reads the whole conversation on its first turn (one full-context
+read, without a warm prompt cache), so for a long one run `/compact` locally first;
+`--compact-hint` (or a transcript over 5 MB) prints that reminder. Transcripts can hold
+anything the agent printed, which is why they travel only over SSH.
+
+Codex (`--agent codex`) is refused for now: the server's Synced Launch runs Claude
+Code only, and resuming a Codex rollout from another folder is not verified yet.
+
+An agent without a terminal can do the same through MCP: `handoff_session` (see
+[MCP](mcp.md#handoff)).
 
 ## MCP for your agents
 
