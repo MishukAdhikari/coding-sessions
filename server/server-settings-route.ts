@@ -17,7 +17,7 @@ export interface ServerSettingsRouteDependencies {
   rateLimited: (key: string) => boolean;
 }
 
-const CONFIRMED_SETTINGS = new Set(["agentPermissions", "updateChannel"]);
+const CONFIRMED_SETTINGS = new Set(["agentPermissions", "updateChannel", "trustWorkspaces"]);
 
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: PRIVATE_NO_STORE_HEADERS });
 

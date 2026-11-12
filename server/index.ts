@@ -41,6 +41,13 @@ import { readEventWindow } from "./acp/event-log";
 import { checkPrivateDir } from "./acp/paths";
 import { findAcpSession } from "./acp/route";
 import { sessionActivity } from "./session-activity";
+import { claudeStartupPrompt } from "./claude-startup";
+import { claudeOnboardingDone, completeClaudeOnboarding, playwrightChromium, runDoctor } from "./server-setup";
+import { agentBin } from "./agent-bin";
+import { homedir } from "node:os";
+import packageJson from "../package.json";
+
+const APP_VERSION: string = packageJson.version;
 import { createPrLinkTracker, type PrLink } from "./pr-links";
 import { createPrStatusCache, type PrStatus } from "./pr-status";
 import { handleTranscriptRoute } from "./transcript-route";
@@ -80,7 +87,60 @@ const appUpdates = createAppUpdates(appUpdatePaths(config.dataDir), () => server
 useMouseSetting(serverSettings.mouseEnabled);
 const stepUpGrants = createStepUpGrants();
 const cliLogins = createCliLogins();
-const agentInstaller = createAgentInstaller({ onFinished: () => { void cliUpdates.versions(true); } });
+const agentInstaller = createAgentInstaller({
+  onFinished: (job) => {
+    void cliUpdates.versions(true);
+    // A fresh Claude Code would stop every first session at its theme picker and security notes.
+    if (job.result === "success" && job.agents.includes("claude") && agentBin("claude")) {
+      try { completeClaudeOnboarding(); } catch (e) { console.error("Claude Code onboarding failed", e); }
+    }
+  },
+});
+
+/** server_status, setup_agents, doctor and trust_workspaces over MCP (server/server-setup.ts). */
+const setupDeps: McpDeps["setup"] = {
+  async snapshot() {
+    const [versions, accounts, update, secretNames] = await Promise.all([
+      cliUpdates.versions(true),
+      agentAccounts.list().catch(() => ({ accounts: [] as Array<{ provider: string; loggedIn: boolean | null }> })),
+      appUpdates.status().catch(() => null),
+      currentSecretEnv().then((env) => new Set(Object.keys(env))).catch(() => new Set<string>()),
+    ]);
+    const KEY_SECRET: Record<string, string> = { claude: "ANTHROPIC_API_KEY", codex: "OPENAI_API_KEY" };
+    const signedIn = new Map((accounts.accounts as Array<{ provider: string; loggedIn: boolean | null }>).map((a) => [a.provider, a.loggedIn]));
+    const trust = serverSettings.describe().trustWorkspaces;
+    return {
+      app: { version: update?.version ?? APP_VERSION, channel: serverSettings.get("updateChannel"), auto_updates: update?.available ? update.enabled : null },
+      permissions: serverSettings.unrestricted() ? "unrestricted" : "standard",
+      trust_workspaces: { enabled: serverSettings.trustWorkspaces(), ...(trust.changedBy ? { changed_by: trust.changedBy, changed_at: trust.changedAt } : {}) },
+      agents: INSTALLABLE_AGENTS.map((a) => {
+        const version = versions[a.id] ?? null;
+        return {
+          id: a.id, label: a.label, installed: !!version || !!agentBin(a.id), version,
+          ...(signedIn.has(a.id) ? { signed_in: signedIn.get(a.id) ?? null } : {}),
+          ...(KEY_SECRET[a.id] ? { api_key: secretNames.has(KEY_SECRET[a.id]!) } : {}),
+          ...(a.id === "claude" ? { acp_adapter: !!agentBin("claude-agent-acp") } : a.id === "codex" ? { acp_adapter: !!agentBin("codex-acp") } : {}),
+        };
+      }),
+      claude_onboarding: agentBin("claude") ? claudeOnboardingDone() : null,
+      browser: playwrightChromium(),
+      host: hostStats(),
+    };
+  },
+  install: (agents) => agentInstaller.start(agents),
+  job: () => agentInstaller.status(),
+  doctor: (fix) => runDoctor({
+    home: homedir(), uid: process.getuid?.() ?? -1, which: (b) => Bun.which(b),
+    host: () => { const h = hostStats(); return h ? { diskFreeGb: h.diskFreeGb, memTotalGb: h.memTotalGb } : null; },
+    browserInstalled: () => playwrightChromium(),
+    claudeInstalled: () => !!agentBin("claude"),
+    claudeVersion: () => null,
+  }, fix),
+  setTrust: (enabled) => {
+    const r = serverSettings.set("trustWorkspaces", enabled ? "on" : "off", "mcp");
+    return r.ok ? { ok: true } : r;
+  },
+};
 const COOKIE_NAME = "xs_auth";
 const transcriptRoots = defaultTranscriptRoots();
 const prLinks = createPrLinkTracker();
@@ -228,6 +288,7 @@ const handoffRouteDeps = {
 };
 
 const mcpDeps: McpDeps = {
+  setup: setupDeps,
   accounts: agentAccounts,
   sessionExtras(sessions) {
     const waiting = secretRequests.pendingByScreen();
@@ -333,6 +394,10 @@ const liveHub = createLiveHub({
   })),
   read: readLiveSource,
   secrets: async () => Object.values(await currentSecretEnv()),
+  async startup(s) {
+    const screen = await chatAwareIo.readScreen(s.id, 40);
+    return screen.ok ? claudeStartupPrompt(screen.value) : null;
+  },
 });
 
 const server = Bun.serve<TermSocketData>({

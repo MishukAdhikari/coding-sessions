@@ -17,7 +17,9 @@ export const INSTALLABLE_AGENTS = [
   { id: "qwen", label: "Qwen Code", preset: true },
   { id: "opencode", label: "opencode", preset: true },
 ] as const;
-export type InstallableAgent = typeof INSTALLABLE_AGENTS[number]["id"];
+/** Chat (ACP) adapters on their own; installing claude or codex installs its adapter too. */
+export const ACP_ADAPTER_INSTALLS = ["claude-acp", "codex-acp"] as const;
+export type InstallableAgent = typeof INSTALLABLE_AGENTS[number]["id"] | typeof ACP_ADAPTER_INSTALLS[number];
 
 export interface InstallJob {
   agents: InstallableAgent[];
@@ -37,12 +39,12 @@ export interface AgentInstallerOptions {
   spawn?: (argv: string[]) => { stdout: ReadableStream<Uint8Array>; stderr: ReadableStream<Uint8Array>; exited: Promise<number>; kill: () => void };
   now?: () => Date;
   /** Called after an install finishes, so cached versions are read again. */
-  onFinished?: () => void;
+  onFinished?: (job: InstallJob) => void;
 }
 
 export function parseAgents(value: unknown): { ok: true; agents: InstallableAgent[] } | { ok: false; error: string } {
   if (!Array.isArray(value) || value.length === 0) return { ok: false, error: "Name at least one agent to install." };
-  const known = new Set<string>(INSTALLABLE_AGENTS.map(agent => agent.id));
+  const known = new Set<string>([...INSTALLABLE_AGENTS.map(agent => agent.id), ...ACP_ADAPTER_INSTALLS]);
   const unknown = value.filter(name => typeof name !== "string" || !known.has(name));
   if (unknown.length) return { ok: false, error: `Unknown agent: ${unknown.map(String).join(", ")}. Choose from ${[...known].join(", ")}.` };
   return { ok: true, agents: [...new Set(value as InstallableAgent[])] };
@@ -50,7 +52,7 @@ export function parseAgents(value: unknown): { ok: true; agents: InstallableAgen
 
 export function createAgentInstaller(options: AgentInstallerOptions = {}) {
   const script = options.script ?? new URL("../deploy/install-provider-clis", import.meta.url).pathname;
-  const spawn = options.spawn ?? ((argv: string[]) => Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: childEnvironment() }));
+  const spawn = options.spawn ?? ((argv: string[]) => Bun.spawn(argv, { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...childEnvironment(), CS_BUN: process.execPath } }));
   const now = options.now ?? (() => new Date());
   let job: InstallJob | null = null;
 
@@ -82,7 +84,7 @@ export function createAgentInstaller(options: AgentInstallerOptions = {}) {
       void Promise.all([drain(child.stdout), drain(child.stderr), child.exited]).then(([, , code]) => code, () => 1).then(code => {
         clearTimeout(timer);
         Object.assign(current, { running: false, result: code === 0 ? "success" : "failed", finishedAt: now().toISOString() });
-        options.onFinished?.();
+        options.onFinished?.({ ...current, agents: [...current.agents] });
       });
       return { ok: true, job: { ...current } };
     },

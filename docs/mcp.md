@@ -34,6 +34,32 @@ Scripts and agents on the server itself can call the same tools without a token 
 | `request_connector` | A one-time link where the member connects a remote MCP server with a token or an OAuth sign-in in their own browser. |
 | `connector_status` | A connector's state, auth mode and granted tools, and the latest request for it. Never credentials. |
 | `restart_session` | End a Session and resume the same conversation so it starts with the current secrets. Refused, with nothing ended, when it could not come back. |
+| `server_status` | How ready the server is, in one call: app version and update channel, each agent (installed, version, signed in, Chat/ACP adapter), Claude Code onboarding, permission mode, the `trust_workspaces` setting, browser, disk and memory, `doctor` findings, Claude Code sessions blocked on a first-run screen, and `missing`: each remaining item with the exact next MCP call. `human: true` marks what only a person can do (a sign-in, a secret value, a root command); `ask_operator: true` marks a decision to ask them about. `ready` is true when nothing an agent can do is left. Never secrets or sign-in links. |
+| `setup_agents` | Install or update agents as the service account (never root), as **Settings → Agents** does: `claude`, `codex`, `command-code`, `gemini`, `kimi`, `qwen`, `opencode`. `claude` and `codex` also install their Chat (ACP) adapter (`claude-agent-acp`, `codex-acp`) under the app's own Bun: no global npm and no system Node.js; `claude-acp` / `codex-acp` install just the adapter. A successful Claude Code install also completes its first-run onboarding. Returns a job; call again without `agents` and with `wait_seconds` (≤ 90) to follow it. |
+| `doctor` | The checks the service account can make on itself (file owners in its home, `~/.claude.json` privacy, Claude Code onboarding, screen/ttyd/git, disk, memory, browser). `fix: true` repairs what needs no root; root-only findings return the exact command for a person, such as `sudo coding-sessions doctor --fix`. |
+| `trust_workspaces` | The operator setting that answers Claude Code's folder-trust question with Yes for workspaces this app creates (repo, `cs sync` and handoff workspaces under `~/workspaces`), never any other folder. Turning it on needs `confirm: true`, which an agent passes only after the human said yes. It is recorded ("Changed by an MCP client") and can be turned off in **Settings → Server settings → Trust app workspaces**. |
+
+### Set up a fresh server from your laptop
+
+After `install.sh` (or `sudo coding-sessions setup`) and connecting this MCP from your
+local agent, the agent can finish the setup with no SSH and no browser, except for the
+steps that must be a person's:
+
+1. `server_status`: read `missing` and `next`.
+2. `setup_agents {agents: ["claude"]}`, then `setup_agents {wait_seconds: 60}` until the
+   job's `result` is `success`. This installs Claude Code, its Chat (ACP) adapter, and
+   completes its first-run onboarding (theme, security notes).
+3. `doctor {fix: true}`; give the human any `for_the_human` command.
+4. Sign-in: `agent_auth {agent: "claude", action: "login"}` gives a link **the human**
+   opens; or for an API key, `request_secret {name: "ANTHROPIC_API_KEY", reason}` gives
+   a link where **the human** enters the value. Values never pass through the model.
+5. Ask the human whether Claude Code may trust the workspaces this app creates. Only on
+   their yes: `trust_workspaces {enabled: true, confirm: true}`.
+6. `server_status` again until `ready` is true, then `handoff_session` or
+   `launch_session` (`mode: "acp"` for Chat).
+
+A CLI or MCP token can never read or set secret values (`/api/secrets` answers 403 with
+`code: browser_only`); use `request_secret`.
 
 **Errors.** A failed call has `isError: true`, a plain-text message (with `Next: …`
 when there is an obvious next call) and `structuredContent.error = {code, message, next?}`.

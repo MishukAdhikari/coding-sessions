@@ -89,7 +89,8 @@ Then:
 2. Agents sign in from the app: **Settings → Agent authentication** lists every installed agent with its sign-in. Agents without a browser sign-in (Gemini CLI, Kimi Code, Qwen Code, opencode) offer **Sign in in a terminal**. See `docs/agents.md`.
 3. `sudo coding-sessions doctor` checks everything and says how to fix what's wrong. Permission errors (`EACCES`, "dubious ownership", "readonly database", a service that won't start after something ran as root): `sudo coding-sessions doctor --fix` repairs ownership and modes, asking first. Never fix them by hand with `chown -R` or `chmod -R`.
 4. On Docker, run agent commands as the service account: `docker compose exec -u cs app …`. With a bind mount, set `PUID` and `PGID` (`docs/docker.md`).
-5. To move work from a laptop to the server later, point them at `cs` in `docs/cli.md`: `cs handoff` continues the current Claude Code conversation on the server.
+5. **Finish setup over MCP, no SSH:** once the user connected the server's MCP (`docs/mcp.md#connect`) to their local agent, follow `docs/mcp.md#set-up-a-fresh-server-from-your-laptop`: `server_status`, `setup_agents {agents: ["claude"]}` (installs the Chat/ACP adapter and completes onboarding), `doctor {fix: true}`, sign-in via `agent_auth` or a key via `request_secret` (the human opens the link), and only after the user says yes, `trust_workspaces {enabled: true, confirm: true}`. Hand any `human: true` item (a link, a `sudo` command) to the user; never work around it.
+6. To move work from a laptop to the server later, point them at `cs` in `docs/cli.md`: `cs handoff` continues the current Claude Code conversation on the server.
 
 ## Repair or recover
 

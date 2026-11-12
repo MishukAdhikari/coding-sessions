@@ -65,7 +65,7 @@ describe("agents", () => {
   test("a missing adapter names the npm package that installs it", async () => {
     const r = await acpCommand("claude", deps([]));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("npm install -g @agentclientprotocol/claude-agent-acp");
+    if (!r.ok) expect(r.error).toContain("@agentclientprotocol/claude-agent-acp");
   });
 });
 

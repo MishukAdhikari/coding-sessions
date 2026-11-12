@@ -130,7 +130,18 @@ const STATUS_TTL_MS = 30 * 60_000;
  * there, without inflating the rest). null: not gzip, corrupt, or over the limit.
  */
 export function gunzipPart(chunk: Uint8Array, limit = PART_LIMIT): Uint8Array | null {
-  try { return new Uint8Array(gunzipSync(chunk, { maxOutputLength: limit })); } catch { return null; }
+  const r = inflatePart(chunk, limit);
+  return r.ok ? r.value : null;
+}
+
+/** Like gunzipPart, but says why: "too_large" (inflates past limit) or "bad_gzip" (not gzip or corrupt). */
+export function inflatePart(chunk: Uint8Array, limit = PART_LIMIT): { ok: true; value: Uint8Array } | { ok: false; reason: "too_large" | "bad_gzip" } {
+  try { return { ok: true, value: new Uint8Array(gunzipSync(chunk, { maxOutputLength: limit })) }; }
+  catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code ?? "";
+    const message = String((e as Error)?.message ?? "");
+    return { ok: false, reason: code === "ERR_BUFFER_TOO_LARGE" || /maxOutputLength|too large|Cannot create a Buffer larger/i.test(message) ? "too_large" : "bad_gzip" };
+  }
 }
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -190,9 +201,11 @@ export class HandoffUploads {
     if (body.byteLength > PART_LIMIT) return { ok: false, status: 413, code: "too_large", error: "Part too large." };
     let chunk = body;
     if (opts.gzip) {
-      const inflated = gunzipPart(body);
-      if (!inflated) return { ok: false, status: 413, code: "too_large", error: `A part must be gzip that inflates to at most ${PART_LIMIT} bytes.` };
-      chunk = inflated;
+      const inflated = inflatePart(body);
+      if (!inflated.ok) return inflated.reason === "too_large"
+        ? { ok: false, status: 413, code: "too_large", error: `A part must be gzip that inflates to at most ${PART_LIMIT} bytes.` }
+        : { ok: false, status: 400, code: "bad_gzip", error: "The part is not valid gzip (corrupt or truncated). Send it again." };
+      chunk = inflated.value;
     }
     if (index < u.parts) {
       // A retry of a part the server already has (its response was lost): same bytes, no-op.

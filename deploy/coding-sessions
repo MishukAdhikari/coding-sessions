@@ -511,7 +511,7 @@ install_agents() {
   local list; list=$(tr ',' ' ' <<<"$1")
   # npm writes into ~/.local as the service account: root-owned leftovers there would fail it with EACCES.
   perm_pass fix
-  as_service bash "$(app_dir)/deploy/install-provider-clis" $list
+  as_service env CS_BUN="$(app_dir)/bin/bun" bash "$(app_dir)/deploy/install-provider-clis" $list
 }
 
 install_browser() {

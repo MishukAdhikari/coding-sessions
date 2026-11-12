@@ -71,7 +71,7 @@ export async function acpCommand(provider: SessionProvider, deps: AcpResolveDeps
 }
 
 function missingAdapter(adapter: { label: string; bin: string; npm: string }): string {
-  return `${adapter.label} chat needs the ACP adapter ${adapter.bin}, which is not installed for the service user. Install it with: npm install -g ${adapter.npm}`;
+  return `${adapter.label} chat needs the ACP adapter ${adapter.bin}, which is not installed for the service user. Install it (it installs with ${adapter.label}): Settings → Agents → Install ${adapter.label}, the MCP tool setup_agents {agents: [\"${adapter.bin === "claude-agent-acp" ? "claude" : "codex"}\"]}, or sudo coding-sessions agents install ${adapter.bin === "claude-agent-acp" ? "claude-acp" : "codex-acp"} (package ${adapter.npm}).`;
 }
 
 /** Each launchable agent and whether Chat mode is available for it here, for the launch sheet. */

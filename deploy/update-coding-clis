@@ -48,5 +48,12 @@ if [[ -x $HOME/.local/bin/claude ]]; then
   "$HOME/.local/bin/claude" install latest || failed=1
   "$HOME/.local/bin/claude" --version || failed=1
 fi
+# ACP adapters (Chat mode) installed under the instance's Bun: refreshed where present.
+here=$(dirname "$(readlink -f "$0")")
+for adapter in claude-agent-acp:claude-acp codex-acp:codex-acp; do
+  if [[ -x $HOME/.local/bin/${adapter%%:*} ]]; then
+    CS_BUN=${CS_BUN:-$here/../bin/bun} bash "$here/install-provider-clis" "${adapter#*:}" || failed=1
+  fi
+done
 echo "CLI updates finished: $(date -Is); status=$failed"
 exit "$failed"

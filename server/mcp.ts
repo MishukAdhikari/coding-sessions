@@ -17,6 +17,8 @@ import type { RestartResult } from "./session-restart";
 import { SECRETS_GUIDANCE } from "./communicator-mcp";
 import { handoffUploadCommand, mungeCwd } from "./handoff";
 import { COMPACT_FROM_TOKENS, LEAN_ABOVE_TOKENS, isHandoffMode, type RequestedHandoffMode } from "./handoff-modes";
+import type { InstallJob } from "./agent-installs";
+import type { Finding } from "./server-setup";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version: "1.0.0" };
@@ -24,7 +26,8 @@ const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version
 export const INSTRUCTIONS = `Coding Sessions runs Claude, Codex and Command Code agents in terminal sessions on one server; this connector drives them.
 Typical loop: list_sessions (or launch_session with a prompt) → send_message → wait_for_session → read_session, repeating until the work is done.
 Session ids look like "m:cs-name". A session's state is one of: starting, working, asking (blocked on a question — read_session, then press_keys or send_message to answer), waiting (finished its turn, ready for the next message), running (alive; this agent reports no turn state), ended.
-When startup_waiting_for_trust is true, Codex is waiting for the operator to review folder trust before its managed startup hook can run. Report this decision to the operator; do not accept trust automatically.
+Set up a fresh server: server_status first; it lists what is missing, each with the exact next call. Usually: setup_agents {agents: ["claude"]} (also installs the Chat/ACP adapter and completes Claude Code's onboarding), then setup_agents {wait_seconds: 60} until the job finishes; doctor {fix: true}; sign-in with agent_auth (the human opens the link) or a key with request_secret (the human enters the value); ask the human whether to trust app workspaces, and only on their yes trust_workspaces {enabled: true, confirm: true}; server_status again until ready. Items with human: true are for the person (give them the link or the sudo command); never work around them.
+When startup_waiting_for_trust is true, Codex is waiting for the operator to review folder trust before its managed startup hook can run. Report this decision to the operator; do not accept trust automatically: folder trust is answered for you only through the operator's trust_workspaces setting, and only for workspaces this app creates. The same holds for Claude Code's folder_trust startup_prompt.
 The additive activity field matches the web UI: running, waiting (needs input), finished (turn complete; session still open), ready, connected (no reliable turn signal), starting, ended, or failed.
 Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.
 A session launched with mode "acp" (Chat mode) talks to its agent over the Agent Client Protocol: send_message sends a prompt; when it is asking, read_session lists the agent's permission request with its options, and send_message with one option's name (or id) answers it; press_keys does not apply.
@@ -64,12 +67,33 @@ export interface McpDeps {
   restart?(id: string): Promise<RestartResult>;
   /** Per session: PR links found in its transcript, and the secret/connector requests it waits on. */
   sessionExtras?(sessions: SessionInfo[]): Map<string, SessionExtras>;
+  /** Server setup (server_status, setup_agents, doctor, trust_workspaces); absent in tests that predate it. */
+  setup?: SetupDeps;
   /** Handoff of a local conversation (handoff_session); absent in deployments without it. */
   handoff?: {
     status(name: string): Promise<{ ok: true; status: { state: "live" | "resumable" | "none"; name: string; workspacePath: string } } | { ok: false; error: string }>;
     prepare(name: string, repo: string, branch: string | null): Promise<{ ok: true; workspacePath: string } | { ok: false; error: string }>;
     createUpload(ticket: { name: string; workspace: string; resumeId: string | null; prompt: string | null; autoMode: boolean; mode: RequestedHandoffMode }): { url: string; expiresAt: number };
   };
+}
+
+/** What server_status reads; each part is the app's own view, never a secret or a link. */
+export interface SetupSnapshot {
+  app: { version: string | null; channel: string; auto_updates: boolean | null };
+  permissions: "standard" | "unrestricted";
+  trust_workspaces: { enabled: boolean; changed_by?: string; changed_at?: string };
+  agents: Array<{ id: string; label: string; installed: boolean; version: string | null; signed_in?: boolean | null; api_key?: boolean; acp_adapter?: boolean }>;
+  claude_onboarding: boolean | null;
+  browser: boolean;
+  host: unknown;
+}
+
+export interface SetupDeps {
+  snapshot(): Promise<SetupSnapshot>;
+  install(agents: unknown): { ok: true; job: InstallJob } | { ok: false; error: string; status: number };
+  job(): InstallJob | null;
+  doctor(fix: boolean): Finding[];
+  setTrust(enabled: boolean): { ok: true } | { ok: false; error: string };
 }
 
 export interface SessionExtras {
@@ -139,6 +163,40 @@ function summarizeArchived(a: ArchivedInfo) {
 const sessionId = { type: "string", description: "Session id from list_sessions, like \"m:cs-name\"." };
 
 export const TOOLS = [
+  {
+    name: "server_status",
+    title: "Server setup status",
+    description: "One call for how ready this server is: app version and update channel, each agent (installed, version, signed in, Chat/ACP adapter ready), Claude Code onboarding, permission mode and the trust_workspaces setting, browser, disk and memory, doctor findings, Claude Code sessions blocked on a first-run screen, and missing: each thing still needed with the exact next MCP call (human: true where only a person can do it, such as a sign-in or a secret value). ready is true when nothing an agent can do is left. Never returns secrets or sign-in links.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "setup_agents",
+    title: "Install or update agents",
+    description: "Install or update agent CLIs on this server as its service account (never root): claude, codex, command-code, gemini, kimi, qwen, opencode. claude and codex also install their Chat (ACP) adapter under the app's own Bun (no global npm, no system Node.js); claude-acp or codex-acp installs just the adapter. A successful Claude Code install also completes its first-run onboarding. One install runs at a time and returns a job; call again without agents (wait_seconds up to 90) to follow it. Signs in to nothing: agent_auth does that.",
+    inputSchema: { type: "object", properties: {
+      agents: { type: "array", items: { type: "string", enum: ["claude", "codex", "command-code", "gemini", "kimi", "qwen", "opencode", "claude-acp", "codex-acp"] }, description: "Agents to install or update. Leave out to read the current job." },
+      wait_seconds: { type: "integer", minimum: 0, maximum: 90, description: "Wait up to this long for the job to finish. Default 0." },
+    } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: "doctor",
+    title: "Check and repair the server",
+    description: "Run the checks the service account can make on itself: file owners in its home, ~/.claude.json privacy, Claude Code onboarding, screen/ttyd/git, disk, memory, the Claude.ai browser. fix: true repairs what it can without root (completes Claude Code's first-run onboarding, makes ~/.claude.json private). A finding with human: true needs a person; its fix is the exact command, such as sudo coding-sessions doctor --fix, to run on the server.",
+    inputSchema: { type: "object", properties: { fix: { type: "boolean", description: "Repair what the service account can. Default false." } } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "trust_workspaces",
+    title: "Trust app workspaces (operator setting)",
+    description: "Turn on or off the operator setting that answers Claude Code's folder-trust question with Yes for workspaces this app creates (from a repository, cs sync and handoff, under ~/workspaces), never any other folder. With it on, a handoff or repo session in standard permission mode starts without stopping at trust. This is the operator's security decision: ask the human first and pass confirm: true only after they say yes. Recorded and shown in Settings → Server settings, where it can be turned off. enabled: false needs no confirm.",
+    inputSchema: { type: "object", properties: {
+      enabled: { type: "boolean" },
+      confirm: { type: "boolean", description: "true only after the human operator approved trusting app workspaces." },
+    }, required: ["enabled"] },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  },
   {
     name: "agent_accounts",
     title: "Agent account status",
@@ -524,8 +582,123 @@ async function secretTool(deps: McpDeps, name: string, args: Record<string, unkn
   return fail(`Unknown tool ${name}.`);
 }
 
+/* ---------- server setup ---------- */
+
+interface Missing { item: string; why: string; next: string; human?: boolean; ask_operator?: boolean }
+
+/** Claude Code terminal sessions blocked on a first-run screen right now. */
+async function pendingStartupScreens(deps: McpDeps) {
+  const out: Array<{ session_id: string; name: string; kind: string; how: string }> = [];
+  for (const s of await deps.listSessions()) {
+    if (s.status === "ended" || s.provider !== "claude" || s.mode === "acp") continue;
+    const screen = await deps.readScreen(s.id, 40).catch(() => null);
+    const startup = screen?.ok ? startupPromptOf(s, screen.value) : null;
+    if (startup) out.push({ session_id: s.id, name: s.name, kind: startup.kind, how: startup.how });
+  }
+  return out;
+}
+
+export async function serverStatus(deps: McpDeps, setup: SetupDeps) {
+  const snap = await setup.snapshot();
+  const findings = setup.doctor(false);
+  const screens = await pendingStartupScreens(deps);
+  const job = setup.job();
+  const missing: Missing[] = [];
+  const agent = (id: string) => snap.agents.find((a) => a.id === id);
+  const claude = agent("claude");
+  const codex = agent("codex");
+  const installing = !!job?.running;
+
+  if (!snap.agents.some((a) => a.installed)) {
+    missing.push({ item: "an agent", why: "No agent CLI is installed.", next: installing ? "setup_agents {wait_seconds: 60}" : 'setup_agents {agents: ["claude"]}' });
+  }
+  for (const a of [claude, codex]) {
+    if (!a?.installed) continue;
+    const name = a.id === "claude" ? "Claude Code" : "Codex";
+    if (a.acp_adapter === false) missing.push({ item: `${name} Chat (ACP) adapter`, why: `Chat mode for ${name} needs its ACP adapter.`, next: installing ? "setup_agents {wait_seconds: 60}" : `setup_agents {agents: ["${a.id}-acp"]}` });
+    if (a.signed_in === false && !a.api_key) missing.push({ item: `${name} sign-in`, why: `${name} is installed but not signed in.`, human: true,
+      next: `agent_auth {agent: "${a.id}", action: "login"} returns a sign-in link for the human to open${a.id === "claude" ? " (then submit_code with the code they get)" : ""}; or, for an API key, request_secret {name: "${a.id === "claude" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"}", reason} and give the human the link.` });
+  }
+  if (claude?.installed && snap.claude_onboarding === false) {
+    missing.push({ item: "Claude Code onboarding", why: "Every first terminal session stops at the theme picker and security notes.", next: "doctor {fix: true}" });
+  }
+  if (claude?.installed && snap.permissions === "standard" && !snap.trust_workspaces.enabled) {
+    missing.push({ item: "workspace trust", ask_operator: true, why: "In standard permission mode every new repo or handoff workspace stops at Claude Code's folder-trust question (default: No, exit).",
+      next: "Ask the human whether to trust workspaces this app creates; only if they say yes: trust_workspaces {enabled: true, confirm: true}. Otherwise they answer trust per session." });
+  }
+  for (const f of findings) {
+    if (f.status === "ok" || f.check === "Claude Code onboarding") continue;
+    missing.push({ item: f.check, why: f.detail, next: f.fix ?? "doctor", ...(f.human ? { human: true } : {}) });
+  }
+  for (const s of screens) missing.push({ item: `session ${s.name}: ${s.kind}`, why: "This Claude Code session is waiting on a first-run screen.", next: `read_session {session_id: "${s.session_id}"}; ${s.how}`, ...(s.kind === "folder_trust" ? { ask_operator: true } : {}) });
+
+  const agentWork = missing.filter((m) => !m.human && !m.ask_operator);
+  return {
+    ready: agentWork.length === 0 && !installing,
+    app: snap.app,
+    permissions: snap.permissions,
+    trust_workspaces: snap.trust_workspaces,
+    agents: snap.agents,
+    claude_onboarding: snap.claude_onboarding,
+    browser: snap.browser,
+    host: snap.host,
+    install_job: job ? { agents: job.agents, result: job.result, started_at: job.startedAt, finished_at: job.finishedAt } : null,
+    doctor: findings,
+    startup_screens: screens,
+    missing,
+    next: agentWork[0]?.next ?? missing[0]?.next ?? "Ready: launch_session or handoff_session.",
+  };
+}
+
+async function setupTool(deps: McpDeps, name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  const setup = deps.setup;
+  if (!setup) return fail("Server setup tools are unavailable on this server.", "unavailable");
+  switch (name) {
+    case "server_status":
+      return ok(await serverStatus(deps, setup));
+    case "setup_agents": {
+      let started: InstallJob | null = null;
+      if (args.agents !== undefined && args.agents !== null) {
+        const r = setup.install(args.agents);
+        if (!r.ok) return fail(r.error, r.status === 409 ? "conflict" : "invalid_argument", r.status === 409 ? "setup_agents {wait_seconds: 60} follows the running job." : undefined);
+        started = r.job;
+      }
+      const wait = int(args.wait_seconds, 0, 0, 90);
+      const deadline = deps.now() + wait * 1000;
+      let job = setup.job() ?? started;
+      while (job?.running && deps.now() < deadline) { await deps.sleep(2000); job = setup.job(); }
+      if (!job) return ok({ job: null, next: 'setup_agents {agents: ["claude"]}' });
+      return ok({ job, next: job.running ? "setup_agents {wait_seconds: 60}" : job.result === "success" ? "server_status" : "Read job.output; fix the cause (doctor) and run setup_agents again." });
+    }
+    case "doctor": {
+      const findings = setup.doctor(args.fix === true);
+      const human = findings.filter((f) => f.human && f.status !== "ok");
+      return ok({ findings, ok: findings.every((f) => f.status === "ok"),
+        ...(human.length ? { for_the_human: [...new Set(human.map((f) => f.fix).filter(Boolean))], note: "These need a person on the server (root, or a decision); give them the commands. The agent cannot run them." } : {}),
+        next: findings.some((f) => f.status !== "ok" && !f.human && f.fix?.startsWith("doctor")) ? "doctor {fix: true}" : "server_status" });
+    }
+    case "trust_workspaces": {
+      if (typeof args.enabled !== "boolean") return fail("enabled must be true or false.", "invalid_argument");
+      if (args.enabled && args.confirm !== true) {
+        return fail("Trusting app workspaces is the operator's decision.", "invalid_argument",
+          "Ask the human whether Claude Code may trust the workspaces this app creates (repo, sync and handoff workspaces under ~/workspaces); only after they say yes, call trust_workspaces {enabled: true, confirm: true}.");
+      }
+      const r = setup.setTrust(args.enabled);
+      if (!r.ok) return fail(r.error);
+      return ok({ trust_workspaces: args.enabled, applies_to: "workspaces this app creates under ~/workspaces (repo, cs sync, handoff), for sessions started from now on",
+        shown_in: "Settings → Server settings → Trust app workspaces", next: "server_status" });
+    }
+  }
+  return fail(`Unknown tool ${name}.`);
+}
+
 export async function callTool(deps: McpDeps, name: string, args: Record<string, unknown>): Promise<ToolResult> {
   switch (name) {
+    case "server_status":
+    case "setup_agents":
+    case "doctor":
+    case "trust_workspaces":
+      return setupTool(deps, name, args);
     case "agent_accounts":
       return deps.accounts ? ok(await deps.accounts.list()) : fail("Agent account controls are unavailable.", "unavailable");
     case "agent_auth": {

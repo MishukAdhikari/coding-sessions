@@ -1,6 +1,6 @@
 import { config } from "./config";
 import { adoptHandoffTranscript, mungeCwd, type HandoffJob } from "./handoff";
-import { COMPACT_FOCUS, HANDOFF_DOC, HANDOFF_DOC_PROMPT, HANDOFF_ORIGIN_FILE, HANDOFF_STEP_TIMEOUT_MS, chooseHandoffMode, estimateTextTokens, estimateTranscriptTokens, leanFirstPrompt, searchTranscript, type RequestedHandoffMode, type TranscriptSearch } from "./handoff-modes";
+import { COMPACT_FOCUS, compactFailure, HANDOFF_DOC, HANDOFF_DOC_PROMPT, HANDOFF_ORIGIN_FILE, HANDOFF_STEP_TIMEOUT_MS, chooseHandoffMode, estimateTextTokens, estimateTranscriptTokens, leanFirstPrompt, searchTranscript, type RequestedHandoffMode, type TranscriptSearch } from "./handoff-modes";
 import { Communicator } from "./communicator";
 import { communicator, connectors } from "./communicator-runtime";
 import type { Connectors } from "./connectors";
@@ -19,6 +19,7 @@ import { lastTurnState, type TurnState } from "./turn-state";
 import { DEFAULT_SESSION_PROVIDER, capabilitiesFor, commandSlug, isCommandProvider, parseSessionProvider, type CommandProvider, type SessionProvider } from "./session-provider";
 import { commandEnv, findCommand, resolveBin, type CustomCommand } from "./commands";
 import { sessionSecretEnv } from "./secret-store";
+import { approveClaudeApiKey } from "./server-setup";
 import { launchSecrets, removeLaunchSecrets } from "./launch-secrets";
 import { findPreset, presetLaunch, presetReadsTurnState } from "./agent-presets";
 import { buildCodexInvocation, preflightCodex, type CodexInvocation } from "./codex";
@@ -686,9 +687,11 @@ interface CommunicatingSessionRuntime {
   hasHolder: (screen: string) => Promise<boolean>;
   uuid: () => string;
   now: () => number;
+  /** Mark a stored ANTHROPIC_API_KEY as approved in ~/.claude.json; absent in tests. */
+  approveClaudeKey?: (key: string) => void;
 }
 const communicatingRuntime: CommunicatingSessionRuntime = {
-  database: db, communicator, connectors, installSkill: installCollaborationSkill,
+  database: db, communicator, connectors, installSkill: installCollaborationSkill, approveClaudeKey: (key) => { approveClaudeApiKey(key); },
   configure: (provider, cwd, bin, withConnectors) => providerCommunicatorArgs(provider, cwd, { commandCodeBin: bin, connectors: withConnectors }),
   spawn: mux.spawn, secretEnv: sessionSecretEnv, secretsFile: (id, secrets) => launchSecrets.prepare(id, secrets),
   hasHolder: async screen => !!await mux.find(screen), uuid: randomUUID, now: Date.now,
@@ -729,6 +732,11 @@ export async function startCommunicatingSession(options: CommunicatingSessionOpt
     // Precedence: stored secrets < the provider's own credential < session plumbing.
     const secrets = await runtime.secretEnv?.() ?? {};
     const secretsFile = runtime.secretsFile?.(launchId, secrets) ?? {};
+    // A key the operator stored for the agents is meant to be used: without this, Claude Code
+    // whose onboarding was completed for it rejects ANTHROPIC_API_KEY and shows "Not logged in".
+    if (options.provider === "claude" && secrets.ANTHROPIC_API_KEY) {
+      try { runtime.approveClaudeKey?.(secrets.ANTHROPIC_API_KEY); } catch {}
+    }
     const result = await runtime.spawn(options.screen, options.command(args), { env: { ...secrets, ...options.env, ...mcpEnv, ...communicatorEnvironment(token, config.port, connectorToken), ...secretsFile } });
     if (result.code !== 0) throw new Error(safeLaunchError(result.err, "Session failed to start."));
     database.query("UPDATE launches SET phase='ready' WHERE launch_id=? AND phase='preparing'").run(launchId);
@@ -1469,7 +1477,7 @@ export async function launchWorkspaceSession(name: string, repoInput: string, re
     screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: remoteControl ? 1 : 0,
     // Read the permission mode once, so a change mid-launch cannot mix two modes.
     command: (mcp, unrestricted = serverSettings.unrestricted()) =>
-    `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${unrestricted ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
+    `mkdir -p ${shellQuote(WORKSPACES_DIR)} && { ${prep}${unrestricted || serverSettings.trustWorkspaces() ? ` && ${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)}` : ""} ; } > ${shellQuote(join(WORKSPACES_DIR, name.toLowerCase() + ".setup.log"))} 2>&1 && ` +
     `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${remoteControl ? `--remote-control '${name}' ` : ""}${claudePermissionArgs(unrestricted)}`,
   });
 }
@@ -1765,7 +1773,7 @@ export async function launchSynced(
   const started = await startCommunicatingSession({
     screen: screenName, name, projectPath: ws, provider: "claude", remoteControl: 1, resumeId: rid,
     command: (mcp, unrestricted = serverSettings.unrestricted()) =>
-    `cd ${shellQuote(ws)} && ${unrestricted ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
+    `cd ${shellQuote(ws)} && ${unrestricted || serverSettings.trustWorkspaces() ? `${shellQuote(process.execPath)} ${shellQuote(trustScript)} ${shellQuote(ws)} && ` : ""}` +
     `exec ${shellQuote(claudeBin)} ${mcp.map(shellQuote).join(" ")} ${resumeArg}${opts.autoMode && unrestricted ? AUTO_MODE_ARGS : ""}--remote-control '${name}' ${claudePermissionArgs(unrestricted)}${promptArg}`,
   });
   if (!started.ok) return started;
@@ -2250,7 +2258,7 @@ async function compactHandoff(ws: string, resumeId: string, deps: HandoffDeps): 
   if (!r.ok || !r.session_id || !RESUME_ID_RE.test(r.session_id)) return { ok: false, error: r.error ?? "claude -p gave no session id" };
   const path = transcriptPathFor(ws, r.session_id);
   const text = existsSync(path) ? readFileSync(path, "utf8") : "";
-  if (!text.includes('"compact_boundary"')) return { ok: false, error: "the compacted conversation has no compact boundary" };
+  if (!text.includes('"compact_boundary"')) return { ok: false, error: compactFailure(r.result, text) };
   return { ok: true, id: r.session_id, tokens: estimateTranscriptTokens(text) };
 }
 
