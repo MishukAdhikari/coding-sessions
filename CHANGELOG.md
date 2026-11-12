@@ -9,6 +9,19 @@ release also lists how it was validated.
 
 ### Added
 - Contributor guide, Code of Conduct, issue and pull request templates, and this changelog.
+- Handoff modes: `cs handoff --full|--compact|--lean` and MCP `handoff_session` `mode`
+  (default `auto`: under ~50k estimated tokens full, up to ~300k compact, above that lean).
+  Compact runs `/compact` on a copy on the server and resumes it; lean writes `HANDOFF.md`
+  from the conversation and starts a fresh session pointed at it. Both report the
+  estimated tokens before and after.
+- `search_transcript` on the session communicator: a handed-off session can search its
+  original conversation and get bounded snippets.
+
+### Changed
+- The handoff upload link takes gzip parts (inflated with a bound, so the size cap counts
+  decompressed bytes), accepts a retried part with the same bytes, and answers
+  `GET ?status`. The upload command gzips and retries parts, and waits for a compact or
+  lean handoff to launch.
 
 ## [0.13.0] - 2026-11-12
 

@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   HANDOFF_DIR, HANDOFF_MAX_BYTES, HANDOFF_PART_BYTES, HANDOFF_UPLOAD_PATH, HANDOFF_UPLOAD_TTL_MS, HandoffUploads, adoptHandoffTranscript, handleHandoffUpload,
-  handoffUploadCommand, mungeCwd, rewriteTranscriptCwd, stagedTranscriptPath, transcriptSessionId,
+  gunzipPart, handoffUploadCommand, mungeCwd, rewriteTranscriptCwd, stagedTranscriptPath, transcriptSessionId,
 } from "./handoff";
+import { gzipSync } from "node:zlib";
+import { HANDOFF_ORIGIN_FILE, type RequestedHandoffMode } from "./handoff-modes";
 
 const dirs: string[] = [];
 const temp = () => { const d = mkdtempSync(join(tmpdir(), "cs-handoff-")); dirs.push(d); return d; };
@@ -142,7 +144,11 @@ function routeHarness(ws: string, projects: string) {
   const deps = {
     uploads,
     adopt: (_name: string, id: string) => adoptHandoffTranscript({ workspace: ws, resumeId: id, projectsDir: projects }),
-    launch: async (name: string, prompt: string | null, id: string) => { launches.push([name, prompt, id]); return { ok: true as const }; },
+    start: async (name: string, o: { resumeId: string; prompt: string | null; mode: RequestedHandoffMode }) => {
+      launches.push([name, o.prompt, o.resumeId]);
+      return { ok: true as const, job: { state: "launched" as const, mode: "full" as const, requested_mode: o.mode, tokens_before: 10, tokens_after: 10, resume_id: o.resumeId } };
+    },
+    job: () => null,
     sessionId: (name: string) => `m:cs-${name}`,
   };
   return { uploads, launches, deps };
@@ -247,4 +253,68 @@ test("a new link for the same workspace spends the earlier one, and a vanished s
   uploads.put(third.token, 0, new Uint8Array(1));
   rmSync(join(ws, HANDOFF_DIR), { recursive: true, force: true });
   expect(uploads.finish(third.token, 1)).toMatchObject({ ok: false, status: 404 });
+});
+
+test("gzip parts are inflated, and a zip bomb stops at the part limit", () => {
+  const ws = temp();
+  const uploads = new HandoffUploads();
+  const { token } = uploads.create({ name: "app", workspace: ws, resumeId: ID, prompt: null, autoMode: false });
+  const text = transcript("/a");
+  expect(uploads.put(token, 0, gzipSync(text), { gzip: true })).toMatchObject({ ok: true, parts: 1, bytes: Buffer.byteLength(text) });
+  // 100 MB of zeros gzips to ~100 KB: small on the wire, refused once it inflates past one part.
+  const bomb = gzipSync(Buffer.alloc(100 * 1024 * 1024));
+  expect(bomb.byteLength).toBeLessThan(HANDOFF_PART_BYTES);
+  expect(gunzipPart(bomb)).toBeNull();
+  expect(uploads.put(token, 1, bomb, { gzip: true })).toMatchObject({ ok: false, status: 413 });
+  // Not gzip at all.
+  expect(uploads.put(token, 1, new TextEncoder().encode("plain"), { gzip: true })).toMatchObject({ ok: false, status: 413 });
+  // The upload is still usable: the bad parts were not appended.
+  expect(uploads.finish(token, 1)).toMatchObject({ ok: true });
+  expect(readFileSync(stagedTranscriptPath(ws, ID), "utf8")).toBe(text);
+});
+
+test("the size cap counts decompressed bytes", () => {
+  const ws = temp();
+  const uploads = new HandoffUploads(Date.now, 1000);
+  const { token } = uploads.create({ name: "app", workspace: ws, resumeId: ID, prompt: null, autoMode: false });
+  const zeros = gzipSync(Buffer.alloc(2000));
+  expect(zeros.byteLength).toBeLessThan(1000);
+  expect(uploads.put(token, 0, zeros, { gzip: true })).toMatchObject({ ok: false, status: 413, code: "too_large" });
+});
+
+test("a part sent again with the same bytes is a no-op; other bytes conflict; status reports progress", () => {
+  const ws = temp();
+  const uploads = new HandoffUploads();
+  const { token } = uploads.create({ name: "app", workspace: ws, resumeId: ID, prompt: null, autoMode: false });
+  const a = new TextEncoder().encode("first ");
+  const b = new TextEncoder().encode("second");
+  expect(uploads.put(token, 0, a)).toMatchObject({ ok: true, parts: 1 });
+  expect(uploads.put(token, 0, a)).toMatchObject({ ok: true, parts: 1, bytes: 6, duplicate: true });
+  expect(uploads.put(token, 0, gzipSync(a), { gzip: true })).toMatchObject({ ok: true, duplicate: true });
+  expect(uploads.put(token, 0, b)).toMatchObject({ ok: false, status: 409 });
+  expect(uploads.status(token)).toEqual({ open: true, parts: 1, bytes: 6 });
+  expect(uploads.put(token, 1, b)).toMatchObject({ ok: true, parts: 2 });
+  expect(uploads.put(token, 1, b)).toMatchObject({ ok: true, duplicate: true });
+  expect(uploads.put(token, 3, b)).toMatchObject({ ok: false, status: 409 });
+  expect(uploads.finish(token, 2)).toMatchObject({ ok: true });
+  expect(readFileSync(stagedTranscriptPath(ws, ID), "utf8")).toBe("first second");
+  // Completion stays single-use; status now names the session.
+  expect(uploads.finish(token, 2)).toMatchObject({ ok: false, status: 404 });
+  expect(uploads.put(token, 2, b)).toMatchObject({ ok: false, status: 404 });
+  expect(uploads.status(token)).toEqual({ open: false, name: "app" });
+});
+
+test("?status answers progress, then the handoff's job", async () => {
+  const root = temp();
+  const ws = join(root, "ws"); mkdirSync(ws);
+  const { uploads, deps } = routeHarness(ws, join(root, "projects"));
+  const job = { state: "preparing" as const, mode: "lean" as const, requested_mode: "auto" as const, tokens_before: 400_000, resume_id: ID };
+  const d = { ...deps, job: () => job };
+  const { token } = uploads.create({ name: "app", workspace: ws, resumeId: ID, prompt: null, autoMode: false });
+  const base = `https://x${HANDOFF_UPLOAD_PATH}${token}`;
+  await handleHandoffUpload(new Request(`${base}?part=0&gz=1`, { method: "PUT", body: gzipSync(transcript("/a")) }), d);
+  expect(await (await handleHandoffUpload(new Request(`${base}?status`), d)).json()).toMatchObject({ state: "uploading", parts: 1 });
+  expect((await handleHandoffUpload(new Request(`${base}?done=1`, { method: "POST" }), d)).status).toBe(200);
+  expect(readFileSync(join(root, "projects", mungeCwd(ws), HANDOFF_ORIGIN_FILE), "utf8").trim()).toBe(ID);
+  expect(await (await handleHandoffUpload(new Request(`${base}?status`), d)).json()).toMatchObject({ state: "preparing", mode: "lean", session_id: "m:cs-app" });
 });

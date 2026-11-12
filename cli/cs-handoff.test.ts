@@ -24,6 +24,12 @@ test("cs handoff parses an optional name, an instruction and its flags", () => {
   expect(parseHandoffArgs(["--agent", "gpt"]).error).toContain("claude or codex");
   expect(parseHandoffArgs(["--bogus"]).error).toContain("unknown option");
   expect(parseHandoffArgs(["--name", "bad name"]).error).toContain("name");
+  expect(parseHandoffArgs([]).mode).toBe("auto");
+  expect(parseHandoffArgs(["--lean", "go on"])).toMatchObject({ mode: "lean", instruction: "go on" });
+  expect(parseHandoffArgs(["--compact"]).mode).toBe("compact");
+  expect(parseHandoffArgs(["--mode=full"]).mode).toBe("full");
+  expect(parseHandoffArgs(["--full", "--lean"]).error).toContain("pick one");
+  expect(parseHandoffArgs(["--mode", "tiny"]).error).toContain("--mode");
 });
 
 test("findClaudeTranscript picks the newest regular transcript for the folder, skipping symlinks and other files", () => {
@@ -108,7 +114,7 @@ test("cs handoff end to end with a stubbed server: rsync, SSH upload, adopt and 
       if (url.pathname === "/api/synced/prepare") return Response.json({ ok: true, workspacePath: ws });
       if (url.pathname === "/api/synced/launch") {
         const r = adoptHandoffTranscript({ workspace: ws, resumeId: String(body?.resumeId), projectsDir: serverProjects });
-        return r.ok ? Response.json({ ok: true }) : Response.json({ error: r.error }, { status: 422 });
+        return r.ok ? Response.json({ ok: true, state: "launched", mode: "full", requested_mode: "auto", tokens_before: 3, tokens_after: 3, resume_id: body?.resumeId }) : Response.json({ error: r.error }, { status: 422 });
       }
       if (url.pathname === "/api/sessions") return Response.json({ sessions: [{ name: "k-handoff-test", claudeUrl: "https://claude.ai/code/session_x" }] });
       return Response.json({ error: "not found" }, { status: 404 });
@@ -126,14 +132,15 @@ test("cs handoff end to end with a stubbed server: rsync, SSH upload, adopt and 
     expect(err).toBe("");
     expect(code).toBe(0);
     expect(out).toContain(`Conversation ${ID}`);
-    expect(out).toContain("/compact");
+    expect(out).toContain("--compact or --lean");
+    expect(out).toContain("Resuming ~3 tokens (estimate).");
     expect(out).toContain("Uploading the conversation");
     expect(out).toContain("https://claude.ai/code/session_x");
     expect(out).toContain("You can stop the local agent");
 
     expect(calls.map((c) => c.path)).toEqual(["/api/synced/status", "/api/synced/prepare", "/api/synced/launch", "/api/sessions"]);
     expect(calls[1]!.body).toEqual({ name: "handoff-test", repo: "me/app", branch: "handoff-test" });
-    expect(calls[2]!.body).toEqual({ name: "handoff-test", prompt: "now add tests", resumeId: ID, handoff: true });
+    expect(calls[2]!.body).toEqual({ name: "handoff-test", prompt: "now add tests", resumeId: ID, handoff: true, mode: "auto" });
     // The tree went up with rsync to the prepared workspace, as a Synced Launch does.
     expect(readFileSync(join(root, "rsync.log"), "utf8")).toContain(`fake-host:${ws}/`);
     // The transcript never travelled in an HTTPS body.

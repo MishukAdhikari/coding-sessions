@@ -18,6 +18,7 @@ import {
 } from "./cs-lib";
 import { runClient } from "../server/socket-client";
 import { HANDOFF_MAX_BYTES } from "../server/handoff";
+import { chooseHandoffMode, estimateTranscriptTokens, fmtTokens } from "../server/handoff-modes";
 
 const CONFIG_DIR = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "cs");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
@@ -887,9 +888,11 @@ async function cmdHandoff(cfg: Config, args: string[]): Promise<void> {
 
   console.log(`→ ${raw}   (${repo}${branch ? " @ " + branch : ""})`);
   console.log(`Conversation ${t.id}  ${fmtBytes(t.bytes)}  (${t.path})`);
-  if (opts.compactHint || t.bytes > 5 * 1024 * 1024) {
-    console.log(paint("Tip: the server re-reads the whole conversation on its first turn. For a long one, run /compact\n" +
-      "  in the local session first, then hand off.", "33"));
+  const tokens = estimateTranscriptTokens(await Bun.file(t.path).text());
+  const planned = chooseHandoffMode(tokens, opts.mode);
+  console.log(`Resuming would read ${fmtTokens(tokens)} (estimate) → ${planned} handoff${opts.mode === "auto" ? " (auto)" : ""}.`);
+  if (opts.compactHint && planned === "full") {
+    console.log(paint("Tip: the server re-reads the whole conversation on its first turn. --compact or --lean sends less.", "33"));
   }
 
   const st = await api(cfg, `/api/synced/status?name=${encodeURIComponent(raw)}`);
@@ -916,9 +919,25 @@ async function cmdHandoff(cfg: Config, args: string[]): Promise<void> {
   if (await up.exited !== 0) die("transcript upload failed — check your SSH access to the server.");
 
   const instruction = opts.instruction;
-  process.stdout.write(instruction ? "Launching, resuming with your instruction… " : "Launching, resuming the conversation… ");
-  await api(cfg, "/api/synced/launch", { method: "POST", body: JSON.stringify({ name: raw, prompt: instruction, resumeId: t.id, handoff: true }) });
+  process.stdout.write(planned === "full"
+    ? (instruction ? "Launching, resuming with your instruction… " : "Launching, resuming the conversation… ")
+    : planned === "compact" ? "Compacting a copy on the server, then resuming (a minute or two)… "
+    : "Writing HANDOFF.md on the server, then starting a fresh session (a minute or two)… ");
+  let job = await api(cfg, "/api/synced/launch", { method: "POST", body: JSON.stringify({ name: raw, prompt: instruction, resumeId: t.id, handoff: true, mode: opts.mode }) });
+  for (let i = 0; job.state === "preparing" && i < 180; i++) {
+    await Bun.sleep(5000);
+    job = await api(cfg, `/api/synced/handoff?name=${encodeURIComponent(raw)}`);
+  }
+  if (job.state === "failed") die(`the handoff failed on the server: ${job.error ?? "unknown error"}`);
+  if (job.state === "preparing") die("the server is still preparing the handoff after 15 minutes; check `cs list`.");
   console.log("started.");
+  if (job.note) console.log(paint(job.note, "33"));
+  if (typeof job.tokens_before === "number") {
+    const after = typeof job.tokens_after === "number" ? job.tokens_after : job.tokens_before;
+    console.log(job.mode === "full"
+      ? `Resuming ${fmtTokens(job.tokens_before)} (estimate).`
+      : `Resuming ${fmtTokens(job.tokens_before)}; ${job.mode === "compact" ? "compacted" : "lean (HANDOFF.md + search_transcript)"} to ${fmtTokens(after)} (estimates).`);
+  }
 
   const link = await pollClaudeUrl(cfg, st.name);
   console.log(link ? `\nOpen in Claude:  ${link}` : "\nStarting up — it'll appear in the app and on your phone shortly.");
@@ -1072,7 +1091,7 @@ USAGE
 
   cs handoff [name] ["<next>"]   continue this folder's Claude Code conversation on the
                                    server with its full history (tree + transcript over SSH);
-                                   --compact-hint, --agent claude (codex: not yet)
+                                   --full, --compact or --lean (default: by size), --agent claude
 
   cs list [--json]               list sessions running on the server
   cs end <name> [-y]             end a running session (-y skips the confirm)

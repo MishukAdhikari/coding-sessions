@@ -15,6 +15,7 @@ import { SecretRequestError, type SecretRequests } from "./secret-requests";
 import type { RestartResult } from "./session-restart";
 import { SECRETS_GUIDANCE } from "./communicator-mcp";
 import { handoffUploadCommand, mungeCwd } from "./handoff";
+import { COMPACT_FROM_TOKENS, LEAN_ABOVE_TOKENS, isHandoffMode, type RequestedHandoffMode } from "./handoff-modes";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version: "1.0.0" };
@@ -66,7 +67,7 @@ export interface McpDeps {
   handoff?: {
     status(name: string): Promise<{ ok: true; status: { state: "live" | "resumable" | "none"; name: string; workspacePath: string } } | { ok: false; error: string }>;
     prepare(name: string, repo: string, branch: string | null): Promise<{ ok: true; workspacePath: string } | { ok: false; error: string }>;
-    createUpload(ticket: { name: string; workspace: string; resumeId: string | null; prompt: string | null; autoMode: boolean }): { url: string; expiresAt: number };
+    createUpload(ticket: { name: string; workspace: string; resumeId: string | null; prompt: string | null; autoMode: boolean; mode: RequestedHandoffMode }): { url: string; expiresAt: number };
   };
 }
 
@@ -256,7 +257,7 @@ export const TOOLS = [
   {
     name: "handoff_session",
     title: "Hand your local conversation to the server",
-    description: "Continue your own local Claude Code conversation on the server, with its full history, without re-sending it as a prompt. Push your branch first: the server workspace is prepared from repo at branch (uncommitted local changes do not travel; commit and push them, or ask the person to run `cs handoff`). Returns a one-time upload command (15 minutes) to run in your local shell: it uploads your transcript file from disk in parts, then the server adopts it and launches the session resuming it, with prompt as the first new message. The command's output has the session_id. Never paste a transcript into a tool call. Claude Code only.",
+    description: "Continue your own local Claude Code conversation on the server, with its full history, without re-sending it as a prompt. Push your branch first: the server workspace is prepared from repo at branch (uncommitted local changes do not travel; commit and push them, or ask the person to run `cs handoff`). Returns a one-time upload command (15 minutes) to run in your local shell: it uploads your transcript file from disk in parts, then the server adopts it and launches the session resuming it, with prompt as the first new message. mode (default auto) decides how much history the server session reads: auto resumes a conversation under ~50k estimated tokens in full, compacts one of 50k-300k (/compact on the server, then resume), and goes lean above that (the server writes HANDOFF.md from the conversation and starts a fresh session pointed at it, with search_transcript for details). The command's output has the session_id, the mode and tokens_before/tokens_after (estimates); compact and lean take a minute or two, and the command waits for them. Never paste a transcript into a tool call. Claude Code only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -267,6 +268,7 @@ export const TOOLS = [
         transcript_id: { type: "string", description: "Your conversation id (the transcript's file name without .jsonl). Default: the newest transcript for cwd." },
         prompt: { type: "string", description: "Optional first new message for the server session, e.g. what to do next." },
         agent: { type: "string", enum: ["claude"], description: "claude (the only one supported for now)." },
+        mode: { type: "string", enum: ["auto", "full", "compact", "lean"], description: "auto (default): by estimated size. full: resume everything. compact: /compact a copy first, then resume. lean: HANDOFF.md plus a fresh session; the full transcript stays searchable with search_transcript." },
       },
       required: ["name", "repo", "branch", "cwd"],
     },
@@ -693,6 +695,9 @@ async function handoffTool(deps: McpDeps, args: Record<string, unknown>): Promis
   const transcriptId = str(args.transcript_id).trim() || null;
   if (transcriptId && !/^[a-zA-Z0-9_-]{1,128}$/.test(transcriptId)) return fail("transcript_id must be the transcript's file name without .jsonl.", "invalid_argument");
 
+  const mode = args.mode === undefined || args.mode === "" ? "auto" : args.mode;
+  if (!isHandoffMode(mode)) return fail("mode must be auto, full, compact or lean.", "invalid_argument");
+
   const st = await deps.handoff.status(name);
   if (!st.ok) return fail(st.error, "invalid_argument");
   if (st.status.state !== "none") {
@@ -701,15 +706,16 @@ async function handoffTool(deps: McpDeps, args: Record<string, unknown>): Promis
   const prep = await deps.handoff.prepare(name, repo, branch);
   if (!prep.ok) return fail(prep.error);
   const prompt = str(args.prompt).trim() || null;
-  const { url, expiresAt } = deps.handoff.createUpload({ name, workspace: prep.workspacePath, resumeId: transcriptId, prompt, autoMode: false });
+  const { url, expiresAt } = deps.handoff.createUpload({ name, workspace: prep.workspacePath, resumeId: transcriptId, prompt, autoMode: false, mode });
   const dir = `~/.claude/projects/${mungeCwd(cwd)}`;
   const transcriptPath = transcriptId ? `${dir}/${transcriptId}.jsonl` : null;
   const command = handoffUploadCommand(url, cwd, transcriptId);
   return ok({
     name, workspace: prep.workspacePath, branch,
     transcript: transcriptPath ?? `newest .jsonl in ${dir}`,
-    command, expires_at: new Date(expiresAt).toISOString(),
-    next: "Run command in your local shell (it prints JSON with session_id when the server session has started). Then stop working locally; follow the server session with wait_for_session and read_session.",
+    command, expires_at: new Date(expiresAt).toISOString(), mode,
+    modes: `auto picks by the transcript's estimated size (chars/4 of its messages): under ${COMPACT_FROM_TOKENS / 1000}k full, up to ${LEAN_ABOVE_TOKENS / 1000}k compact, above that lean. The server measures it after the upload; the command's last JSON line has mode, tokens_before and tokens_after.`,
+    next: "Run command in your local shell (it prints JSON with session_id, mode and token estimates when the server session has started; for compact or lean it waits until it has). Then stop working locally; follow the server session with wait_for_session and read_session.",
   });
 }
 

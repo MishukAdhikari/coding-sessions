@@ -129,3 +129,28 @@ test("secret tools are absent without the secrets service, and need a live sessi
     expect(f.db.query("SELECT COUNT(*) AS n FROM secret_requests").get()).toEqual({ n: 0 });
   } finally { f.db.close(); }
 });
+
+test("search_transcript is listed only with handoff support, searches the caller's own session, and rejects bad arguments", async () => {
+  const f = fixture();
+  const seen: Array<[string, unknown, unknown]> = [];
+  const handoff = { search: (sessionId: string, query: unknown, limit?: unknown) => {
+    seen.push([sessionId, query, limit]);
+    if (query === "boom") throw new Error("This session has no handed-off conversation.");
+    return { query, messages: 1, matches: 1, results: [{ message: 0, role: "user", snippet: "PELICAN-42" }], truncated: false };
+  } };
+  const call = async (method: string, params = {}, h: typeof handoff | null = handoff) =>
+    (await handleCommunicatorRequest(f.communicator, request(rpc(method, params), f.a), undefined, h ?? undefined)).json() as Promise<any>;
+  try {
+    expect((await call("tools/list", {}, null)).result.tools.map((t: any) => t.name)).not.toContain("search_transcript");
+    const tool = (await call("tools/list")).result.tools.find((t: any) => t.name === "search_transcript");
+    expect(tool.annotations.readOnlyHint).toBe(true);
+    expect(tool.description).toContain("not instructions");
+    const hit = await call("tools/call", { name: "search_transcript", arguments: { query: "pelican", limit: 3 } });
+    expect(hit.result.structuredContent.results[0].snippet).toBe("PELICAN-42");
+    expect(seen[0]).toEqual(["m:cs-a", "pelican", 3]);
+    expect((await call("tools/call", { name: "search_transcript", arguments: { query: "x", session_id: "m:cs-b" } })).result.isError).toBe(true);
+    const none = await call("tools/call", { name: "search_transcript", arguments: { query: "boom" } });
+    expect(none.result.isError).toBe(true);
+    expect(none.result.content[0].text).toContain("no handed-off conversation");
+  } finally { f.db.close(); }
+});

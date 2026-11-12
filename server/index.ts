@@ -3,8 +3,9 @@ import { loadTokenKey } from "./secrets";
 import { resolvePublicFile, requestClientIp, allowsApiMutation, internalErrorResponse } from "./http-security";
 import { db, deleteMeta, getMeta, setMeta } from "./db";
 import * as auth from "./auth";
-import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, adoptSyncedHandoff, managedSessionId, restartBlocker } from "./sessions";
+import { listSessions, launchSession, launchWorkspaceSession, killSession, killAll, workspaceState, listRepos, sessionPrefix, rememberSessionPrefix, PREFIX_RE, listArchive, deleteArchived, clearArchive, resumeArchived, syncedStatus, prepareSynced, launchSynced, adoptSyncedHandoff, startHandoff, handoffJob, searchHandoffTranscript, managedSessionId, restartBlocker } from "./sessions";
 import { HANDOFF_UPLOAD_PATH, HandoffUploads, handleHandoffUpload } from "./handoff";
+import { isHandoffMode } from "./handoff-modes";
 import * as claudeAuth from "./claude-auth";
 import { codexAuth } from "./codex-auth";
 import * as claudeChat from "./claude-chat";
@@ -216,7 +217,8 @@ const handoffUploads = new HandoffUploads();
 const handoffRouteDeps = {
   uploads: handoffUploads,
   adopt: adoptSyncedHandoff,
-  launch: (name: string, prompt: string | null, resumeId: string, opts: { autoMode: boolean }) => launchSynced(name, prompt, resumeId, opts),
+  start: (name: string, opts: Parameters<typeof startHandoff>[1]) => startHandoff(name, opts),
+  job: handoffJob,
   sessionId: managedSessionId,
 };
 
@@ -362,7 +364,7 @@ const server = Bun.serve<TermSocketData>({
     });
     if (oauthResponse) return oauthResponse;
 
-    if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req, { requests: secretRequests });
+    if (path === "/mcp/communicator") return handleCommunicatorRequest(communicator, req, { requests: secretRequests }, { search: searchHandoffTranscript });
     if (path === "/mcp/connectors") return handleConnectorRequest(connectors, req);
 
     // One-time handoff upload links from handoff_session: the token in the path is the credential.
@@ -697,6 +699,11 @@ const server = Bun.serve<TermSocketData>({
       return r.ok ? json(r.status) : json({ error: r.error }, 422);
     }
 
+    if (path === "/api/synced/handoff" && method === "GET") {
+      const job = handoffJob(String(url.searchParams.get("name") ?? ""));
+      return job ? json(job) : json({ error: "No handoff under that name.", code: "not_found" }, 404);
+    }
+
     if (path === "/api/synced/prepare" && method === "POST") {
       const body = await readJsonObject(req);
       const r = await prepareSynced(String(body.name ?? ""), String(body.repo ?? ""), body.branch ? String(body.branch) : null);
@@ -708,8 +715,12 @@ const server = Bun.serve<TermSocketData>({
       // cs handoff: the transcript was uploaded over SSH into the Workspace; adopt it first.
       if (body.handoff === true) {
         if (!body.resumeId) return json({ error: "A handoff needs resumeId.", code: "invalid_argument" }, 422);
+        const mode = body.mode ?? "auto";
+        if (!isHandoffMode(mode)) return json({ error: "mode must be auto, full, compact or lean.", code: "invalid_argument" }, 422);
         const adopted = adoptSyncedHandoff(String(body.name ?? ""), String(body.resumeId));
         if (!adopted.ok) return json({ error: adopted.error, code: adopted.code }, 422);
+        const started = await startHandoff(String(body.name ?? ""), { resumeId: String(body.resumeId), prompt: body.prompt ? String(body.prompt) : null, autoMode: body.autoMode === true, mode });
+        return started.ok ? json({ ok: true, ...started.job }) : json({ error: started.error }, 422);
       }
       const r = await launchSynced(String(body.name ?? ""), body.prompt ? String(body.prompt) : null, body.resumeId ? String(body.resumeId) : null, { autoMode: body.autoMode === true });
       return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
