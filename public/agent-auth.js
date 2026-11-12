@@ -14,17 +14,27 @@
     registeredCommands = () => [],
     reloadCapabilities = async () => {},
     escapeHtml = (v) => String(v),
+    openTerminal = async () => {},
   }) => {
     const authProviderInputs = () => [...document.querySelectorAll('input[name="auth-provider"]')];
-    const selectedAuthProvider = () => document.querySelector('input[name="auth-provider"]:checked')?.value || null;
+    const selectedAuthProvider = () => authProviderInputs().find((input) => input.checked)?.value || null;
+    const providerInput = (p) => authProviderInputs().find((input) => input.value === p) || null;
     let providerTransition = 0;
     let providerTransitionPending = false;
     let tokenTarget = null; // whose credential the token sheet is editing, and where it saves
     let accounts = null;
+    let terminalAgents = []; // preset agents found on the server, however they were installed
     let accountsError = "";
     let accountRequest = 0;
 
     const isCommandProvider = (p) => typeof p === "string" && p.startsWith("cmd:");
+    const isPresetProvider = (p) => typeof p === "string" && p.startsWith("preset:");
+    /* The agent whose own login runs in a server terminal: an installed preset, or
+       a Command registered from one. Built-ins sign in through the app instead. */
+    const terminalAgentFor = (p) => {
+      const id = isPresetProvider(p) ? p.slice("preset:".length) : isCommandProvider(p) ? commandFor(p)?.preset : null;
+      return id ? terminalAgents.find((a) => a.id === id && a.installed) || null : null;
+    };
     const commandFor = (p) => registeredCommands().find((c) => c.provider === p) || null;
 
     /* Registered Commands sign in with a stored token rather than Claude's
@@ -33,22 +43,47 @@
     function renderCommandAuthChoices() {
       const picker = $("auth-provider-picker");
       if (!picker) return;
-      for (const stale of picker.querySelectorAll("[data-auth-provider-card^='cmd:']")) stale.remove();
-      for (const command of registeredCommands()) {
+      const selected = selectedAuthProvider();
+      for (const stale of picker.querySelectorAll("[data-auth-provider-card]")) {
+        const id = stale.dataset.authProviderCard || "";
+        if (isCommandProvider(id) || isPresetProvider(id)) stale.remove();
+      }
+      const registeredPresets = new Set(registeredCommands().map((c) => c.preset).filter(Boolean));
+      const cards = [
+        ...registeredCommands(),
+        // Installed by hand or by the app but not added as a Command: it still gets a row.
+        ...terminalAgents.filter((a) => a.installed && !registeredPresets.has(a.id))
+          .map((a) => ({ provider: `preset:${a.id}`, label: a.label, envVar: null, preset: a.id })),
+      ];
+      for (const command of cards) {
         const label = document.createElement("label");
         label.className = "provider-pick";
         label.dataset.authProviderCard = command.provider;
+        const terminal = !!terminalAgentFor(command.provider);
         const detail = command.envVar
           ? `${command.hasToken ? "Token stored" : "Token needed"} · ${command.envVar}`
-          : command.preset ? "Signs in from its own terminal" : "Add a token env var first";
-        label.innerHTML = `
-          <input type="radio" name="auth-provider" value="${escapeHtml(command.provider)}"${command.envVar ? "" : " disabled"}>
-          <span class="provider-mark provider-mark-command" aria-hidden="true">${escapeHtml((command.label[0] || "C").toUpperCase())}</span>
-          <span class="provider-copy">
-            <span class="provider-name">${escapeHtml(command.label)}</span>
-            <span class="provider-detail">${escapeHtml(detail)}</span>
-          </span>`;
-        label.querySelector("input").addEventListener("change", updateProviderSelection);
+          : terminal ? "Installed · sign in in a terminal" : command.preset ? "Not installed on this server" : "Add a token env var first";
+        const enabled = !!command.envVar || terminal;
+        label.setAttribute("data-auth-provider-card", command.provider);
+        const span = (className, value) => {
+          const el = document.createElement("span");
+          el.className = className;
+          el.textContent = value;
+          return el;
+        };
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.setAttribute("name", "auth-provider");
+        input.name = "auth-provider";
+        input.value = command.provider;
+        input.disabled = !enabled;
+        input.checked = enabled && selected === command.provider;
+        input.addEventListener("change", updateProviderSelection);
+        const mark = span("provider-mark provider-mark-command", (command.label[0] || "C").toUpperCase());
+        mark.setAttribute("aria-hidden", "true");
+        const copy = span("provider-copy", "");
+        copy.append(span("provider-name", command.label), span("provider-detail", detail));
+        label.append(input, mark, copy);
         picker.append(label);
       }
     }
@@ -106,9 +141,17 @@
         || !provider
         || (provider === "codex" && !codexAuthSupported())
         || (provider === "command-code" && !commandCodeAuthSupported())
-        || (isCommandProvider(provider) && !commandFor(provider)?.envVar);
+        || (isCommandProvider(provider) && !commandFor(provider)?.envVar && !terminalAgentFor(provider))
+        || (isPresetProvider(provider) && !terminalAgentFor(provider));
+      const terminalAgent = terminalAgentFor(provider);
+      const tokenSignIn = isCommandProvider(provider) && !!commandFor(provider)?.envVar;
+      $("btn-agent-terminal-login").hidden = !terminalAgent || !tokenSignIn;
+      $("btn-agent-terminal-login").disabled = providerTransitionPending;
+      $("agent-terminal-hint").hidden = !terminalAgent;
+      $("agent-terminal-hint").textContent = terminalAgent
+        ? `${terminalAgent.loginHint} Its sign-in status is not read by this app.` : "";
       const account = accounts?.find((a) => a.provider === provider);
-      const builtin = provider && !isCommandProvider(provider);
+      const builtin = provider && !isCommandProvider(provider) && !isPresetProvider(provider);
       $("agent-account-details").hidden = !builtin;
       if (builtin) {
         $("agent-account-state").textContent = account ? !account.installed ? "CLI not installed"
@@ -121,7 +164,8 @@
           : account?.loggedIn ? "Unknown — login time was not recorded" : "—";
         $("btn-auth-provider-continue").disabled ||= !account?.installed || account.loggedIn === null;
       }
-      $("btn-auth-provider-continue").textContent = isCommandProvider(provider) ? "Manage token" : account?.loggedIn ? "Change account" : "Sign in";
+      $("btn-auth-provider-continue").textContent = tokenSignIn ? "Manage token"
+        : terminalAgent ? "Sign in in a terminal" : account?.loggedIn ? "Change account" : "Sign in";
       $("btn-agent-signout").hidden = !account?.loggedIn;
       $("btn-agent-signout").disabled = providerTransitionPending;
       $("agent-account-note").textContent = account?.loggedIn
@@ -136,14 +180,16 @@
         const result = await api("/api/agent-accounts");
         if (request !== accountRequest) return;
         accounts = result.accounts;
+        terminalAgents = Array.isArray(result.agents) ? result.agents : [];
       } catch (error) { if (request === accountRequest) { accounts = null; accountsError = error.message; } }
+      renderCommandAuthChoices();
       updateProviderSelection();
     }
 
     function updateAvailability() {
       renderCommandAuthChoices();
       for (const [provider, supported] of [["codex", codexAuthSupported], ["command-code", commandCodeAuthSupported]]) {
-        const input = document.querySelector(`input[name="auth-provider"][value="${provider}"]`);
+        const input = providerInput(provider);
         if (!input) continue;
         input.disabled = !supported();
         if (input.disabled && input.checked) input.checked = false;
@@ -212,13 +258,19 @@
       if (generation !== providerTransition) return;
       providerTransitionPending = false;
       updateProviderSelection();
-      if (isCommandProvider(provider)) {
-          const command = commandFor(provider);
-          if (command) openCommandTokenSheet(command);
-        } else if (provider === "codex") beginCodexAuth();
+      if (isCommandProvider(provider) && commandFor(provider)?.envVar) openCommandTokenSheet(commandFor(provider));
+        else if (terminalAgentFor(provider)) openTerminalLogin(provider);
+        else if (provider === "codex") beginCodexAuth();
         else if (provider === "command-code") openCommandCodeTokenSheet();
         else beginClaudeAuth();
     });
+
+    function openTerminalLogin(provider) {
+      const agent = terminalAgentFor(provider);
+      if (!agent) return;
+      openTerminal({ kind: "shell", login: agent.id }, `Opening ${agent.label} sign-in…`);
+    }
+    $("btn-agent-terminal-login").addEventListener("click", () => openTerminalLogin(selectedAuthProvider()));
 
     /* ---------- Command token ---------- */
 

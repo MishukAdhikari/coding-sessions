@@ -12,6 +12,7 @@
  * handed over through the environment: `/proc/<pid>/cmdline` is world-readable.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { agentBin } from "./agent-bin";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -398,7 +399,7 @@ async function defaultRun(argv: string[], timeoutMs: number, env?: Record<string
 }
 
 export const defaultCommandCodePreflightDependencies: CommandCodePreflightDependencies = {
-  which: () => Bun.which("command-code"),
+  which: () => agentBin("command-code"),
   run: defaultRun,
   env: () => commandCodeEnv(),
 };

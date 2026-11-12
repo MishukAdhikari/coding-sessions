@@ -1,4 +1,6 @@
 import { createTerminalSocket, secureTerminalSocket } from "./terminal-socket";
+import { findPreset } from "./agent-presets";
+import { presetBin } from "./commands";
 import { childEnvironment } from "./child-env";
 /**
  * Web terminals — an on-demand, writable browser terminal for a server session.
@@ -29,7 +31,7 @@ const PORT_LO = 7700;
 const PORT_HI = 7799;
 
 export type TermTarget =
-  | { kind: "shell"; cwd?: string }
+  | { kind: "shell"; cwd?: string; login?: string }
   | { kind: "attach"; screen: string };
 
 interface Term {
@@ -166,7 +168,10 @@ export async function open(target: TermTarget): Promise<{ ok: true; id: string; 
     ephemeral = true;
     backend = mux.newSessionBackend();
     const cwd = target.cwd && target.cwd.startsWith("/") ? target.cwd : (process.env.HOME ?? "/");
-    const { code } = await mux.spawn(screenName, "exec bash -l", { cwd, backend });
+    // An agent's own sign-in runs first, then the shell stays for whatever it printed.
+    const inner = shellCommand(target.login);
+    if (inner === null) return { ok: false, error: "Unknown agent." };
+    const { code } = await mux.spawn(screenName, inner, { cwd, backend });
     if (code !== 0) return { ok: false, error: "Could not start a shell session." };
     // A herdr pane is joined by its terminal id, known only once it exists.
     if (backend === "herdr") terminalId = (await mux.find(screenName))?.terminalId;
@@ -304,4 +309,18 @@ export async function close(id: string, quitEphemeralScreen = false): Promise<vo
 export function killAll(): void {
   for (const t of terms.values()) { try { t.proc.kill(); } catch {} }
   terms.clear();
+}
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * What a new web shell runs: a login shell, or first an agent's own sign-in (from the
+ * fixed preset list, never text from the request) and then the shell, so whatever the
+ * login printed stays readable. No secret ever goes on this line. null: unknown agent.
+ */
+export function shellCommand(login?: string, binFor: (bin: string) => string = presetBin): string | null {
+  if (login === undefined) return "exec bash -l";
+  const preset = findPreset(login);
+  if (!preset) return null;
+  return `${[binFor(preset.bin), ...preset.loginArgs].map(shellQuote).join(" ")}; exec bash -l`;
 }

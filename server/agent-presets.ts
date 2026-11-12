@@ -31,6 +31,10 @@ export interface AgentPreset {
    * was checked against the agent's own source; the rest report liveness only.
    */
   turnState: boolean;
+  /** The agent's own sign-in, run in a server terminal from Agent authentication. */
+  loginArgs: string[];
+  /** One line shown beside "Sign in in a terminal". */
+  loginHint: string;
 }
 
 export const AGENT_PRESETS: readonly AgentPreset[] = [
@@ -41,6 +45,7 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     mcp: "~/.gemini/settings.json", homepage: "https://github.com/google-gemini/gemini-cli",
     notes: "Needs a Gemini API key or Gemini Code Assist. In standard mode, trust the folder when Gemini asks so its MCP servers start.",
     turnState: false,
+    loginArgs: [], loginHint: "Starts Gemini; choose Login with Google, or enter a Gemini API key, when it asks.",
   },
   {
     id: "kimi", label: "Kimi Code", bin: "kimi", envVar: null, npmPackage: "@moonshot-ai/kimi-code",
@@ -48,6 +53,7 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     mcp: "~/.kimi-code/mcp.json", homepage: "https://github.com/MoonshotAI/kimi-code",
     notes: "Sign in with `kimi login` in the server terminal; it does not read API keys from the environment.",
     turnState: true,
+    loginArgs: ["login"], loginHint: "Runs kimi login; follow its prompts.",
   },
   {
     id: "qwen", label: "Qwen Code", bin: "qwen", envVar: "OPENAI_API_KEY", npmPackage: "@qwen-code/qwen-code",
@@ -55,6 +61,7 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     mcp: "--mcp-config at launch", homepage: "https://github.com/QwenLM/qwen-code",
     notes: "Uses an OpenAI-compatible API key, or /auth inside the agent.",
     turnState: false,
+    loginArgs: [], loginHint: "Starts Qwen Code; type /auth and choose a sign-in method.",
   },
   {
     id: "opencode", label: "opencode", bin: "opencode", envVar: null, npmPackage: "opencode-ai",
@@ -62,6 +69,7 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     mcp: "OPENCODE_CONFIG_CONTENT at launch", homepage: "https://github.com/anomalyco/opencode",
     notes: "Sign in with `opencode auth login` in the server terminal.",
     turnState: false,
+    loginArgs: ["auth", "login"], loginHint: "Runs opencode auth login; pick a provider and follow its prompts.",
   },
 ];
 
