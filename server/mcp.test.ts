@@ -486,7 +486,7 @@ test("handoff_session prepares the branch and returns a one-time upload command,
   expect(r.isError).toBeUndefined();
   const data = r.structuredContent;
   expect(h.prepared).toEqual([["login-fix", "me/app", "fix/login"]]);
-  expect(h.tickets).toEqual([{ name: "login-fix", workspace: "/home/u/workspaces/k-login-fix", resumeId: "abc-123", prompt: "now add tests", autoMode: false }]);
+  expect(h.tickets).toEqual([{ name: "login-fix", workspace: "/home/u/workspaces/k-login-fix", resumeId: "abc-123", prompt: "now add tests", autoMode: false, mode: "auto" }]);
   expect(data.command).toContain("https://sessions.example.com/mcp/handoff/cshand_");
   expect(data.command).toContain('"$HOME"/.claude/projects/-Users-me-app/abc-123.jsonl');
   expect(data.transcript).toBe("~/.claude/projects/-Users-me-app/abc-123.jsonl");
@@ -498,7 +498,9 @@ test("handoff_session prepares the branch and returns a one-time upload command,
   expect(h.tickets[1].resumeId).toBeNull();
   // The schema has no field for transcript content.
   const tool = ((await rpc(h.deps, "tools/list")).json.result.tools as any[]).find((t) => t.name === "handoff_session");
-  expect(Object.keys(tool.inputSchema.properties)).toEqual(["name", "repo", "branch", "cwd", "transcript_id", "prompt", "agent"]);
+  expect(Object.keys(tool.inputSchema.properties)).toEqual(["name", "repo", "branch", "cwd", "transcript_id", "prompt", "agent", "mode"]);
+  expect((await call(h.deps, "handoff_session", { name: "y", repo: "me/app", branch: "b", cwd: "/a", mode: "tiny" })).isError).toBe(true);
+  expect((await call(h.deps, "handoff_session", { name: "z", repo: "me/app", branch: "b", cwd: "/a", mode: "lean" })).structuredContent.mode).toBe("lean");
 });
 
 test("handoff_session validates its input and refuses names already in use", async () => {

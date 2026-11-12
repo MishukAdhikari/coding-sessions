@@ -211,22 +211,33 @@ export interface HandoffArgs {
   instruction: string | null;
   compactHint: boolean;
   agent: "claude" | "codex";
+  /** auto: by the transcript's estimated size; see chooseHandoffMode. */
+  mode: "auto" | "full" | "compact" | "lean";
   error?: string;
 }
 
 const HANDOFF_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,30}$/;
 
 /**
- * `cs handoff [name] ["<next instruction>"] [--compact-hint] [--agent claude|codex]`.
+ * `cs handoff [name] ["<next instruction>"] [--full|--compact|--lean] [--compact-hint] [--agent claude|codex]`.
  * A first word that is a valid session name is the name when an instruction follows
  * it, or when it is the only word; anything else is the instruction.
  */
 export function parseHandoffArgs(args: string[]): HandoffArgs {
-  const out: HandoffArgs = { name: null, instruction: null, compactHint: false, agent: "claude" };
+  const out: HandoffArgs = { name: null, instruction: null, compactHint: false, agent: "claude", mode: "auto" };
   const words: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--compact-hint") out.compactHint = true;
+    else if (a === "--full" || a === "--compact" || a === "--lean") {
+      const m = a.slice(2) as HandoffArgs["mode"];
+      if (out.mode !== "auto" && out.mode !== m) return { ...out, error: "pick one of --full, --compact and --lean." };
+      out.mode = m;
+    } else if (a === "--mode" || a.startsWith("--mode=")) {
+      const v = a === "--mode" ? args[++i] : a.slice(7);
+      if (v !== "auto" && v !== "full" && v !== "compact" && v !== "lean") return { ...out, error: "--mode takes auto, full, compact or lean." };
+      out.mode = v;
+    }
     else if (a === "--agent" || a.startsWith("--agent=")) {
       const v = a === "--agent" ? args[++i] : a.slice(8);
       if (v !== "claude" && v !== "codex") return { ...out, error: "--agent takes claude or codex." };

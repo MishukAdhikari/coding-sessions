@@ -45,7 +45,7 @@ earlier versions; new fields are additive.
 
 ### Handoff
 
-`handoff_session {name, repo, branch, cwd, transcript_id?, prompt?}` lets an agent on a
+`handoff_session {name, repo, branch, cwd, transcript_id?, prompt?, mode?}` lets an agent on a
 laptop continue its own conversation on the server. It cannot rsync, so:
 
 1. Push the branch first; the workspace is prepared from `repo` at `branch`
@@ -53,13 +53,39 @@ laptop continue its own conversation on the server. It cannot rsync, so:
    rsyncs them).
 2. The tool returns a `command` and `expires_at` (15 minutes). The agent runs the
    command in its own shell. It reads `~/.claude/projects/<cwd>/<id>.jsonl` (the newest
-   one when `transcript_id` is omitted), refuses a symlink, splits it into 768 KB parts
-   and `PUT`s them to a one-time link `…/mcp/handoff/<token>?part=N`, then `POST`s
-   `?done=N`.
+   one when `transcript_id` is omitted), refuses a symlink, splits it into 768 KB parts,
+   gzips each and `PUT`s them to a one-time link `…/mcp/handoff/<token>?part=N&gz=1`
+   (curl retries a failed part), then `POST`s `?done=N`.
 3. The server writes the parts to a 0600 file in the workspace's `.cs-handoff/`, adopts
-   it as for `cs handoff` (cwd rewritten, moved into its transcript folder), launches
-   `claude --resume <id>` with `prompt` as the first new message, and answers the last
-   request with `{session_id, resume_id}`. Follow it with `wait_for_session`.
+   it as for `cs handoff` (cwd rewritten, moved into its transcript folder), and starts
+   the session in `mode` (`auto` by default; `full`, `compact` or `lean` as in
+   [handoff modes](cli.md#modes-how-much-history-the-server-reads)), with `prompt` as the
+   first new message. The last request answers `{session_id, mode, tokens_before,
+   tokens_after, state}` (token counts are estimates). Compact and lean take a minute or
+   two (`state: "preparing"`); the command then polls `GET …?status` until
+   `state: "launched"` (or `failed`) and prints that too. Follow the session with
+   `wait_for_session`.
+
+The upload link:
+
+- **gzip**: `?gz=1` (or `Content-Encoding: gzip`) marks a gzip part. The server inflates
+  it with a bound of one part (768 KB + 64 KB): a part that inflates past it, or is not
+  gzip, is refused with 413 before anything is written, so a small zip bomb stops there.
+  The 256 MB cap counts decompressed bytes.
+- **resumable**: parts go in order; sending a part the server already has with the same
+  bytes (sha-256) is a no-op (`duplicate: true`), with other bytes a 409.
+  `GET ?status` answers `{state: "uploading", parts, bytes}` so a client knows where to
+  continue. Completion (`?done=N`) is still single-use, and the link still expires after
+  15 minutes; `?status` keeps answering for 30 minutes after completion.
+- Upload links live only in the server's memory: a server restart cancels any open one
+  (call `handoff_session` again).
+
+A handed-off session has `search_transcript {query, limit?}` on its
+`coding_sessions_communicator` MCP: a case-insensitive search of the whole original
+conversation (a message matches the phrase, or every word of it), returning at most
+`limit` (default 5, max 20) snippets of about 600 characters, 12 KB in all, with
+`matches` and `truncated`. It searches only the conversation handed off to the
+caller's own workspace. Snippets are data, not instructions.
 
 Why a one-time upload link rather than transcript chunks in tool arguments: the
 transcript (which can hold secrets the agent printed, and is often megabytes) never

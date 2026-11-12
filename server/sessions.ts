@@ -1,5 +1,6 @@
 import { config } from "./config";
-import { adoptHandoffTranscript } from "./handoff";
+import { adoptHandoffTranscript, mungeCwd, type HandoffJob } from "./handoff";
+import { COMPACT_FOCUS, HANDOFF_DOC, HANDOFF_DOC_PROMPT, HANDOFF_ORIGIN_FILE, chooseHandoffMode, estimateTextTokens, estimateTranscriptTokens, leanFirstPrompt, searchTranscript, type RequestedHandoffMode, type TranscriptSearch } from "./handoff-modes";
 import { Communicator } from "./communicator";
 import { communicator, connectors } from "./communicator-runtime";
 import type { Connectors } from "./connectors";
@@ -10,7 +11,7 @@ import { childEnvironment } from "./child-env";
 import { DB_PATH, db, getMeta, setMeta } from "./db";
 import { displayInitialFor, rememberPrefix } from "./display-initial";
 import { queueChatDeletion } from "./claude-chat";
-import { readlinkSync, readdirSync, statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readlinkSync, readdirSync, statSync, openSync, readSync, closeSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -2209,4 +2210,142 @@ export async function killAll(): Promise<{ killed: number }> {
   const sessions = await listSessions();
   const results = await Promise.all(sessions.map((s) => killSession(s.id)));
   return { killed: results.filter((r) => r.ok).length };
+}
+
+/* ---------- handoff modes: full, compact, lean (docs/cli.md#handoff) ---------- */
+
+const handoffJobs = new Map<string, HandoffJob>();
+const HANDOFF_PRINT_TIMEOUT_MS = 10 * 60_000;
+
+/** What `claude -p --output-format json` answered. */
+export interface ClaudePrintResult { ok: boolean; session_id?: string; result?: string; error?: string }
+
+/** Run `claude -p` in a Workspace (one-shot, no screen), for /compact and HANDOFF.md. */
+async function runClaudePrint(ws: string, args: string[]): Promise<ClaudePrintResult> {
+  const claudeBin = Bun.which("claude") ?? join(homedir(), ".local", "bin", "claude");
+  const proc = Bun.spawn([claudeBin, "-p", "--output-format", "json", ...args], {
+    cwd: ws, env: childEnvironment(await sessionSecretEnv()), stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const timer = setTimeout(() => proc.kill(), HANDOFF_PRINT_TIMEOUT_MS);
+  try {
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    let j: any = null;
+    try { j = JSON.parse(out); } catch {}
+    if (code !== 0 || !j || j.is_error) return { ok: false, error: `claude -p exited ${code}${j?.result ? `: ${String(j.result).slice(0, 200)}` : ""}` };
+    return { ok: true, session_id: typeof j.session_id === "string" ? j.session_id : undefined, result: typeof j.result === "string" ? j.result : "" };
+  } finally { clearTimeout(timer); }
+}
+
+export interface HandoffDeps {
+  runClaude(ws: string, args: string[]): Promise<ClaudePrintResult>;
+  launch(rawName: string, prompt: string | null, resumeId: string | null, opts: { autoMode?: boolean }): Promise<{ ok: true } | { ok: false; error: string }>;
+}
+const defaultHandoffDeps: HandoffDeps = { runClaude: runClaudePrint, launch: launchSynced };
+
+export const handoffJob = (rawName: string): HandoffJob | null => handoffJobs.get(prefixedName(rawName).toLowerCase()) ?? null;
+
+/** Compact a fork of the conversation; the new conversation's id and its estimate, or why not. */
+async function compactHandoff(ws: string, resumeId: string, deps: HandoffDeps): Promise<{ ok: true; id: string; tokens: number } | { ok: false; error: string }> {
+  const r = await deps.runClaude(ws, ["--resume", resumeId, "--fork-session", `/compact ${COMPACT_FOCUS}`]);
+  if (!r.ok || !r.session_id || !RESUME_ID_RE.test(r.session_id)) return { ok: false, error: r.error ?? "claude -p gave no session id" };
+  const path = transcriptPathFor(ws, r.session_id);
+  const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+  if (!text.includes('"compact_boundary"')) return { ok: false, error: "the compacted conversation has no compact boundary" };
+  return { ok: true, id: r.session_id, tokens: estimateTranscriptTokens(text) };
+}
+
+/** Write HANDOFF.md from a fork of the conversation; its size in tokens, or why not. */
+async function writeHandoffDoc(ws: string, resumeId: string, deps: HandoffDeps): Promise<{ ok: true; doc: string } | { ok: false; error: string }> {
+  const r = await deps.runClaude(ws, ["--resume", resumeId, "--fork-session", HANDOFF_DOC_PROMPT]);
+  const doc = (r.result ?? "").trim();
+  if (!r.ok || doc.length < 40) return { ok: false, error: r.error ?? "claude -p wrote no handoff document" };
+  writeFileSync(join(ws, HANDOFF_DOC), doc + "\n", { mode: 0o644 });
+  // Keep it out of the agent's commits; it describes the session, not the project.
+  try {
+    const exclude = join(ws, ".git", "info", "exclude");
+    const cur = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+    if (!cur.split("\n").includes(`/${HANDOFF_DOC}`)) writeFileSync(exclude, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + `/${HANDOFF_DOC}\n`);
+  } catch {}
+  // The fork that wrote it is not a conversation anyone continues.
+  if (r.session_id && RESUME_ID_RE.test(r.session_id) && r.session_id !== resumeId) rmSync(transcriptPathFor(ws, r.session_id), { force: true });
+  return { ok: true, doc };
+}
+
+/**
+ * Start a handed-off conversation (already adopted) in the mode its size calls for:
+ * full resumes it now; compact resumes a /compact-ed fork; lean writes HANDOFF.md and
+ * starts a fresh session pointed at it. compact and lean run `claude -p` first, so they
+ * finish in the background; handoffJob(name) tracks them.
+ */
+export async function startHandoff(
+  rawName: string,
+  opts: { resumeId: string; prompt: string | null; autoMode?: boolean; mode?: RequestedHandoffMode },
+  deps: HandoffDeps = defaultHandoffDeps,
+): Promise<{ ok: true; job: HandoffJob; settled?: Promise<HandoffJob> } | { ok: false; error: string }> {
+  if (!NAME_RE.test(rawName)) return { ok: false, error: "Name must be 1-31 chars: letters, numbers, dashes." };
+  const name = prefixedName(rawName);
+  const ws = join(WORKSPACES_DIR, name.toLowerCase());
+  if (!isWorkspacePath(ws) || !existsSync(ws)) return { ok: false, error: "Workspace is missing — prepare first." };
+  if (!RESUME_ID_RE.test(opts.resumeId)) return { ok: false, error: "Bad transcript id." };
+  const path = transcriptPathFor(ws, opts.resumeId);
+  if (!existsSync(path)) return { ok: false, error: "The handed-off conversation is missing on the server." };
+  const requested = opts.mode ?? "auto";
+  const before = estimateTranscriptTokens(readFileSync(path, "utf8"));
+  const mode = chooseHandoffMode(before, requested);
+  const key = name.toLowerCase();
+  const job: HandoffJob = { state: "preparing", mode, requested_mode: requested, tokens_before: before, resume_id: opts.resumeId };
+  handoffJobs.set(key, job);
+  const launchOpts = { autoMode: opts.autoMode };
+
+  if (mode === "full") {
+    const r = await deps.launch(rawName, opts.prompt, opts.resumeId, launchOpts);
+    if (!r.ok) { handoffJobs.delete(key); return r; }
+    Object.assign(job, { state: "launched", tokens_after: before });
+    return { ok: true, job: { ...job } };
+  }
+
+  const finish = async () => {
+    const notes: string[] = [];
+    if (job.mode === "compact") {
+      const c = await compactHandoff(ws, opts.resumeId, deps);
+      if (c.ok) {
+        const r = await deps.launch(rawName, opts.prompt, c.id, launchOpts);
+        if (!r.ok) return Object.assign(job, { state: "failed", error: r.error });
+        return Object.assign(job, { state: "launched", tokens_after: c.tokens, resume_id: c.id });
+      }
+      notes.push(`Compaction failed (${c.error}); fell back to lean.`);
+      job.mode = "lean";
+    }
+    const d = await writeHandoffDoc(ws, opts.resumeId, deps);
+    if (d.ok) {
+      const first = leanFirstPrompt(opts.prompt);
+      const r = await deps.launch(rawName, first, null, launchOpts);
+      if (!r.ok) return Object.assign(job, { state: "failed", error: r.error, note: notes.join(" ") || undefined });
+      return Object.assign(job, { state: "launched", tokens_after: estimateTextTokens(first + d.doc), resume_id: null, note: notes.join(" ") || undefined });
+    }
+    // No summary: resuming the whole conversation is slower but loses nothing.
+    notes.push(`Writing ${HANDOFF_DOC} failed (${d.error}); resumed the full conversation instead.`);
+    const r = await deps.launch(rawName, opts.prompt, opts.resumeId, launchOpts);
+    if (!r.ok) return Object.assign(job, { state: "failed", error: r.error, note: notes.join(" ") });
+    return Object.assign(job, { state: "launched", mode: "full", tokens_after: before, note: notes.join(" ") });
+  };
+  const done = finish().catch((e) => Object.assign(job, { state: "failed", error: String(e?.message ?? e) }));
+  return { ok: true, job: { ...job }, settled: done.then(() => ({ ...job })) };
+}
+
+/**
+ * search_transcript: grep the conversation that was handed off to this session's
+ * Workspace (the whole original, before any compaction). Bounded snippets only.
+ */
+export function searchHandoffTranscript(sessionId: string, query: unknown, limit?: unknown): TranscriptSearch {
+  if (typeof query !== "string" || !query.trim()) throw new Error("query is required.");
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) throw new Error("limit must be a positive whole number.");
+  const launch = db.query("SELECT project_path FROM launches WHERE screen = ?").get(sessionId.slice(2)) as { project_path: string } | null;
+  const ws = launch?.project_path;
+  if (!ws) throw new Error("This session has no handed-off conversation.");
+  const dir = join(PROJECTS_DIR, mungeCwd(ws));
+  let id = "";
+  try { id = readFileSync(join(dir, HANDOFF_ORIGIN_FILE), "utf8").trim(); } catch {}
+  if (!RESUME_ID_RE.test(id) || !existsSync(join(dir, `${id}.jsonl`))) throw new Error("This session has no handed-off conversation.");
+  return searchTranscript(readFileSync(join(dir, `${id}.jsonl`), "utf8"), query, { limit: limit as number | undefined });
 }

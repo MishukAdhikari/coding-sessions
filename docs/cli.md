@@ -102,7 +102,7 @@ back through git (`cs pull`).
 ## Handoff
 
 ```text
-cs handoff [name] ["<next instruction>"] [--compact-hint] [--agent claude]
+cs handoff [name] ["<next instruction>"] [--full|--compact|--lean] [--agent claude]
 ```
 
 Continues the Claude Code conversation you are having in this folder on the server,
@@ -116,14 +116,47 @@ with its whole history, instead of re-explaining it in a prompt:
    into the workspace's `.cs-handoff/` folder (`umask 077`, a 0600 file). The server
    refuses symlinks, rewrites the transcript's `cwd` fields to the workspace path, moves
    it into its own transcript folder and removes `.cs-handoff/`;
-4. launches `claude --resume <id>` there, with your instruction as the first new
-   message, and prints the claude.ai link. The local agent can stop.
+4. starts the session in the mode below, with your instruction as the first new
+   message, prints the token estimate before and after, and the claude.ai link. The
+   local agent can stop.
 
 `name` defaults to the branch and must not already run or have a workspace on the
-server. The server re-reads the whole conversation on its first turn (one full-context
-read, without a warm prompt cache), so for a long one run `/compact` locally first;
-`--compact-hint` (or a transcript over 5 MB) prints that reminder. Transcripts can hold
-anything the agent printed, which is why they travel only over SSH.
+server. Transcripts can hold anything the agent printed, which is why they travel only
+over SSH.
+
+### Modes: how much history the server reads
+
+The server's first turn reads the whole resumed conversation, and none of it is in a
+prompt cache there (a cache does not carry across machines: the system prompt and tools
+differ). So the lever is sending less history. `cs handoff` estimates the conversation's
+size (characters / 4 over the message text a resume loads; an estimate, not a
+tokenizer) and picks a mode:
+
+| Mode | When (auto) | What the server does |
+|---|---|---|
+| `--full` | under ~50k tokens | `claude --resume <id>`: the whole conversation. |
+| `--compact` | ~50k to ~300k | `claude -p --resume <id> --fork-session "/compact …"` on a copy, then resumes the compacted copy. The summary is told to keep goal, decisions, next steps, key files and exact names and values. |
+| `--lean` | over ~300k | `claude -p --resume <id> --fork-session` writes `HANDOFF.md` (goal, decisions, done, next, key files, open questions, facts to keep) into the workspace, kept out of git via `.git/info/exclude`; then a **fresh** session starts whose first prompt points to `HANDOFF.md` and your instruction. |
+
+`--mode=auto|full|compact|lean` is the same. It prints, for example:
+
+```text
+Resuming would read ~180k tokens (estimate) → compact handoff (auto).
+Compacting a copy on the server, then resuming (a minute or two)… started.
+Resuming ~180k tokens; compacted to ~22k tokens (estimates).
+```
+
+In every mode the full transcript is uploaded and kept on the server, and the session
+can grep it with the `search_transcript` tool of its `coding_sessions_communicator` MCP
+(bounded snippets: at most 20 results, about 600 characters each, 12 KB in all). The
+lean first prompt says so. If compaction fails (for example a conversation with too
+few messages), the server falls back to lean and says so; if writing `HANDOFF.md`
+fails, it resumes the full conversation. Compact and lean run `claude -p` on the server
+first, so they take a minute or two; `cs handoff` waits for the launch.
+
+On a server in standard permission mode, a fresh workspace still shows Claude Code's
+folder-trust prompt on the first interactive start, as any Synced Launch does: answer
+it in the app (or with `read_session` and `press_keys`).
 
 Codex (`--agent codex`) is refused for now: the server's Synced Launch runs Claude
 Code only, and resuming a Codex rollout from another folder is not verified yet.
