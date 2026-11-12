@@ -76,7 +76,7 @@ function transformFrame(data: Frame, transform: (body: string) => string): Frame
   if (u.length === 0 || u[0] !== OUTPUT_CMD) return data;
   // Escape/mouse/SGR bytes are ASCII; latin1 (byte↔char) round-trips arbitrary bytes.
   let body = "";
-  for (let i = 1; i < u.length; i++) body += String.fromCharCode(u[i]);
+  for (let i = 1; i < u.length; i++) body += String.fromCharCode(u[i]!);
   const s = transform(body);
   if (s === body) return data;
   const out = new Uint8Array(1 + s.length);

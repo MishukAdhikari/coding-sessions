@@ -140,6 +140,12 @@ if (bootstrapPath) console.log(`Initial admin credential is in the protected fil
 
 /* ---------- helpers ---------- */
 
+/** A JSON request body as an object; anything else (bad JSON, null, an array, a string) reads as {}. */
+async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
+  const body: unknown = await req.json().catch(() => null);
+  return body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+}
+
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...headers } });
 
@@ -147,7 +153,7 @@ function authCookie(token: string, maxAge: number): string {
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${COOKIE_SECURE ? "; Secure" : ""}`;
 }
 
-function clientIp(req: Request, server: Bun.Server): string {
+function clientIp(req: Request, server: Bun.Server<TermSocketData>): string {
   return requestClientIp(req, server.requestIP(req)?.address ?? null, config.trustProxy, config.trustedProxies);
 }
 
@@ -289,7 +295,15 @@ const activitySignal = createActivitySignal({
   sample: async () => countActivity(await listSessions(), terminal.openClients()),
 });
 
-const server = Bun.serve({
+/** Per-socket state for a browser terminal relayed to its ttyd. */
+interface TermSocketData {
+  term: { id: string; socketPath: string; path: string; proto: string | null; mouse: boolean };
+  buf?: (string | Buffer)[] | null;
+  uws?: WebSocket;
+  filter?: { mouse: boolean };
+}
+
+const server = Bun.serve<TermSocketData>({
   hostname: config.listenHost,
   port: PORT,
   maxRequestBodySize: 1024 * 1024,
@@ -310,7 +324,7 @@ const server = Bun.serve({
 
       if (isWs) {
         if (req.headers.get("origin") !== auth.ORIGIN) return new Response("Forbidden", { status: 403 });
-        const proto = req.headers.get("sec-websocket-protocol")?.split(",")[0].trim() || null;
+        const proto = req.headers.get("sec-websocket-protocol")?.split(",")[0]?.trim() || null;
         const ok = srv.upgrade(req, {
           data: { term: { id, socketPath: t.socketPath, path: path + (url.search || ""), proto, mouse: t.mux === "zmx" } },
           headers: proto ? { "Sec-WebSocket-Protocol": proto } : undefined,
@@ -382,7 +396,7 @@ const server = Bun.serve({
     if (path === "/api/auth/password" && method === "POST") {
       const ip = clientIp(req, srv);
       if (auth.rateLimited(`pw:${ip}`)) return json({ error: "Too many attempts. Try again in 15 minutes." }, 429);
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       if (typeof body.password !== "string" || !(await auth.verifyPassword(body.password))) {
         return json({ error: "Wrong password." }, 401);
       }
@@ -408,8 +422,8 @@ const server = Bun.serve({
 
     if (path === "/api/auth/login/verify" && method === "POST") {
       if (auth.rateLimited(`lv:${clientIp(req, srv)}`, 15)) return json({ error: "Too many attempts." }, 429);
-      const body = await req.json().catch(() => ({}));
-      const result = await auth.verifyAuthentication(body.challengeId, body.response);
+      const body = await readJsonObject(req);
+      const result = await auth.verifyAuthentication(String(body.challengeId ?? ""), body.response);
       if (!result.verified) return json({ error: result.error }, 401);
       const token = auth.createAuthSession(req.headers.get("user-agent"));
       return json({ ok: true }, 200, { "set-cookie": authCookie(token, 30 * 24 * 3600) });
@@ -539,9 +553,9 @@ const server = Bun.serve({
     }
 
     if (path === "/api/auth/register/verify" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const label = typeof body.label === "string" ? body.label.slice(0, 60) : null;
-      const result = await auth.verifyRegistration(body.challengeId, body.response, label);
+      const result = await auth.verifyRegistration(String(body.challengeId ?? ""), body.response, label);
       return result.verified ? json({ ok: true }) : json({ error: result.error }, 400);
     }
 
@@ -589,7 +603,7 @@ const server = Bun.serve({
 
     if (path === "/api/commands" && method === "POST") {
       if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const result = createCommand(body);
       return result.ok ? json({ command: result.command }) : json({ error: result.error }, 422);
     }
@@ -601,7 +615,7 @@ const server = Bun.serve({
       if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
       const id = Number(path.slice("/api/commands/".length, -"/token".length));
       if (!Number.isInteger(id)) return json({ error: "Bad id." }, 422);
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const result = setCommandToken(id, body.token);
       return result.ok ? json({ ok: true }) : json({ error: result.error }, 422);
     }
@@ -629,7 +643,7 @@ const server = Bun.serve({
 
     if (path === "/api/cli-tokens" && method === "POST") {
       if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const label = typeof body.label === "string" && body.label.trim() ? body.label.trim().slice(0, 60) : null;
       return json({ token: auth.createCliToken(label) }); // raw value shown once
     }
@@ -656,7 +670,7 @@ const server = Bun.serve({
     /* ----- Web terminals ----- */
 
     if (path === "/api/terminal" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const target = body.kind === "attach"
         ? { kind: "attach" as const, screen: String(body.screen ?? "") }
         : { kind: "shell" as const, cwd: body.cwd ? String(body.cwd) : undefined, login: typeof body.login === "string" ? body.login : undefined };
@@ -681,13 +695,13 @@ const server = Bun.serve({
     }
 
     if (path === "/api/synced/prepare" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const r = await prepareSynced(String(body.name ?? ""), String(body.repo ?? ""), body.branch ? String(body.branch) : null);
       return r.ok ? json({ ok: true, workspacePath: r.workspacePath }) : json({ error: r.error }, 422);
     }
 
     if (path === "/api/synced/launch" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       // cs handoff: the transcript was uploaded over SSH into the Workspace; adopt it first.
       if (body.handoff === true) {
         if (!body.resumeId) return json({ error: "A handoff needs resumeId.", code: "invalid_argument" }, 422);
@@ -715,7 +729,7 @@ const server = Bun.serve({
     if (path.startsWith("/api/archive/") && path.endsWith("/resume") && method === "POST") {
       const id = Number(path.slice("/api/archive/".length, -"/resume".length));
       if (!Number.isInteger(id)) return json({ error: "Bad id." }, 422);
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const options = launchOptionsFromRequest(body);
       if (!options.ok) return json({ error: options.error }, 422);
       const r = await resumeArchived(id, options.provider);
@@ -739,7 +753,7 @@ const server = Bun.serve({
     }
 
     if (path === "/api/browser-auth/code" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const r = claudeChat.submitBrowserCode(String(body.code ?? "").trim());
       return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
     }
@@ -766,15 +780,16 @@ const server = Bun.serve({
     }
 
     if (path === "/api/sessions" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const options = launchOptionsFromRequest(body);
       if (!options.ok) return json({ error: options.error }, 422);
       const unknown = unregisteredCommand(options.provider);
       if (unknown) return json({ error: unknown }, 422);
-      const workspace = typeof body.repo === "string" && body.repo.trim();
+      const repo = typeof body.repo === "string" ? body.repo : "";
+      const workspace = repo.trim();
       if (workspace && options.mode === "acp") return json({ error: ACP_WORKSPACE_ERROR }, 422);
       const result = workspace
-        ? await launchWorkspaceSession(String(body.name ?? ""), body.repo, options.remoteControl, options.provider)
+        ? await launchWorkspaceSession(String(body.name ?? ""), repo, options.remoteControl, options.provider)
         : await launchSession(String(body.name ?? ""), Number(body.projectId), options.remoteControl, options.provider, options.mode);
       return result.ok ? json({ ok: true }) : json({ error: result.error }, 422);
     }
@@ -809,7 +824,7 @@ const server = Bun.serve({
     }
 
     if (path === "/api/settings" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const prefix = String(body.prefix ?? "").trim();
       if (prefix && !PREFIX_RE.test(prefix)) {
         return json({ error: "Prefix must be 1-12 chars: letters, numbers, dashes." }, 422);
@@ -850,7 +865,7 @@ const server = Bun.serve({
     }
 
     if (path === "/api/claude-auth/code" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const r = await claudeAuth.submitCode(String(body.code ?? "").trim());
       return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
     }
@@ -878,7 +893,7 @@ const server = Bun.serve({
     // living in a config file must not be able to set another service's key.
     if (path === "/api/command-code-auth/token" && method === "POST") {
       if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const saved = setCommandCodeToken(body.token);
       if (!saved.ok) return json({ error: saved.error }, 422);
       // Report what the CLI makes of the key just stored, rather than "saved" alone.
@@ -901,7 +916,7 @@ const server = Bun.serve({
     }
 
     if (path === "/api/projects" && method === "POST") {
-      const body = await req.json().catch(() => ({}));
+      const body = await readJsonObject(req);
       const checked = validateProjectPath(body.path, body.create === true);
       if (!checked.ok) return json({ error: checked.error }, 422);
       const p = checked.path;
@@ -921,7 +936,7 @@ const server = Bun.serve({
   /* Relay each browser terminal socket to its per-terminal ttyd (raw byte proxy). */
   websocket: {
     open(ws) {
-      const d = ws.data as any;
+      const d = ws.data;
       const info = d?.term;
       if (!info) { ws.close(); return; }
       terminal.markOpen(info.id);
@@ -940,7 +955,7 @@ const server = Bun.serve({
       uws.onerror = () => { try { ws.close(); } catch {} };
     },
     message(ws, message) {
-      const d = ws.data as any;
+      const d = ws.data;
       const uws = d?.uws as WebSocket | undefined;
       if (!uws) return;
       // Upstream: on screen bridges, drop mouse reports that still slip through.
@@ -949,7 +964,7 @@ const server = Bun.serve({
       else if (d.buf) d.buf.push(m);
     },
     close(ws) {
-      const d = ws.data as any;
+      const d = ws.data;
       if (d?.term?.id) { terminal.markClose(d.term.id); activitySignal.touch(); }
       try { d?.uws?.close(); } catch {}
     },

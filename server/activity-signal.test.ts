@@ -56,7 +56,7 @@ test("the listener serves only GET /activity, with counts and no session details
   const ok = await handleActivityRequest(new Request("http://127.0.0.1:9131/activity"), signal);
   expect(ok.status).toBe(200);
   expect(ok.headers.get("cache-control")).toBe("no-store");
-  expect(Object.keys(await ok.json()).sort()).toEqual(["active", "idle_seconds", "last_activity_at", "terminals", "waiting", "working"]);
+  expect(Object.keys(await ok.json() as object).sort()).toEqual(["active", "idle_seconds", "last_activity_at", "terminals", "waiting", "working"]);
 
   expect((await handleActivityRequest(new Request("http://127.0.0.1:9131/api/sessions"), signal)).status).toBe(404);
   expect((await handleActivityRequest(new Request("http://127.0.0.1:9131/activity", { method: "POST" }), signal)).status).toBe(405);
