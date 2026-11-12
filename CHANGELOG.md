@@ -8,6 +8,10 @@ release also lists how it was validated.
 ## [Unreleased]
 
 ### Added
+- MCP `add_project` and `remove_project`: register a project for Chat (ACP) mode without
+  the app, by cloning a repo into a new workspace or naming a folder already under
+  `~/workspaces`. Other folders stay app-only. `server_status` lists a missing project
+  for Chat mode with the call to make.
 - Set up a fresh server from your local agent over MCP, with no SSH: `server_status`
   (readiness in one call, with what is missing and the exact next call), `setup_agents`
   (install or update agents as the service account, a job to wait on), `doctor` (non-root

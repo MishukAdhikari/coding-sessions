@@ -19,6 +19,7 @@ import { handoffUploadCommand, mungeCwd } from "./handoff";
 import { COMPACT_FROM_TOKENS, LEAN_ABOVE_TOKENS, isHandoffMode, type RequestedHandoffMode } from "./handoff-modes";
 import type { InstallJob } from "./agent-installs";
 import type { Finding } from "./server-setup";
+import { addProject, removeProject, type ProjectToolDeps } from "./project-tools";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version: "1.0.0" };
@@ -26,7 +27,7 @@ const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version
 export const INSTRUCTIONS = `Coding Sessions runs Claude, Codex and Command Code agents in terminal sessions on one server; this connector drives them.
 Typical loop: list_sessions (or launch_session with a prompt) → send_message → wait_for_session → read_session, repeating until the work is done.
 Session ids look like "m:cs-name". A session's state is one of: starting, working, asking (blocked on a question — read_session, then press_keys or send_message to answer), waiting (finished its turn, ready for the next message), running (alive; this agent reports no turn state), ended.
-Set up a fresh server: server_status first; it lists what is missing, each with the exact next call. Usually: setup_agents {agents: ["claude"]} (also installs the Chat/ACP adapter and completes Claude Code's onboarding), then setup_agents {wait_seconds: 60} until the job finishes; doctor {fix: true}; sign-in with agent_auth (the human opens the link) or a key with request_secret (the human enters the value); ask the human whether to trust app workspaces, and only on their yes trust_workspaces {enabled: true, confirm: true}; server_status again until ready. Items with human: true are for the person (give them the link or the sudo command); never work around them.
+Set up a fresh server: server_status first; it lists what is missing, each with the exact next call. Usually: setup_agents {agents: ["claude"]} (also installs the Chat/ACP adapter and completes Claude Code's onboarding), then setup_agents {wait_seconds: 60} until the job finishes; doctor {fix: true}; sign-in with agent_auth (the human opens the link) or a key with request_secret (the human enters the value); ask the human whether to trust app workspaces, and only on their yes trust_workspaces {enabled: true, confirm: true}; for Chat (acp) mode add_project {repo, name} (a clone under ~/workspaces) and launch_session {project_id, mode: "acp"}; server_status again until ready. Items with human: true are for the person (give them the link or the sudo command); never work around them.
 When startup_waiting_for_trust is true, Codex is waiting for the operator to review folder trust before its managed startup hook can run. Report this decision to the operator; do not accept trust automatically: folder trust is answered for you only through the operator's trust_workspaces setting, and only for workspaces this app creates. The same holds for Claude Code's folder_trust startup_prompt.
 The additive activity field matches the web UI: running, waiting (needs input), finished (turn complete; session still open), ready, connected (no reliable turn signal), starting, ended, or failed.
 Sessions use the server-configured permission mode and may require trust or approval in their terminal; end_session stops one and archives it, resume_session reopens an archived conversation.
@@ -69,6 +70,8 @@ export interface McpDeps {
   sessionExtras?(sessions: SessionInfo[]): Map<string, SessionExtras>;
   /** Server setup (server_status, setup_agents, doctor, trust_workspaces); absent in tests that predate it. */
   setup?: SetupDeps;
+  /** add_project / remove_project (server/project-tools.ts); absent in tests that predate them. */
+  projects?: ProjectToolDeps;
   /** Handoff of a local conversation (handoff_session); absent in deployments without it. */
   handoff?: {
     status(name: string): Promise<{ ok: true; status: { state: "live" | "resumable" | "none"; name: string; workspacePath: string } } | { ok: false; error: string }>;
@@ -286,6 +289,26 @@ export const TOOLS = [
     description: "Where a session can be launched — the server's allowlisted projects (by id) — and the agents it can run (claude, codex, command-code, registered cmd:* commands).",
     inputSchema: { type: "object", properties: {} },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "add_project",
+    title: "Add a project",
+    description: "Register a project, which Chat (acp) mode needs, without the app. Only under the server's workspaces folder: repo clones \"owner/repo\" (or a GitHub URL, optional branch) into a new workspace named name with the app's own git and GitHub sign-in, exactly as a repo launch prepares one; path adds a folder that already exists under ~/workspaces (such as a repo or handoff workspace). Any other folder is refused: add it in the app's Projects. Runs the app's own project checks (a directory the server can write). Adding the same folder again returns the existing project. Returns the project with its id for launch_session.",
+    inputSchema: { type: "object", properties: {
+      repo: { type: "string", description: "owner/repo, owner/repo#branch or a GitHub URL to clone." },
+      name: { type: "string", description: "With repo: the new workspace's name, 1-31 letters, numbers, dashes or underscores." },
+      branch: { type: "string", description: "With repo: the branch to check out. Default: the repo's default branch." },
+      path: { type: "string", description: "Instead of repo: an existing folder under ~/workspaces." },
+      label: { type: "string", description: "Display name. Default: name, or the folder's name." },
+    } },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: "remove_project",
+    title: "Remove a project",
+    description: "Remove a project from the list (list_projects shows ids). The folder and its files stay, and running sessions keep running; only new launches into it stop being offered.",
+    inputSchema: { type: "object", properties: { project_id: { type: "integer" } }, required: ["project_id"] },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "list_repos",
@@ -584,7 +607,7 @@ async function secretTool(deps: McpDeps, name: string, args: Record<string, unkn
 
 /* ---------- server setup ---------- */
 
-interface Missing { item: string; why: string; next: string; human?: boolean; ask_operator?: boolean }
+interface Missing { item: string; why: string; next: string; human?: boolean; ask_operator?: boolean; optional?: boolean }
 
 /** Claude Code terminal sessions blocked on a first-run screen right now. */
 async function pendingStartupScreens(deps: McpDeps) {
@@ -626,13 +649,17 @@ export async function serverStatus(deps: McpDeps, setup: SetupDeps) {
     missing.push({ item: "workspace trust", ask_operator: true, why: "In standard permission mode every new repo or handoff workspace stops at Claude Code's folder-trust question (default: No, exit).",
       next: "Ask the human whether to trust workspaces this app creates; only if they say yes: trust_workspaces {enabled: true, confirm: true}. Otherwise they answer trust per session." });
   }
+  if (!deps.listProjects().length && snap.agents.some((a) => a.installed && a.acp_adapter)) {
+    missing.push({ item: "a project for Chat mode", optional: true, why: "Chat (acp) sessions launch only into a project; none is registered.",
+      next: 'add_project {repo: "owner/repo", name: "app"} (or path of an existing ~/workspaces folder), then launch_session {project_id, mode: "acp"}' });
+  }
   for (const f of findings) {
     if (f.status === "ok" || f.check === "Claude Code onboarding") continue;
     missing.push({ item: f.check, why: f.detail, next: f.fix ?? "doctor", ...(f.human ? { human: true } : {}) });
   }
   for (const s of screens) missing.push({ item: `session ${s.name}: ${s.kind}`, why: "This Claude Code session is waiting on a first-run screen.", next: `read_session {session_id: "${s.session_id}"}; ${s.how}`, ...(s.kind === "folder_trust" ? { ask_operator: true } : {}) });
 
-  const agentWork = missing.filter((m) => !m.human && !m.ask_operator);
+  const agentWork = missing.filter((m) => !m.human && !m.ask_operator && !m.optional);
   return {
     ready: agentWork.length === 0 && !installing,
     app: snap.app,
@@ -785,6 +812,19 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
 
     case "list_projects":
       return ok({ projects: deps.listProjects(), agents: deps.providers() });
+
+    case "add_project": {
+      if (!deps.projects) return fail("Adding projects over MCP is unavailable on this server.", "unavailable");
+      const r = await addProject(deps.projects, args);
+      if (!r.ok) return fail(r.error, r.code, r.code === "invalid_argument" ? "Give repo with name, or path under ~/workspaces." : undefined);
+      return ok({ ...r, next: `launch_session {name, project_id: ${r.project.id}, mode: "acp"} for Chat mode, or mode "terminal".` });
+    }
+
+    case "remove_project": {
+      if (!deps.projects) return fail("Removing projects over MCP is unavailable on this server.", "unavailable");
+      const r = removeProject(deps.projects, args.project_id);
+      return "removed" in r ? ok({ removed: r.removed, note: "The folder was not deleted." }) : r.ok ? ok(r) : fail(r.error, r.code, "list_projects");
+    }
 
     case "list_repos": {
       const q = str(args.query).toLowerCase();
