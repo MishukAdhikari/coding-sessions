@@ -39,8 +39,8 @@ Agent CLIs install into the volume, as the `cs` account, so they survive restart
 image updates:
 
 ```bash
-docker compose exec app install-provider-clis claude codex command-code
-docker compose exec -it app claude      # sign in once; same for codex
+docker compose exec -u cs app install-provider-clis claude codex command-code
+docker compose exec -it -u cs app claude      # sign in once; same for codex
 ```
 
 Or sign in from the app: **Settings → Agent authentication**.
@@ -76,6 +76,19 @@ The token encryption key is created on first start in `/home/cs/data/token-encry
 The default repository, GitHub owners, claude.ai email, terminal mouse and agent permissions
 can also be changed in the app under **Settings → Server settings**. A value changed there wins
 over the environment until you reset it, and is kept in the `home` volume.
+
+## Files and permissions
+
+The container starts as root only long enough to give `/home/cs` back to the `cs` account,
+then runs everything as `cs`. You never need to `chown` the volume yourself:
+
+- **A bind mount instead of the named volume** (`- ./home:/home/cs`): set `PUID` and `PGID`
+  under `environment:` to the owner of that folder (`id -u`, `id -g` on the host), and `cs`
+  takes those IDs. Without them, the folder is re-owned to uid 10001.
+- **Files left by `docker compose exec app …` as root** are handed back to `cs` on the next
+  start (`docker compose restart app`). Run agent commands with `-u cs` to avoid them.
+- Starting the container with `--user` skips this; the home must then be writable by that user,
+  and the container says so and stops if it isn't.
 
 ## Good to know
 

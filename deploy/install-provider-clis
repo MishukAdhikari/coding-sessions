@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-[[ $(id -u) != 0 ]] || { echo 'Run as the instance service user, not root.' >&2; exit 1; }
+[[ $(id -u) != 0 ]] || { echo 'Run as the service account, not root (files root writes here break the agents with EACCES). On a server: sudo coding-sessions agents install NAME. In Docker: docker compose exec -u cs app install-provider-clis NAME' >&2; exit 1; }
 : "${HOME:?HOME must identify the instance service account}"
 export PATH="$HOME/.local/bin:$PATH"
 (($#)) || { echo 'Usage: install-provider-clis codex|claude|command-code|gemini|kimi|qwen|opencode [...]' >&2; exit 1; }

@@ -18,7 +18,11 @@ jobs:
       - name: Syntax and lint
         run: |
           bash -n deploy/coding-sessions deploy/install.sh deploy/install-ubuntu
-          shellcheck -S warning deploy/coding-sessions deploy/install.sh
+          shellcheck -S warning deploy/coding-sessions deploy/install.sh deploy/update-app deploy/tests/permission-repair docker/entrypoint.sh
+      - name: Installer unit tests, as a user and as root
+        run: |
+          python3 -m unittest -v deploy/tests/test_installer.py
+          sudo python3 -m unittest -v deploy/tests/test_installer.py
       - name: Start from a plain server (the runner ships its own Node.js in /usr/local/bin)
         run: sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx
       - name: Dry run plans without changing anything
@@ -62,6 +66,13 @@ jobs:
           set +e
           sudo coding-sessions doctor | tee doctor.txt
           grep -q 'service running' doctor.txt
+      - name: Broken owners and modes are repaired by doctor --fix alone
+        run: sudo deploy/tests/permission-repair
+      - name: Setup re-runs cleanly after the repair
+        run: |
+          sudo deploy/coding-sessions setup --skip-dns-check --no-link --yes | tee rerun2.log
+          sudo coding-sessions permissions
+          systemctl is-active --quiet coding-sessions@personal.service
       - name: Uninstall --purge stops everything and removes the account
         run: |
           sudo coding-sessions uninstall --purge --confirm personal
@@ -74,6 +85,38 @@ jobs:
         run: |
           sudo journalctl -u coding-sessions@personal -n 100 --no-pager || true
           sudo journalctl -u caddy -n 50 --no-pager || true
+
+  # Docker: a bind mount owned by the host user (PUID/PGID), and root-left files in the volume.
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -q -t cs-image .
+      - name: A bind mount owned by another uid starts, owned by PUID/PGID
+        run: |
+          set -x
+          mkdir home && sudo chown 1234:1234 home
+          docker run -d --name app -e ORIGIN=https://ci.coding-sessions.invalid -e PUID=1234 -e PGID=1234 -v "$PWD/home:/home/cs" -p 127.0.0.1:9121:9121 cs-image
+          for _ in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:9121/ && break; sleep 2; done
+          curl -fsS -o /dev/null http://127.0.0.1:9121/
+          test "$(docker exec app ps -o user= -p "$(docker exec app pgrep -f 'bun server/index.ts' | head -n 1)")" = cs
+          test -z "$(sudo find home ! -uid 1234 -print -quit)"
+          sudo test -s home/data/app.db
+      - name: Files a root exec left behind are handed back on restart
+        run: |
+          set -x
+          docker exec app sh -c 'mkdir -p /home/cs/.local/bin && touch /home/cs/.local/bin/root-file /home/cs/data/root-file'
+          test -n "$(sudo find home -uid 0 -print -quit)"
+          docker restart app
+          for _ in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:9121/ && break; sleep 2; done
+          curl -fsS -o /dev/null http://127.0.0.1:9121/
+          test -z "$(sudo find home ! -uid 1234 -print -quit)"
+          docker exec -u cs app sh -c 'touch /home/cs/.local/bin/ok'
+      - name: Logs on failure
+        if: failure()
+        run: docker logs app || true
 
   # The other supported systems, each booted with systemd in a privileged container.
   distros:
@@ -108,6 +151,13 @@ jobs:
           docker exec box gh --version
           docker exec box sh -c 'coding-sessions setup-link 2>/dev/null' | grep -q '#setup=cssetup_'
           docker exec box coding-sessions setup --skip-dns-check --yes
+      - name: Broken owners and modes are repaired by doctor --fix alone
+        run: docker exec box /root/coding-sessions/deploy/tests/permission-repair
+      - name: Setup re-runs cleanly after the repair
+        run: |
+          docker exec box coding-sessions setup --skip-dns-check --no-link --yes
+          docker exec box coding-sessions permissions
+          docker exec box systemctl is-active --quiet coding-sessions@personal.service
       - name: Logs on failure
         if: failure()
         run: |

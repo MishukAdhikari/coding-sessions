@@ -94,7 +94,7 @@ The `coding-sessions` command manages everything afterwards:
 
 ```text
 sudo coding-sessions setup               re-run setup: repair, or change agents, browser, updates
-sudo coding-sessions doctor              check everything; each problem comes with its fix
+sudo coding-sessions doctor [--fix]      check everything; --fix repairs owners and modes
 sudo coding-sessions status              URL, versions, services, updates
 sudo coding-sessions activity [--json]   when it was last in use (needs CS_ACTIVITY_PORT)
 sudo coding-sessions agents              installed agents and versions
@@ -113,6 +113,51 @@ Agents can also be installed from the app: **Settings → Agent authentication**
 
 ## Troubleshooting
 
+Start with:
+
+```bash
+sudo coding-sessions doctor          # checks everything and says what's wrong
+sudo coding-sessions doctor --fix    # also repairs owners and modes (asks first; --yes to skip)
+```
+
+You should never need `chown`, `chmod` or a `sudo` edit by hand. `doctor --fix`, `setup` (on every
+re-run and upgrade), `update` and `agents install` run the same repair pass over every path
+Coding Sessions owns. They print one line for each thing they change, and change nothing when all
+is right, so re-running them is always safe.
+
+### Permission errors
+
+These come from files the service account (`cs-personal` by default) can't write, usually left
+by a command run as root (`sudo npm i -g`, an agent or `git` started with `sudo`, a restore from
+backup). For any of them, run `sudo coding-sessions doctor --fix`:
+
+| What you see | Usually |
+| --- | --- |
+| `npm ERR! code EACCES`, or an agent shows "not installed" right after installing | root-owned files in the service account's `~/.local` |
+| `EACCES: permission denied` on `~/.codex/…`, `~/.claude/…` or `~/.config/…` | an agent was run once as root |
+| `fatal: detected dubious ownership in repository`, `index.lock: Permission denied` | a repository was cloned or fetched as root in the service's workspace |
+| `attempt to write a readonly database`, and the service restarts in a loop | the data folder or `app.db` is root-owned or read-only |
+| `EADDRINUSE`, or web terminals never connect after a crash | a stale socket in `data/` or `run/` |
+| `status=217/USER`, `243/CREDENTIALS` or `200/CHDIR` in `sudo coding-sessions logs` | the home, env file or credentials have the wrong owner or mode |
+| setup stops with "must be root-owned" or "must not be group/world writable" | `/etc/coding-sessions` or `/opt/coding-sessions` was changed by hand |
+| an agent works in a shell but is "command not found" in sessions | `~/.local/bin` is missing from the service's `PATH` |
+
+What the pass covers: `/etc/coding-sessions` (root-only; the env file and credentials `0600`), the
+app and its releases in `/opt/coding-sessions` (root-owned, not writable by others), and the
+service home `/var/lib/coding-sessions/NAME` (the account's own, `0700`, with `data`, `run`,
+`.local/bin` and the rest). Inside the home, root never follows a path the account controls:
+ownership changes don't follow links, and every other change runs as the account itself.
+
+Two things it reports but won't change, each with the one command to run:
+
+- **A symlink at one of those paths.** It is never followed. Move it aside with the `sudo mv`
+  command shown, then run `doctor --fix` again.
+- **Files owned by another real account inside the service home.** They may be yours. If they
+  belong to Coding Sessions, run the `sudo chown -R cs-personal:cs-personal …` command shown.
+
+### Other problems
+
+- **Docker:** see [Files and permissions](docker.md#files-and-permissions).
 - **"doesn't resolve" or "points at … but this server is …":** fix the domain's A record, wait a few minutes, and run setup again. If a proxy such as Cloudflare sits in front of the domain, add `--skip-dns-check`.
 - **"port 80/443 is used by …":** another web server is running. Stop it, or put Coding Sessions behind it yourself; [deploy/README.md](../deploy/README.md) covers the manual install.
 - **The HTTPS site doesn't come up:** run `sudo coding-sessions doctor`. Then `journalctl -u caddy -n 50` shows why the certificate wasn't issued.
