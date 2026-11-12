@@ -37,7 +37,8 @@ bun_package() { # package bin
   dir=$HOME/.local/share/coding-sessions/packages/$bin
   mkdir -p "$dir" "$HOME/.local/bin"
   [[ -f $dir/package.json ]] || printf '{"private":true}\n' > "$dir/package.json"
-  (cd "$dir" && "$bun" add "$package@latest")
+  # copyfile, not hard links into the Bun cache: doctor --fix leaves hard-linked files alone.
+  (cd "$dir" && "$bun" add --backend=copyfile "$package@latest")
   entry=$(cd "$dir" && "$bun" -e '
     const [pkg, bin] = process.argv.slice(1);
     const path = require("node:path");
