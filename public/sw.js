@@ -1,5 +1,5 @@
 /* Coding Sessions — service worker: network-first app shell, offline fallback */
-const CACHE = "xs-v84";
+const CACHE = "xs-v85";
 const ASSETS = [
   "/",
   "/app.css",
@@ -14,6 +14,7 @@ const ASSETS = [
   "/secret-request.js",
   "/launch-mode.js",
   "/fonts/instrument-sans.ttf",
+  "/command-palette.js",
   "/agent-auth.js",
   "/app.js",
   "/term.html",

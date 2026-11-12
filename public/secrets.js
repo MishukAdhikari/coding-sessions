@@ -174,6 +174,8 @@
         openSheet("sheet-secrets");
       },
       reloadRequests: loadRequests,
+      /** Renders the saved names (never values) without opening the sheet, for settings search. */
+      preload: () => load(),
     };
   };
 })();

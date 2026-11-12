@@ -2602,5 +2602,36 @@
     history.replaceState({ ...(history.state && typeof history.state === "object" ? history.state : {}), scrollY: Math.round(window.scrollY) }, "");
   });
 
+  /* ---------- command palette (command-palette.js) ---------- */
+
+  // Lists that a settings sheet renders only when opened: rendered behind the closed sheet so
+  // their rows (agents, commands, tokens, connectors, secret names, projects) can be searched.
+  const behindClosed = (sheet, load) => () => ($(sheet).hidden ? load() : undefined);
+  window.CommandPalette.create({
+    document, window,
+    canOpen: () => !$("app").hidden,
+    openSheetEl: () => openSheetEl,
+    closeSheet,
+    getSessions: () => [
+      ...sessions.map((s) => ({ id: s.id, name: s.name, project: s.projectLabel || s.project, provider: providerName(providerOf(s)), status: s.status })),
+      ...archived.map((a) => ({ id: `archive:${a.id}`, name: a.name, project: a.project, provider: providerName(providerOf(a)), status: "ended", archived: true })),
+    ],
+    openSession: (id) => {
+      const archivedOne = id.startsWith("archive:") && archived.find((a) => `archive:${a.id}` === id);
+      if (archivedOne) return confirmArchived(archivedOne);
+      const live = sessions.find((s) => s.id === id);
+      if (live) confirmEnd(live);
+    },
+    preload: [
+      behindClosed("sheet-server-settings", loadServerSettings),
+      behindClosed("sheet-agent-auth", () => loadAgentInstalls()),
+      behindClosed("sheet-commands", () => Promise.all([loadCommands(), loadPresets()])),
+      behindClosed("sheet-cli", () => Promise.all([loadCliTokens(), loadMcpConnections()])),
+      behindClosed("sheet-secrets", () => secretsUI.preload()),
+      () => connectorsUI.preload(),
+      behindClosed("sheet-projects", async () => { projects = (await api("/api/projects")).projects; renderProjectList(); }),
+    ],
+  });
+
   boot();
 })();

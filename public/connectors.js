@@ -233,10 +233,10 @@
     }
 
     /** Returns whether its result was applied (nothing newer started meanwhile). */
-    async function load() {
+    async function load({ quiet = false } = {}) {
       const mine = ++generation;
       let data;
-      try { data = await api("/api/connectors"); } catch (error) { if (mine === generation) showToast(error.message); return false; }
+      try { data = await api("/api/connectors"); } catch (error) { if (mine === generation && !quiet) showToast(error.message); return false; }
       if (mine !== generation) return false;
       connectors = data.connectors;
       oauthUrls = data.oauth ?? null;
@@ -383,6 +383,10 @@
         if (!(await loading) || mine !== generation) return;
         const view = connectors.find(v => v.id === id);
         if (view) openDetail(view);
+      },
+      /** Renders the list behind closed sheets, for settings search. */
+      preload() {
+        if ($("sheet-connectors").hidden && $("sheet-connector").hidden) return load({ quiet: true });
       },
       /** Opens the list; resolves true when its load was applied. */
       open() {
