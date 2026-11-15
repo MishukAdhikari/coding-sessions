@@ -160,6 +160,41 @@ test("the work tree upload skips what git ignores, keeps `!` re-includes, and ne
   }
 });
 
+test("the upload starts at the repo's top level and never sends a linked worktree's .git file", () => {
+  const root = mkdtempSync(join(tmpdir(), "cs-rsync-top-"));
+  const main = join(root, "main"), wt = join(root, "wt"), dest = join(root, "dest");
+  const sh = (cmd: string[], cwd: string) => {
+    const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+    if (p.exitCode) throw new Error(p.stderr.toString());
+    return p.stdout.toString().trim();
+  };
+  try {
+    mkdirSync(join(main, "src"), { recursive: true });
+    writeFileSync(join(main, "README.md"), "r");
+    writeFileSync(join(main, "src", "a.ts"), "a");
+    sh(["git", "init", "-q"], main);
+    sh(["git", "add", "-A"], main);
+    sh(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "init"], main);
+    sh(["git", "worktree", "add", "-q", wt], main);
+    // The server's workspace: a real .git directory of its own.
+    mkdirSync(join(dest, ".git"), { recursive: true });
+    writeFileSync(join(dest, ".git", "HEAD"), "ref: refs/heads/x\n");
+    writeFileSync(join(dest, "README.md"), "old");
+    const ex = join(root, "exclude");
+    writeFileSync(ex, "");
+    // Run from a subdirectory of the linked worktree, as `cs --server` would be.
+    const top = sh(["git", "rev-parse", "--show-toplevel"], join(wt, "src"));
+    expect(lstatSync(join(top, ".git")).isFile()).toBe(true);
+    sh(rsyncWorkTreeArgs(ex, dest + "/", top, true), join(wt, "src"));
+    expect(readFileSync(join(dest, "README.md"), "utf8")).toBe("r");
+    expect(existsSync(join(dest, "src", "a.ts"))).toBe(true);
+    expect(lstatSync(join(dest, ".git")).isDirectory()).toBe(true);
+    expect(existsSync(join(dest, ".git", "HEAD"))).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ignored paths become anchored literal rsync patterns", () => {
   expect(rsyncIgnoredExcludes("build/\0a*b[1]?.log\0two\nlines\0\0")).toBe("/build/\n/a[*]b[[]1][?].log\n/two?lines\n");
 });

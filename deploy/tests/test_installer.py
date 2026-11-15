@@ -181,6 +181,59 @@ class InstallerContractTests(unittest.TestCase):
             self.assertEqual(status["result"], "failed")
             self.assertIsNotNone(status["finished"])
 
+    def test_setup_keeps_a_running_build_newer_than_the_cli_release(self):
+        script = (ROOT / "deploy/coding-sessions").read_text()
+        function = script[script.index("keep_running_source() {"):script.index("# The source to install from")]
+        self.assertIn('[[ -n ${VERSION:-} ]] || keep_running_source', script)
+        with tempfile.TemporaryDirectory() as directory:
+            src, app = Path(directory) / "src", Path(directory) / "app"
+            src.mkdir(); app.mkdir()
+            def git(*args):
+                return subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("commit", "-q", "--allow-empty", "-m", "one"); old = git("rev-parse", "HEAD")
+            git("commit", "-q", "--allow-empty", "-m", "two"); new = git("rev-parse", "HEAD")
+            def run(running, fetched):
+                (app / ".source-commit").write_text(running + "\n")
+                (app / ".source-version").write_text("v0.15.0\n")
+                git("checkout", "-q", "--force", fetched)
+                harness = f'set -euo pipefail\nwarn() {{ :; }}\napp_dir() {{ printf %s {app}; }}\n{function}\n' \
+                          f'SRC={src} INSTANCE=demo SOURCE_REF=v0.14.0 SOURCE_COMMIT={fetched}\nkeep_running_source\n' \
+                          'printf "%s %s %s" "$SOURCE_REF" "$SOURCE_COMMIT" "$(git -C "$SRC" rev-parse HEAD)"\n'
+                result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.split()
+            self.assertEqual(run(new, old), ["v0.15.0", new, new])   # the app moved on: stay there
+            self.assertEqual(run(old, new), ["v0.14.0", new, new])   # an upgrade goes ahead
+            self.assertEqual(run(new, new), ["v0.14.0", new, new])
+            self.assertEqual(run("0" * 40, old), ["v0.14.0", old, old])  # unknown commit: as before
+
+    def test_updater_refreshes_a_bun_installed_agent_with_the_installer_not_npm(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            binaries = home / ".local/bin"
+            binaries.mkdir(parents=True)
+            (home / ".local/share/coding-sessions/packages/codex").mkdir(parents=True)
+            scripts = Path(directory) / "deploy"
+            scripts.mkdir()
+            shutil.copy(ROOT / "deploy/update-coding-clis", scripts / "update-coding-clis")
+            calls = Path(directory) / "calls"
+            for path, body in {
+                binaries / "codex": "#!/bin/sh\necho codex-test\n",
+                binaries / "npm": '#!/bin/bash\necho "npm $*" >> "$UPDATE_TEST_CALLS"\nexit 1\n',
+                scripts / "install-provider-clis": '#!/bin/bash\necho "installer $*" >> "$UPDATE_TEST_CALLS"\n',
+            }.items():
+                path.write_text(body)
+                path.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(scripts / "update-coding-clis")],
+                env={**os.environ, "HOME": str(home), "UPDATE_TEST_CALLS": str(calls)},
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(calls.read_text(), "installer codex\n")
+
 
 @unittest.skipUnless(platform.system() == "Linux", "the permission pass uses GNU find and stat, as on Ubuntu")
 class PermissionPassTests(unittest.TestCase):

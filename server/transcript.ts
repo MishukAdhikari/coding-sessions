@@ -45,9 +45,17 @@ function clip(text: string, max: number): string {
 }
 
 /** Context the agent injects into the user turn: AGENTS.md, <environment_context>, <system-reminder>, … */
+const INJECTED_TAG = /^(system-reminder|environment_context|user_instructions|user-prompt-submit-hook|task-notification|turn_aborted|(command|local-command|bash)-[a-z-]+)$/;
+
+/** A wrapper the agent is known to write, a lone tag, or any block that closes with
+ *  the tag it opened with. A prompt that merely starts with a tag ("<div class="x"> is not
+ *  centered, why?") is the user's own words and stays. */
 function isInjected(text: string): boolean {
-  const t = text.trimStart();
-  return t.startsWith("# AGENTS.md instructions") || /^<\/?[A-Za-z][\w-]*(\s[^>]*)?>/.test(t);
+  const t = text.trim();
+  if (t.startsWith("# AGENTS.md instructions")) return true;
+  if (/^<\/?[A-Za-z][\w-]*(\s[^>]*)?>$/.test(t)) return true; // a lone tag, as Codex wraps an image
+  const tag = /^<([A-Za-z][\w-]*)(\s[^>]*)?>/.exec(t)?.[1];
+  return !!tag && (INJECTED_TAG.test(tag) || t.endsWith(`</${tag}>`));
 }
 
 /** Claude Code stores a slash command as `<command-name>/review</command-name><command-args>…</command-args>`;

@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Named explicitly so every step runs with -e and pipefail: `setup | tee log` fails when setup does.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   ubuntu:
     runs-on: ubuntu-24.04
@@ -59,13 +64,14 @@ jobs:
         run: |
           sudo deploy/coding-sessions setup --skip-dns-check --no-updates --no-link --yes | tee rerun.log
           grep -q 'sudo coding-sessions setup-link' rerun.log
-          ! systemctl is-enabled --quiet coding-sessions-update@personal.timer
-          ! sudo deploy/coding-sessions setup --domain other.coding-sessions.invalid --skip-dns-check --yes
+          # `! cmd` is exempt from -e unless it is the last line, so each is an explicit check.
+          if systemctl is-enabled --quiet coding-sessions-update@personal.timer; then echo 'the agent update timer is still enabled'; exit 1; fi
+          if sudo deploy/coding-sessions setup --domain other.coding-sessions.invalid --skip-dns-check --yes; then echo 'a domain change was accepted'; exit 1; fi
       - name: Doctor reports the missing HTTPS for the fake domain
         run: |
-          set +e
-          sudo coding-sessions doctor | tee doctor.txt
-          grep -q 'service running' doctor.txt
+          sudo coding-sessions doctor | tee doctor.txt || true
+          # The passing line; a failing check prints "✗ service running — …".
+          grep -q '✓ service running' doctor.txt
       - name: Broken owners and modes are repaired by doctor --fix alone
         run: sudo deploy/tests/permission-repair
       - name: Setup re-runs cleanly after the repair
@@ -76,10 +82,10 @@ jobs:
       - name: Uninstall --purge stops everything and removes the account
         run: |
           sudo coding-sessions uninstall --purge --confirm personal
-          ! systemctl is-active --quiet coding-sessions@personal.service
-          ! id cs-personal
+          if systemctl is-active --quiet coding-sessions@personal.service; then echo 'the service is still active'; exit 1; fi
+          if id cs-personal; then echo 'the account is still there'; exit 1; fi
           test ! -e /var/lib/coding-sessions/personal
-          ! pgrep -u cs-personal
+          if pgrep -u cs-personal; then echo 'the account still has processes'; exit 1; fi
       - name: Logs on failure
         if: failure()
         run: |

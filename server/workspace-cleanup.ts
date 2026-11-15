@@ -19,3 +19,15 @@ export function agentStatePaths(workspace: string, home: string): string[] {
     join(home, ".commandcode", "projects", commandCodeProjectDirName(workspace)),
   ];
 }
+
+/**
+ * The agent state that belongs to `workspace` alone. Agents name a folder's state by
+ * flattening its path, so `my_app` and `my-app` share one directory: state another
+ * folder in `others` also maps to is left, or deleting one workspace wipes its
+ * neighbour's history.
+ */
+export function unsharedAgentStatePaths(workspace: string, others: Iterable<string>, home: string): string[] {
+  const shared = new Set<string>();
+  for (const other of others) if (other !== workspace) for (const path of agentStatePaths(other, home)) shared.add(path);
+  return agentStatePaths(workspace, home).filter((path) => !shared.has(path));
+}

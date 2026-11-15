@@ -117,8 +117,28 @@ export async function reapStrayBridges(): Promise<number> {
   return killed;
 }
 
-// At boot `terms` is empty, so every bridge found belongs to a previous run.
-reapStrayBridges().catch(() => {});
+/** Names of web-shell holders that no bridge in `known` serves. Pure, for tests. */
+export function orphanedShells(names: Iterable<string>, known: Set<string>): string[] {
+  return [...names].filter((name) => name.startsWith("webterm-") && !known.has(name));
+}
+
+/**
+ * End web shells whose bridge is gone. `terms` is the only record that a `webterm-<id>`
+ * holder exists, and nothing lists or attaches one by name, so after a restart its shell
+ * (and whatever was started in it) would otherwise run forever.
+ */
+export async function reapOrphanedShells(): Promise<number> {
+  const known = new Set([...terms.values()].filter((t) => t.ephemeral).map((t) => t.screen));
+  const sessions = await mux.listAll({ strict: false });
+  const orphans = new Set(orphanedShells(sessions.map((s) => s.name), known));
+  for (const s of sessions) if (orphans.has(s.name)) await mux.quit(s.name, s.backend).catch(() => {});
+  if (orphans.size) console.log(`terminal: ended ${orphans.size} web shell(s) left by a previous run`);
+  return orphans.size;
+}
+
+// At boot `terms` is empty, so every bridge and web shell found belongs to a previous run.
+// Not under `bun test`: importing this module must never end a developer's real shells.
+reapStrayBridges().catch(() => {}).then(() => { if (process.env.NODE_ENV !== "test") return reapOrphanedShells(); }).catch(() => {});
 
 /** Names of every live session under either holder (any prefix). */
 async function liveScreens(): Promise<Set<string>> {
@@ -270,8 +290,13 @@ export async function open(target: TermTarget): Promise<{ ok: true; id: string; 
   const term: Term = { id, socketPath, cleanupSocket: socket.cleanup, base, proc, screen: screenName, mux: backend, ephemeral, target, createdAt: Date.now(), clients: 0, lastActivity: Date.now() };
   terms.set(id, term);
 
-  // If ttyd itself dies, drop the map entry. The session persists.
-  proc.exited.finally(() => { terms.delete(id); socket.cleanup(); }).catch(() => {});
+  // If ttyd itself dies, drop the map entry. An attached session persists; a web shell
+  // has no other way back in, so it ends with its bridge instead of running on unseen.
+  proc.exited.finally(() => {
+    terms.delete(id);
+    socket.cleanup();
+    if (ephemeral) mux.quit(screenName, backend).catch(() => {});
+  }).catch(() => {});
 
   return { ok: true, id, url: `${base}/`, mux: backend };
 }

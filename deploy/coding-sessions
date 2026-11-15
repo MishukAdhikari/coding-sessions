@@ -138,6 +138,22 @@ fetch_source() {
 
 is_checkout() { [[ -n $1 && -f $1/deploy/install-ubuntu && -f $1/server/index.ts && $1 != /opt/coding-sessions* ]]; }
 
+# Never go backwards: the daily updater moves the app on without this CLI, so the
+# release the CLI belongs to can be older than what runs (and what has been writing the
+# database). When the running build already contains the fetched one, setup installs the
+# running build again. A version asked for with --version is taken as asked.
+keep_running_source() {
+  local running version git=(git -c safe.directory="$SRC" -C "$SRC")
+  [[ -n ${INSTANCE:-} ]] || return 0
+  running=$(cat "$(app_dir)/.source-commit" 2>/dev/null || true)
+  [[ $running =~ ^[0-9a-f]{40}$ && $running != "$SOURCE_COMMIT" ]] || return 0
+  "${git[@]}" merge-base --is-ancestor "$SOURCE_COMMIT" "$running" 2>/dev/null || return 0
+  "${git[@]}" -c advice.detachedHead=false checkout --quiet --force "$running" || return 0
+  version=$(cat "$(app_dir)/.source-version" 2>/dev/null || true)
+  warn "The app runs ${version:-a newer build} (newer than $SOURCE_REF); keeping it."
+  SOURCE_REF=${version:-$running} SOURCE_COMMIT=$running
+}
+
 # The source to install from: a checkout the CLI runs from, else the checkout a previous
 # setup used (unless a version is asked for), else the release this CLI belongs to.
 resolve_source() {
@@ -148,7 +164,9 @@ resolve_source() {
   else
     # Re-running a release install checks the same commit it was installed from.
     [[ -z ${EXPECT_COMMIT:-} && -z ${VERSION:-} && $(conf_get VERSION) = "$CLI_VERSION" ]] && EXPECT_COMMIT=$(conf_get COMMIT)
-    fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC; return
+    fetch_source "${VERSION:-${CLI_VERSION/dev/latest}}"; SOURCE=$SRC
+    [[ -n ${VERSION:-} ]] || keep_running_source
+    return
   fi
   SOURCE_REF=$(git -c safe.directory="$SOURCE" -C "$SOURCE" describe --tags --always 2>/dev/null || echo local)
 }
@@ -435,7 +453,10 @@ configure_caddy() {
 # Managed by coding-sessions setup; re-running setup rewrites this file.
 $DOMAIN {
 	tls $EMAIL
-	reverse_proxy 127.0.0.1:$PORT
+	reverse_proxy 127.0.0.1:$PORT {
+		# The app trusts X-Real-IP from this proxy; never pass on one the visitor sent.
+		header_up X-Real-IP {remote_host}
+	}
 }
 CADDY
   mv -f "$site.tmp" "$site"

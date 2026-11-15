@@ -113,7 +113,7 @@ export async function handleCliLoginRoute(req: globalThis.Request, deps: CliLogi
     }
     if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
     if (req.headers.get("origin") !== deps.origin) return json({ error: "Same-origin request required." }, 403);
-    const body = await req.json().catch(() => ({})) as { user_code?: unknown };
+    const body = await req.json().then((value: unknown) => value && typeof value === "object" ? value : {}).catch(() => ({})) as { user_code?: unknown };
     if (!deps.logins.answer(body.user_code, action === "approve")) {
       return json({ error: "This sign-in request is unknown, used or expired. Run the command again." }, 404);
     }
@@ -122,7 +122,7 @@ export async function handleCliLoginRoute(req: globalThis.Request, deps: CliLogi
 
   // The cs side: no credentials yet, so every call is rate-limited by address.
   if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
-  const body = await req.json().catch(() => ({})) as { label?: unknown; code?: unknown };
+  const body = await req.json().then((value: unknown) => value && typeof value === "object" ? value : {}).catch(() => ({})) as { label?: unknown; code?: unknown };
 
   if (action === "start") {
     if (deps.rateLimited(`cli-login-start:${ip}`, 10)) return json({ error: "Too many sign-in attempts. Try again in 15 minutes." }, 429);

@@ -180,15 +180,39 @@
   }
 
   // The matching closer for a delimiter run, or -1. Closers never follow whitespace.
+  // The end of the code span opening at `at` (a backtick), or -1 when the run never closes.
+  function codeSpanEnd(text, at) {
+    let n = 1;
+    while (text[at + n] === "`") n++;
+    const run = "`".repeat(n);
+    let close = text.indexOf(run, at + n);
+    while (close !== -1 && text[close + n] === "`") close = text.indexOf(run, close + n + 1);
+    return close === -1 ? -1 : close + n;
+  }
+
+  // The matching closer for a delimiter run, or -1. Closers never follow whitespace,
+  // and never sit inside a code span: `2*3` keeps its asterisk.
   function findCloser(text, from, delim) {
-    let at = text.indexOf(delim, from);
-    while (at !== -1) {
-      const before = text[at - 1];
-      const after = text[at + delim.length];
-      const intraword = delim[0] === "_" && after !== undefined && WORD.test(after);
-      const doubled = delim.length === 1 && (text[at + 1] === delim || text[at - 1] === delim);
-      if (at > from && before && !/\s/.test(before) && !intraword && !doubled) return at;
-      at = text.indexOf(delim, at + delim.length);
+    let at = from;
+    while (at < text.length) {
+      const ch = text[at];
+      if (ch === "\\" && at + 1 < text.length) { at += 2; continue; }
+      if (ch === "`") {
+        const end = codeSpanEnd(text, at);
+        if (end !== -1) { at = end; continue; }
+        while (text[at] === "`") at++;
+        continue;
+      }
+      if (text.startsWith(delim, at)) {
+        const before = text[at - 1];
+        const after = text[at + delim.length];
+        const intraword = delim[0] === "_" && after !== undefined && WORD.test(after);
+        const doubled = delim.length === 1 && (text[at + 1] === delim || text[at - 1] === delim);
+        if (at > from && before && !/\s/.test(before) && !intraword && !doubled) return at;
+        at += delim.length;
+        continue;
+      }
+      at++;
     }
     return -1;
   }

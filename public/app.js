@@ -1117,25 +1117,37 @@
   /* A pasted PR link is the fastest path to the right branch — resolve it. */
   const PR_RE = /^(?:https?:\/\/(?:www\.)?github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+|[^/\s]+\/[^/\s#]+#\d+)/;
 
+  let pullLookup = 0; // only the newest lookup may fill the form
   async function resolvePullRequest(text) {
+    const lookup = ++pullLookup;
+    // pickRepo rewrites the field, so the text only identifies this lookup until then.
+    let picked = false;
+    const stale = () => lookup !== pullLookup || openSheetEl?.id !== "sheet-new" || (!picked && repoQuery() !== text);
     setRepoNote("Looking up that pull request…");
     try {
       const pr = await api(`/api/repos/pull?url=${encodeURIComponent(text)}`);
+      if (stale()) return;
+      picked = true;
       await pickRepo(pr.repo, pr.branch);
+      if (stale()) return;
       setRepoNote(
         `PR #${pr.number}${pr.title ? ` — ${pr.title}` : ""}${pr.crossRepo ? " (from a fork)" : ""}`,
         pr.crossRepo ? "bad" : "good",
       );
     } catch (e) {
-      setRepoNote(e.message, "bad");
+      if (!stale()) setRepoNote(e.message, "bad");
     }
   }
 
+  let pullTimer = null;
   $("input-repo").addEventListener("input", () => {
     const text = repoQuery();
     if (chosenRepo && text !== chosenRepo) clearRepo();
     launchMode.update({ workspace: launchIsWorkspace() });
-    if (PR_RE.test(text)) { resolvePullRequest(text); return; }
+    clearTimeout(pullTimer);
+    pullLookup++; // whatever was in flight answered an older text
+    // Wait for typing to pause: "acme/app#1" is on the way to "acme/app#12".
+    if (PR_RE.test(text)) { pullTimer = setTimeout(() => resolvePullRequest(text), 350); return; }
     setRepoNote("");
     renderRepoResults();
   });
@@ -1462,7 +1474,10 @@
     if (s.workspace) {
       $("ws-label").textContent = "Also delete the workspace folder";
       // Smart default: pre-tick only when the workspace is clean and fully pushed
+      const forId = s.id;
       api(`/api/sessions/${encodeURIComponent(s.id)}/ws-state`).then((st) => {
+        // A slow answer must not tick the box on a sheet that now shows another session.
+        if (confirmSessionId !== forId || openSheetEl?.id !== "sheet-confirm") return;
         if (!st.workspace) { wsRow.hidden = true; return; }
         if (st.dirty || st.unpushed) {
           $("ws-label").innerHTML = 'Also delete the workspace folder <span class="ws-warn">— has ' +
@@ -1889,6 +1904,11 @@
     location.reload();
   });
 
+  /* The confirm sheet is shared: a session's own actions must not survive into a bulk prompt. */
+  function hideSessionActions() {
+    for (const id of ["btn-web-term", "btn-chat", "btn-restart-session"]) $(id).hidden = true;
+  }
+
   $("btn-clear-archive").addEventListener("click", () => {
     confirmSessionId = null;
     if (!archived.length) { closeSheet(); showToast("History is already empty"); return; }
@@ -1897,6 +1917,7 @@
     $("btn-copy-managed").hidden = true;
     $("copy-cmd-hint").hidden = true;
     $("btn-resume").hidden = true;
+    hideSessionActions();
     $("ws-row").hidden = true;
     $("chat-row").hidden = true;
     $("confirm-title").textContent = `Clear ${archived.length} ended session${archived.length === 1 ? "" : "s"}?`;
@@ -1918,6 +1939,7 @@
     $("btn-copy-managed").hidden = true;
     $("copy-cmd-hint").hidden = true;
     $("btn-resume").hidden = true;
+    hideSessionActions();
     $("ws-row").hidden = true;
     $("chat-row").hidden = true;
     $("confirm-title").textContent = `End all ${running} session${running === 1 ? "" : "s"}?`;

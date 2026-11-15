@@ -701,7 +701,9 @@
       $("input-browser-code").value = "";
       browserStep("starting", "Opening claude.ai…");
       try { await api("/api/browser-auth/start", { method: "POST" }); }
-      catch (error) { showToast(error.message); browserStep("error", `Failed: ${error.message}`); }
+      catch (error) { showToast(error.message); browserStep("error", `Failed: ${error.message}`); return; }
+      // An earlier success stopped the poll; without it the code form would never appear.
+      if (!browserPoll && !$("sheet-browser").hidden) browserPoll = setInterval(pollBrowser, 2000);
     }
     $("btn-browser-start").addEventListener("click", startBrowserSignIn);
     $("btn-browser-resend").addEventListener("click", startBrowserSignIn);

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseBridge } from "./terminal";
+import { orphanedShells, parseBridge } from "./terminal";
 
 // Which ps rows are ttyd bridges this app owns. Everything here is a real line
 // shape seen on the box — the screen daemon and the login wrapper repeat the
@@ -60,4 +60,8 @@ test("the zmx daemon itself is not a bridge", () => {
 
 test("private Unix-socket bridges remain recognizable for restart cleanup", () => {
   expect(parseBridge("1234 ttyd --writable -i /run/xs/terminals/t-abcdef/s.sock --base-path /term/1234 screen -x cs-demo")).toEqual({ pid: 1234, port: 0, screen: "cs-demo" });
+});
+
+test("only web shells with no bridge in this process are orphans", () => {
+  expect(orphanedShells(["cs-n-demo", "webterm-aaaa1111", "webterm-bbbb2222"], new Set(["webterm-bbbb2222"]))).toEqual(["webterm-aaaa1111"]);
 });

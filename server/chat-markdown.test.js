@@ -118,3 +118,15 @@ test("headings, lists, task lists and quotes build their elements", () => {
   expect(root.querySelector(".md-check.is-done").getAttribute("aria-label")).toBe("Done");
   expect(text(root.querySelector("blockquote"))).toBe("quoted");
 });
+
+test("emphasis never closes inside a code span", () => {
+  const { render } = load();
+  const math = render("Multiply x*y, e.g. `2*3` gives 6");
+  expect(text(math)).toBe("Multiply x*y, e.g. 2*3 gives 6");
+  expect(math.querySelectorAll("em")).toHaveLength(0);
+  expect(text(math.querySelectorAll("code")[0])).toBe("2*3");
+
+  const glob = render("**Pattern `src/**/*.ts`** matches all");
+  expect(text(glob.querySelectorAll("strong")[0])).toBe("Pattern src/**/*.ts");
+  expect(text(glob.querySelectorAll("code")[0])).toBe("src/**/*.ts");
+});

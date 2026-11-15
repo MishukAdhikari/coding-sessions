@@ -338,17 +338,24 @@ export function rsyncIgnoredExcludes(lsFilesZ: string): string {
   return lsFilesZ.split("\0").filter(Boolean).map((p) => rsyncLiteral(p) + "\n").join("");
 }
 
-/** The rsync command that mirrors the local work tree into a server Workspace. */
-export function rsyncWorkTreeArgs(excludeFile: string, dest: string): string[] {
+/**
+ * The rsync command that mirrors the local work tree into a server Workspace.
+ * `top` is the repo's top level: the upload always starts there, since from a
+ * subdirectory `--delete` would replace the workspace root with that folder alone.
+ * In a linked worktree `.git` is a file naming a path on this machine; sending it
+ * would replace the workspace's own `.git`, so it stays out (an excluded path is
+ * also safe from `--delete`).
+ */
+export function rsyncWorkTreeArgs(excludeFile: string, dest: string, top = ".", linkedWorktree = false): string[] {
   return [
     "rsync", "-az", "--delete",
     `--exclude-from=${excludeFile}`,
     "--filter=P /vendor",
     "--filter=P /node_modules",
     "--filter=P /.env",
-    "--exclude=/.git/worktrees",
+    linkedWorktree ? "--exclude=/.git" : "--exclude=/.git/worktrees",
     "-e", "ssh",
-    "./", dest,
+    top.replace(/\/+$/, "") + "/", dest,
   ];
 }
 

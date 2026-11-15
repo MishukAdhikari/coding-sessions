@@ -178,3 +178,10 @@ test("discovery documents point at this origin", async () => {
   expect(asMetadata.authorization_response_iss_parameter_supported).toBe(true);
   expect(await handleOAuthRoute(new Request(`${ORIGIN}/api/me`), deps(db))).toBeNull();
 });
+
+test("token endpoint: a JSON body of null is a client error, not a crash", async () => {
+  const res = await handleOAuthRoute(new Request(`${ORIGIN}/oauth/token`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "null",
+  }), deps(fresh()));
+  expect(res!.status).toBe(400);
+});

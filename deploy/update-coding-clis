@@ -28,19 +28,31 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 save_status running null || exit 1
 echo "CLI updates started: $(date -Is)"
+here=$(dirname "$(readlink -f "$0")")
+# An agent installed under Bun (no Node.js 22 on this server) has a launcher in
+# ~/.local/bin and its package in a private folder. npm must not touch it: it is
+# either absent, or would replace the launcher with a Node.js entry point that
+# cannot run. The installer refreshes it the way it was installed.
+update_npm_agent() { # provider package
+  if [[ -d $HOME/.local/share/coding-sessions/packages/$1 ]]; then
+    CS_BUN=${CS_BUN:-$here/../bin/bun} bash "$here/install-provider-clis" "$1"
+  else
+    npm install --global --prefix "$HOME/.local" "$2@latest"
+  fi
+}
 if [[ -x $HOME/.local/bin/codex ]]; then
-  npm install --global --prefix "$HOME/.local" @openai/codex@latest || failed=1
+  update_npm_agent codex @openai/codex || failed=1
   "$HOME/.local/bin/codex" --version || failed=1
 fi
 if [[ -x $HOME/.local/bin/command-code ]]; then
-  npm install --global --prefix "$HOME/.local" command-code@latest || failed=1
+  update_npm_agent command-code command-code || failed=1
   "$HOME/.local/bin/command-code" --no-auto-update --version || failed=1
 fi
 # Agent presets: updated only where the operator installed them.
 for agent in '@google/gemini-cli gemini' '@moonshot-ai/kimi-code kimi' '@qwen-code/qwen-code qwen' 'opencode-ai opencode'; do
   read -r package bin <<<"$agent"
   if [[ -x $HOME/.local/bin/$bin ]]; then
-    npm install --global --prefix "$HOME/.local" "$package@latest" || failed=1
+    update_npm_agent "$bin" "$package" || failed=1
     "$HOME/.local/bin/$bin" --version </dev/null || failed=1
   fi
 done
@@ -49,7 +61,6 @@ if [[ -x $HOME/.local/bin/claude ]]; then
   "$HOME/.local/bin/claude" --version || failed=1
 fi
 # ACP adapters (Chat mode) installed under the instance's Bun: refreshed where present.
-here=$(dirname "$(readlink -f "$0")")
 for adapter in claude-agent-acp:claude-acp codex-acp:codex-acp; do
   if [[ -x $HOME/.local/bin/${adapter%%:*} ]]; then
     CS_BUN=${CS_BUN:-$here/../bin/bun} bash "$here/install-provider-clis" "${adapter#*:}" || failed=1

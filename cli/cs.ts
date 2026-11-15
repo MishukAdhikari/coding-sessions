@@ -9,7 +9,7 @@
  */
 import { homedir, hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   rsyncIgnoredExcludes, rsyncWorkTreeArgs, claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
@@ -291,7 +291,9 @@ async function joinSession(cfg: Config, session: string): Promise<number> {
   console.log(paint("  (screen session) detach with Ctrl-a then d — it keeps running.", "2"));
   // -x = multi-display attach, never detaching other viewers. -tt forces the
   // remote PTY even though stdout is piped through the mouse filter.
-  return attachFiltered(["ssh", "-tt", cfg.ssh, "screen", "-x", session]);
+  // The service keeps its screen sockets in $HOME/run/screen (installer and Docker),
+  // not screen's default directory; a server without that folder keeps the default.
+  return attachFiltered(["ssh", "-tt", cfg.ssh, `[ -n "$SCREENDIR" ] || [ ! -d "$HOME/run/screen" ] || export SCREENDIR="$HOME/run/screen"; exec screen -x ${shq(session)}`]);
 }
 
 // Wait for a just-launched session to be listed by zmx, then join it.
@@ -382,13 +384,19 @@ async function cmdSsh(cfg: Config, nameArg: string | undefined): Promise<void> {
 // those inherited artifacts while `--delete` still prunes genuinely-removed files.
 function rsyncWorkTreeUp(cfg: Config, workspacePath: string): number {
   // git lists what it ignores and rsync skips exactly that (see rsyncIgnoredExcludes).
-  const ls = Bun.spawnSync(["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { stdout: "pipe", stderr: "inherit" });
+  // Always from the repo's top level: from a subdirectory, --delete would leave the
+  // workspace holding that folder alone, with no .git.
+  const top = capture(["git", "rev-parse", "--show-toplevel"]);
+  if (top.code !== 0 || !top.out) return top.code || 1;
+  const ls = Bun.spawnSync(["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], { cwd: top.out, stdout: "pipe", stderr: "inherit" });
   if (ls.exitCode !== 0) return ls.exitCode || 1;
+  // A linked worktree's .git is a file pointing at a path on this machine.
+  const linked = lstatSync(join(top.out, ".git"), { throwIfNoEntry: false })?.isFile() ?? false;
   const dir = mkdtempSync(join(tmpdir(), "cs-rsync-"));
   try {
     const file = join(dir, "exclude");
     writeFileSync(file, rsyncIgnoredExcludes(ls.stdout.toString()), { mode: 0o600 });
-    return run(rsyncWorkTreeArgs(file, `${cfg.ssh}:${workspacePath}/`));
+    return run(rsyncWorkTreeArgs(file, `${cfg.ssh}:${workspacePath}/`, top.out, linked));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

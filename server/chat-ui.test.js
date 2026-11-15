@@ -466,3 +466,18 @@ test("HTML entities in agent text show as characters, still as text", async () =
   expect(row).toContain("a & b <div> 'x'");
   expect(row).toContain("&amp; in code".replace(" in code", "")); // code keeps the literal entity
 });
+
+test("an open chat waits out a restart: a 404 after it loaded keeps polling, and the session coming back is shown", async () => {
+  const h = harness({ responses: [
+    { status: 200, body: { cursor: 1, state: "waiting", messages: [{ id: "0:0", role: "assistant", text: "before", at: null }] } },
+    { status: 404, body: { error: "No such session." } },
+    { status: 200, body: { cursor: 1, reset: true, state: "waiting", messages: [{ id: "1:0", role: "assistant", text: "after", at: null }] } },
+  ] });
+  await settle();
+  await h.tick();
+  expect(h.$("chat-gone").hidden).toBe(true);
+  expect(text(h.$("chat-status-text"))).toBe("Reconnecting…");
+  await h.tick();
+  expect(h.$("chat-gone").hidden).toBe(true);
+  expect(h.rows()).toHaveLength(1);
+});

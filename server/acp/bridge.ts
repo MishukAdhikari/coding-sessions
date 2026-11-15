@@ -112,7 +112,13 @@ async function main() {
     log.append("notice", { level: "error", text: message });
     setState({ state: "failed", error: message });
     say(message);
-    return; // stay up so the card can show why; ending the session removes it
+    // Stay up so the card can show why; ending the session removes it. Nothing else holds
+    // the event loop here, so without this the holder dies and the launch reads as vanished.
+    const keepAlive = setInterval(() => {}, 1 << 30);
+    for (const sig of ["SIGTERM", "SIGHUP", "SIGINT"] as const) {
+      process.on(sig, () => { clearInterval(keepAlive); log.close(); process.exit(0); });
+    }
+    return;
   }
 
   const stdin = agent.stdin as import("bun").FileSink;
@@ -181,7 +187,8 @@ async function main() {
     listener = Bun.listen<{ framer: ReturnType<typeof createLineFramer> }>({
       unix: socketPath,
       socket: {
-        open(socket) { socket.data = { framer: createLineFramer(MAX_COMMAND_BYTES) }; },
+        // An oversized line still gets its one answer; silence reads as a dead bridge.
+        open(socket) { socket.data = { framer: createLineFramer(MAX_COMMAND_BYTES, () => { socket.write(`${JSON.stringify({ ok: false, error: "That message is too long." })}\n`); }) }; },
         data(socket, chunk) {
           for (const line of socket.data.framer.push(chunk)) {
             let msg: any;

@@ -40,7 +40,7 @@ import {
 import type { Database } from "bun:sqlite";
 import * as mux from "./mux";
 import { onServerSettingChange, serverSettings } from "./server-settings-instance";
-import { agentStatePaths, isInsideWorkspace } from "./workspace-cleanup";
+import { isInsideWorkspace, unsharedAgentStatePaths } from "./workspace-cleanup";
 import { sessionActivity, type SessionActivity } from "./session-activity";
 import { acpCommand, defaultAcpResolveDeps } from "./acp/agents";
 import { acpHolderCommand, buildAcpLaunch } from "./acp/launch";
@@ -943,6 +943,13 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
   const sessions: SessionInfo[] = [];
   const claimedScreens = new Set<string>();
+  // zmx lists a busy daemon with no pid (see parseZmxList): alive, but nothing descends from it here.
+  const pidlessLaunchNames = new Set<string>();
+  for (const [holderPid, screenName] of screens) {
+    if (holderPid > 0) continue;
+    const row = db.query("SELECT name FROM launches WHERE screen = ?").get(screenName) as { name: string } | null;
+    if (row) pidlessLaunchNames.add(row.name);
+  }
 
   // Chat (ACP) sessions first: their holder runs the bridge, and the agent under it can look
   // like any provider's process (`cmd acp`, a preset binary), so no provider pass may adopt them.
@@ -1001,6 +1008,9 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
     const project = procCwd(proc.pid);
     const cliName = extractRemoteControlName(proc.args);
+    // Its holder is listed with no pid this poll, so the process can't be matched to it:
+    // the managed card below stands for it, not a second External Session.
+    if (!screenName && cliName && pidlessLaunchNames.has(cliName)) continue;
 
     if (screenName && claimedScreens.has(screenName)) continue;
     if (screenName) {
@@ -1260,6 +1270,9 @@ export async function listSessions(): Promise<SessionInfo[]> {
     // cs-* screen. Codex ownership always starts from a current launch row.
     if (!launch && findProviderProcess(procs, screenPid, "codex")) continue;
     const starting = !!launch && Date.now() - launch.created_at < STARTING_GRACE_MS;
+    // A holder listed without a pid is alive; its agent just can't be found this poll.
+    // Calling it "ended" would close live feeds and tell callers to resume a running session.
+    const pidless = !!launch && screenPid < 0 && !starting;
     const codexState = launch?.provider === "codex" && launch.launch_id
       ? db.query("SELECT session_id, model, turn_state, last_event, updated_at FROM codex_launch_state WHERE launch_id = ?").get(launch.launch_id) as
           { session_id: string | null; model: string | null; turn_state: string; last_event: string; updated_at: number } | null
@@ -1272,7 +1285,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       phase: launch?.phase ?? null,
       errorMessage: launch?.error_message ?? null,
       name: launch?.name ?? screenName.slice(SCREEN_PREFIX.length),
-      status: starting ? "starting" : "ended",
+      status: starting ? "starting" : pidless ? "running" : "ended",
       workspace: isWorkspacePath(launch?.project_path ?? null),
       project: launch?.project_path ?? null,
       projectLabel: projectLabelFor(launch?.project_path ?? null),
@@ -1283,7 +1296,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       busy: false,
       waiting: false,
       asking: false,
-      telemetryUnknown: false,
+      telemetryUnknown: pidless,
       claudeUrl: null,
       remoteControl: launch ? launch.remote_control === 1 : true,
       resumeId: codexState?.session_id ?? launch?.resume_id ?? null,
@@ -1964,7 +1977,12 @@ async function removeWorkspace(path: string | null, endingScreen: string | null 
     .find((row) => row.screen !== endingScreen && live.has(row.screen));
   if (user) return { ok: false, error: `“${user.name}” is still running in this folder — end it first.` };
   await stopProcessesIn(path);
-  await run(["rm", "-rf", path, `${path}.setup.log`, ...agentStatePaths(path, homedir())]);
+  // Before the folder goes: a neighbour that flattens to the same agent-state name keeps that state.
+  const neighbours = [
+    ...(db.query("SELECT DISTINCT project_path FROM launches WHERE project_path IS NOT NULL").all() as Array<{ project_path: string }>).map((row) => row.project_path),
+    ...(() => { try { return readdirSync(WORKSPACES_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(WORKSPACES_DIR, e.name)); } catch { return []; } })(),
+  ];
+  await run(["rm", "-rf", path, `${path}.setup.log`, ...unsharedAgentStatePaths(path, neighbours, homedir())]);
   return { ok: true };
 }
 

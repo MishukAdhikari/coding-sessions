@@ -58,6 +58,7 @@ function findBin(name: string): string | null {
 }
 
 export const ZMX_BIN = findBin("zmx");
+const SCREEN_BIN = Bun.which("screen");
 export const HERDR_BIN = findBin("herdr");
 /** null when herdr isn't installed: its sessions then list as none, like zmx's. */
 export const herdr = HERDR_BIN ? createHerdr(HERDR_BIN) : null;
@@ -70,7 +71,11 @@ export function newSessionBackend(zmxBin: string | null = ZMX_BIN, herdrBin: str
   return zmxBin ? "zmx" : "screen";
 }
 
-async function capture(cmd: string[], env?: Record<string, string>, cwd?: string): Promise<{ code: number; out: string; err: string }> {
+/** How long a listing may take. A hung `zmx list` would otherwise hang every poll. */
+const LIST_TIMEOUT_MS = 10_000;
+
+async function capture(cmd: string[], env?: Record<string, string>, cwd?: string, timeoutMs?: number): Promise<{ code: number; out: string; err: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const p = Bun.spawn(cmd, {
       cwd,
@@ -80,11 +85,28 @@ async function capture(cmd: string[], env?: Record<string, string>, cwd?: string
       // Explicit, so the ZMX_DIR pinned above reaches the child either way.
       env: childEnvironment(env),
     });
+    let timedOut = false;
+    if (timeoutMs) timer = setTimeout(() => { timedOut = true; try { p.kill("SIGKILL"); } catch {} }, timeoutMs);
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-    return { code: await p.exited, out, err };
+    const code = await p.exited;
+    return timedOut ? { code: 124, out: "", err: "timed out" } : { code, out, err };
   } catch (e) {
     return { code: 127, out: "", err: String((e as Error)?.message ?? e) };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/**
+ * Whether a listing command failed, as opposed to listing nothing. Pure, for tests.
+ * A non-zero exit with rows, or with the holder's own "nothing here" line (`screen -ls`
+ * exits 1 for that), is an answer; anything else non-zero (the binary missing mid-upgrade,
+ * EAGAIN, a crash, a timeout) says nothing about which sessions are alive.
+ */
+export function listingFailed(result: { code: number; out: string; err: string }, rows: number): boolean {
+  if (result.code === 0 || rows > 0) return false;
+  // "1 Socket in /run/screen/S-x." with only dead rows is an answer too.
+  return !/no sessions found|\bsockets? (found )?in /i.test(result.out + result.err);
 }
 
 /** `screen -ls` → sessions. Pure, for tests. */
@@ -115,18 +137,22 @@ export function parseZmxList(out: string): MuxSession[] {
 
 /**
  * Every live session under any backend. A backend that isn't installed lists nothing.
- * Throws only when herdr is up but has not answered since this process started, so a
- * busy server is never read as "every herdr session ended"; `strict: false` lists the
- * other backends' sessions instead.
+ * Throws when herdr is up but has not answered since this process started, or when an
+ * installed holder's listing failed, so a busy server or a failed `zmx list` is never
+ * read as "every session ended"; `strict: false` lists the other backends' sessions instead.
  */
 export async function listAll(opts: { strict?: boolean } = {}): Promise<MuxSession[]> {
   const strict = opts.strict ?? true;
   const [screen, zmx, herdrRows] = await Promise.all([
-    capture(["screen", "-ls"]),
-    ZMX_BIN ? capture([ZMX_BIN, "list"]) : Promise.resolve({ code: 0, out: "", err: "" }),
+    SCREEN_BIN ? capture([SCREEN_BIN, "-ls"], undefined, undefined, LIST_TIMEOUT_MS) : Promise.resolve({ code: 0, out: "", err: "" }),
+    ZMX_BIN ? capture([ZMX_BIN, "list"], undefined, undefined, LIST_TIMEOUT_MS) : Promise.resolve({ code: 0, out: "", err: "" }),
     herdr ? herdr.list().catch((e) => { if (strict) throw e; return []; }) : Promise.resolve([]),
   ]);
-  return [...parseZmxList(zmx.out), ...herdrRows, ...parseScreenLs(screen.out)];
+  const zmxRows = parseZmxList(zmx.out);
+  const screenRows = parseScreenLs(screen.out);
+  if (strict && listingFailed(zmx, zmxRows.length)) throw new Error(`zmx list failed (${zmx.code}): ${zmx.err.trim().slice(0, 200)}`);
+  if (strict && listingFailed(screen, screenRows.length)) throw new Error(`screen -ls failed (${screen.code}): ${screen.err.trim().slice(0, 200)}`);
+  return [...zmxRows, ...herdrRows, ...screenRows];
 }
 
 /**

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { attachArgv, newSessionBackend, parseScreenLs, parseZmxList, spawnArgv } from "./mux";
+import { attachArgv, listingFailed, newSessionBackend, parseScreenLs, parseZmxList, spawnArgv } from "./mux";
 
 test("zmx list rows parse to name + the pid of the command it runs", () => {
   // Captured from zmx 0.8.1 on the deploy host.
@@ -74,4 +74,18 @@ test("CS_MUX=screen forces the legacy holder for new sessions", () => {
   process.env.CS_MUX = "screen";
   try { expect(newSessionBackend()).toBe("screen"); }
   finally { if (prev === undefined) delete process.env.CS_MUX; else process.env.CS_MUX = prev; }
+});
+
+test("a failed listing is not an empty one", () => {
+  expect(listingFailed({ code: 0, out: "", err: "" }, 0)).toBe(false);
+  // screen exits 1 to say there is nothing; zmx says so in words.
+  expect(listingFailed({ code: 1, out: "No Sockets found in /run/screen/S-example.\n", err: "" }, 0)).toBe(false);
+  expect(listingFailed({ code: 1, out: "no sessions found in /home/example/.zmx\n", err: "" }, 0)).toBe(false);
+  expect(listingFailed({ code: 1, out: "There is a screen on:\n\t123.old\t(Dead ???)\n1 Socket in /run/screen/S-example.\n", err: "" }, 0)).toBe(false);
+  // Old screens exit 1 with rows.
+  expect(listingFailed({ code: 1, out: "", err: "" }, 2)).toBe(false);
+  // The binary gone mid-upgrade, a crash, a timeout: nothing is known.
+  expect(listingFailed({ code: 127, out: "", err: "ENOENT" }, 0)).toBe(true);
+  expect(listingFailed({ code: 1, out: "", err: "error: SystemResources" }, 0)).toBe(true);
+  expect(listingFailed({ code: 124, out: "", err: "timed out" }, 0)).toBe(true);
 });

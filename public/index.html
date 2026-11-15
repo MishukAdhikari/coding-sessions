@@ -33,7 +33,7 @@
 <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1320x2868-dark.png">
 <script src="/theme.js?v=2"></script>
 <script src="/native.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=51">
+<link rel="stylesheet" href="/app.css?v=52">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -93,12 +93,14 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <div class="host-row"><span class="host-k">RAM</span><span class="host-meter"><i id="host-mem-bar"></i></span><span class="host-v" id="host-mem">—</span></div>
       <div class="host-row"><span class="host-k">DISK</span><span class="host-meter"><i id="host-disk-bar"></i></span><span class="host-v" id="host-disk">—</span></div>
     </div>
-    <button id="btn-palette" class="icon-btn" type="button" aria-label="Search settings and actions" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K">
-      <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-    </button>
-    <button id="btn-menu" class="icon-btn" aria-label="Settings" data-command="Open settings">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="0.5"/><circle cx="12" cy="12" r="0.5"/><circle cx="12" cy="19" r="0.5"/></svg>
-    </button>
+    <div class="topbar-actions">
+      <button id="btn-menu" class="icon-btn" aria-label="Settings" data-command="Open settings">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="0.5"/><circle cx="12" cy="12" r="0.5"/><circle cx="12" cy="19" r="0.5"/></svg>
+      </button>
+      <button id="btn-palette" class="icon-btn" type="button" aria-label="Search settings and actions" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </button>
+    </div>
   </header>
 
   <nav id="tabs" class="tabs" aria-label="Filter sessions">
@@ -867,7 +869,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 </div>
 
 <script src="/command-palette.js?v=1"></script>
-<script src="/agent-auth.js?v=12"></script>
+<script src="/agent-auth.js?v=13"></script>
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=3"></script>
 <script src="/connection-status.js?v=5"></script>
@@ -875,6 +877,6 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/secrets.js?v=2"></script>
 <script src="/secret-request.js?v=1"></script>
 <script src="/launch-mode.js?v=1"></script>
-<script src="/app.js?v=64"></script>
+<script src="/app.js?v=65"></script>
 </body>
 </html>
