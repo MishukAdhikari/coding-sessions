@@ -7,6 +7,8 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-15
+
 ### Changed
 - The search button in the header sits under the settings button instead of beside it.
 
@@ -294,7 +296,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.1
 [0.15.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.0
 [0.14.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.14.0
 [0.13.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.13.0
