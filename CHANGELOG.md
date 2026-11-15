@@ -7,6 +7,13 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-15
+
+### Fixed
+- Codex sign-in from Settings and over MCP never showed its link and one-time code with
+  current Codex releases, and failed after 30 seconds: Codex colours both values even when
+  its output is a pipe, and the colour codes hid them. They are now read through the colour.
+
 ## [0.15.1] - 2026-11-15
 
 ### Changed
@@ -296,7 +303,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.2
 [0.15.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.1
 [0.15.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.0
 [0.14.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.14.0

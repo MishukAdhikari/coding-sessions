@@ -126,6 +126,8 @@ function findVerificationUrl(text: string): string | null {
   return null;
 }
 
+const stripAnsi = (text: string) => text.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "");
+
 function findUserCode(text: string): string | null {
   return text.match(/\b[A-Z0-9]{4,8}(?:-[A-Z0-9]{4,8}){1,2}\b/)?.[0] ?? null;
 }
@@ -191,8 +193,13 @@ export function createCodexAuthController(options: CodexAuthControllerOptions = 
     const remaining = MAX_OUTPUT_BYTES - attempt.outputBytes;
     attempt.output += decoder.decode(chunk.subarray(0, remaining), { stream: true });
     attempt.outputBytes += chunk.byteLength;
-    attempt.verificationUrl ??= findVerificationUrl(attempt.output);
-    attempt.userCode ??= findUserCode(attempt.output);
+    // Codex colours the link and the code even when its output is a pipe (NO_COLOR is ignored):
+    // "\x1b[94mABCD-12345\x1b[0m". Left in, the colour code glues itself to the link and hides the
+    // one-time code from the word boundary, and the sign-in never leaves "starting".
+    // Read again from the whole output each time, so a value cut at a chunk's edge is completed.
+    const text = stripAnsi(attempt.output);
+    attempt.verificationUrl = findVerificationUrl(text) ?? attempt.verificationUrl;
+    attempt.userCode = findUserCode(text) ?? attempt.userCode;
     if (attempt.verificationUrl && attempt.userCode && attempt.handshakeTimer !== null) {
       clearTimer(attempt.handshakeTimer);
       attempt.handshakeTimer = null;

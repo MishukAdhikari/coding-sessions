@@ -156,6 +156,26 @@ test("device login exposes only approved browser instructions", async () => {
   ]);
 });
 
+test("the link and the code are read through Codex's colour codes", async () => {
+  // What `codex login --device-auth` writes to a pipe (0.167): colour around both values.
+  const login = runningProcess([
+    "Welcome to Codex [v\x1b[90m0.167.0\x1b[0m]",
+    "1. Open this link in your browser and sign in to your account",
+    "   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m",
+    "",
+    "2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m",
+    "   \x1b[94mABCD-12345\x1b[0m",
+    "",
+  ].join("\n"));
+  const { runner } = queuedRunner([completedProcess(1, "", "Not logged in"), login.process]);
+  const auth = createCodexAuthController({ runner });
+
+  await auth.start();
+  const status = await eventuallyStatus(auth, "awaiting_user");
+  expect(status.verificationUrl).toBe("https://auth.openai.com/codex/device");
+  expect(status.userCode).toBe("ABCD-12345");
+});
+
 test("a completed device flow succeeds only after login status verifies it", async () => {
   const login = runningProcess("https://auth.openai.com/codex/device\nWXYZ-1234");
   const { calls, runner } = queuedRunner([
