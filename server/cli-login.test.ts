@@ -121,3 +121,10 @@ test("user codes and labels are normalised", () => {
   expect(cleanLabel("")).toBe("a computer");
   expect(cleanLabel("x".repeat(80))).toHaveLength(40);
 });
+
+test("a JSON body of null is an unknown request, not a crash", async () => {
+  const { call, cs } = setup();
+  expect((await cs("/api/cli-login/start", null))!.status).toBe(200);
+  expect((await cs("/api/cli-login/poll", null))!.status).toBe(410);
+  expect((await call("/api/cli-login/approve", { body: null }))!.status).toBe(404);
+});

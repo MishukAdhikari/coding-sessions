@@ -7,6 +7,49 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+### Changed
+- The search button in the header sits under the settings button instead of beside it.
+
+### Security
+- Passkey registration, listing and removal, the Claude sign-in routes and the claude.ai
+  browser routes need a browser session: a CLI token could register its own passkey and
+  become a full web session, and could read the sign-in terminal's output.
+- The shipped Caddy configs (setup and Docker Compose) always set `X-Real-IP` to the
+  visitor's address, so a client-sent header can no longer dodge sign-in rate limits or
+  lock the operator out. Existing installs pick this up when setup is run again.
+- The sign-in rate limiter forgets expired entries and no longer counts successful
+  sign-ins.
+
+### Fixed
+- `cs --server`, `cs handoff` and `cs term --sync` from a subdirectory replaced the server
+  workspace with that folder alone, `.git` included; from a linked worktree they replaced
+  the workspace's `.git` with a pointer to a local path. Uploads now start at the repo's
+  top level and leave the workspace's `.git` alone in a worktree.
+- Running `coding-sessions setup` again no longer moves the app back to the CLI's older
+  release after the daily updater moved it forward.
+- A failed or hung `zmx list` / `screen -ls` is no longer read as "no sessions", which
+  archived every live session; a busy zmx daemon no longer shows a running session as
+  ended.
+- Chat (ACP): prompts over a few KB were dropped and reported as an ended session; an
+  oversized prompt is refused with a clear message; the bridge stays up to show why an
+  agent could not start; an open chat waits out "Restart with new secrets"; a new
+  permission card no longer puts a button under the Space or Enter you were typing.
+- Web shells end with their bridge and are cleaned up after a restart instead of running
+  on unseen.
+- Deleting a workspace no longer removes the agent history of another workspace whose
+  name differs only by `_` and `-`.
+- The daily agent update works for agents installed under Bun.
+- `cs mirror` and `--attach` find screen sessions on installer and Docker servers.
+- Chat and `cs live` show prompts that start with a tag (`<div> is not centered, why?`).
+- The end-session sheet: a slow answer can no longer tick "Also delete the workspace
+  folder" for a different session, and "End all sessions" / "Clear ended history" no
+  longer show the last session's buttons.
+- Markdown emphasis no longer closes inside inline code (`2*3`); the terminal opened from
+  a chat links back for names with capitals; "Sign in again" in the claude.ai browser
+  sheet works; pull-request lookups no longer race while typing.
+- A JSON body of `null` or a malformed path returns 400 instead of 500; claude.ai chat
+  deletions that ran out of attempts can be retried.
+
 ## [0.15.0] - 2026-11-12
 
 ### Added

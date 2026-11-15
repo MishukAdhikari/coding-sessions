@@ -86,9 +86,25 @@ export function revokeCliToken(id: number): void {
 /* ---------- rate limiting (in-memory, single process) ---------- */
 
 const attempts = new Map<string, { count: number; resetAt: number }>();
+let nextAttemptSweep = 0;
+
+/** A check that succeeded doesn't count against the next ones. */
+export function clearRateLimit(key: string): void {
+  attempts.delete(key);
+}
+
+/** How many keys are held; for tests. */
+export function rateLimitSize(): number {
+  return attempts.size;
+}
 
 export function rateLimited(key: string, max = 5, windowMs = 15 * 60 * 1000): boolean {
   const now = Date.now();
+  // Forget finished windows, so an address seen once doesn't stay in memory until restart.
+  if (now >= nextAttemptSweep) {
+    nextAttemptSweep = now + 60_000;
+    for (const [k, v] of attempts) if (v.resetAt < now) attempts.delete(k);
+  }
   const slot = attempts.get(key);
   if (!slot || slot.resetAt < now) {
     attempts.set(key, { count: 1, resetAt: now + windowMs });

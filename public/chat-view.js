@@ -657,7 +657,11 @@
       permission.replaceChildren(...parts);
       permission.hidden = false;
       // Bring a new request to the keyboard user who was typing, without stealing from elsewhere.
-      if (fresh && doc.activeElement === input && firstButton?.focus) firstButton.focus();
+      // The card takes focus, not a button: the Space or Enter already on its way must not answer it.
+      if (fresh && doc.activeElement === input && permission.focus) {
+        permission.setAttribute("tabindex", "-1");
+        permission.focus();
+      }
       if (atBottom) main.scrollTop = main.scrollHeight;
     }
 

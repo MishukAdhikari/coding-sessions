@@ -290,3 +290,16 @@ test("a Claude Code slash command shows as typed; other injected context stays h
   const injected = JSON.stringify({ type: "user", message: { content: "<system-reminder>context</system-reminder>" } });
   expect(parseTranscriptLine("claude", injected, 0)).toEqual([]);
 });
+
+test("a prompt that starts with a tag is the user's own words, not injected context", () => {
+  for (const text of ['<div class="x"> is not centered, why?', "<Button> renders twice", "<system-prompt> is a tag I made up"]) {
+    const claude = JSON.stringify({ type: "user", message: { role: "user", content: text } });
+    expect(parseTranscriptLine("claude", claude, 0).map(m => m.text)).toEqual([text]);
+    const codex = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+    expect(parseTranscriptLine("codex", codex, 0).map(m => m.text)).toEqual([text]);
+  }
+  for (const text of ["<system-reminder>context, cut sh", "<local-command-stdout>ok</local-command-stdout>\ntrailing", "<teammate-message id=\"a\">hi</teammate-message>"]) {
+    const line = JSON.stringify({ type: "user", message: { role: "user", content: text } });
+    expect(parseTranscriptLine("claude", line, 0)).toEqual([]);
+  }
+});

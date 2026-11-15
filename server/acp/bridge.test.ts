@@ -185,6 +185,26 @@ describe("ACP bridge against the fake agent", () => {
     expect(readFileSync(h.paths.state, "utf8")).not.toContain(SECRET);
   });
 
+  test("a prompt larger than the socket buffer arrives whole; one over the command limit is refused, not dropped", async () => {
+    const h = start();
+    await until(h.paths, (s) => s.state === "idle");
+    const big = "x".repeat(40_000);
+    expect(await sendBridgeCommand(h.paths.socket, { op: "prompt", text: big })).toMatchObject({ ok: true });
+    await until(h.paths, (s) => s.state === "idle" && events(h.paths).some((e) => e.kind === "turn_end"));
+    expect((events(h.paths).find((e) => e.kind === "user") as any).text).toBe(big);
+    expect(await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "y".repeat(70_000) })).toEqual({ ok: false, error: "That message is too long." });
+  });
+
+  test("an agent that cannot be spawned leaves the bridge up in the failed state", async () => {
+    const h = start({ CS_ACP_ARGV: JSON.stringify(["/nonexistent/agent-bin"]) });
+    const failed = await until(h.paths, (s) => s.state === "failed");
+    expect(failed.error).toContain("/nonexistent/agent-bin");
+    await Bun.sleep(300);
+    expect(h.proc.exitCode).toBeNull();
+    h.proc.kill("SIGTERM");
+    expect(await h.proc.exited).toBe(0);
+  });
+
   test("a failed session/new leaves the bridge up in the failed state with the agent's error", async () => {
     const h = start({ FAKE_FAIL_NEW: "1" });
     const failed = await until(h.paths, (s) => s.state === "failed");

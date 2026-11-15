@@ -36,8 +36,8 @@ h1, h2 { text-wrap: balance; line-height: 1.1; }
 .host-row[data-level="hot"] .host-meter > i { background: var(--status-danger); }
 .host-row[data-level="hot"] .host-v { color: var(--status-danger); }
 .icon-btn { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-panel); }
-#btn-menu { margin-left: auto; }
-.host:not([hidden]) + #btn-menu { margin-left: 4px; }
+.topbar-actions { display: grid; gap: 8px; flex: none; margin-left: auto; }
+.host:not([hidden]) + .topbar-actions { margin-left: 4px; }
 .icon-btn:hover { background: var(--surface-muted); }
 .tabs { --tabs-gutter: 24px; position: sticky; top: env(safe-area-inset-top); z-index: 4; display: flex; gap: 24px; padding-inline: var(--tabs-gutter); background: linear-gradient(var(--border-default), var(--border-default)) bottom center / calc(100% - 2 * var(--tabs-gutter)) 1px no-repeat, var(--bar-bg); -webkit-backdrop-filter: var(--bar-blur); backdrop-filter: var(--bar-blur); }
 /* The status bar is see-through in the installed app: the list scrolls under a
@@ -287,7 +287,7 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 @media (max-width: 379px) {
   .topbar { flex-wrap: wrap; }
   .host { order: 3; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; font-size: 9px; }
-  .host:not([hidden]) + #btn-menu { margin-left: auto; }
+  .host:not([hidden]) + .topbar-actions { margin-left: auto; }
   .host-row { grid-template-columns: auto 1fr; gap: 4px 8px; }
   .host-meter { grid-column: 1 / -1; grid-row: 2; }
   .host-v { grid-column: 2; grid-row: 1; white-space: nowrap; }
@@ -513,8 +513,6 @@ img, svg { -webkit-user-drag: none; }
 @media (min-width: 760px) { .card-request { grid-column: 1 / 3; justify-self: start; margin-top: 12px; } }
 
 /* ---------- command palette (command-palette.js) ---------- */
-.topbar #btn-palette { margin-left: auto; }
-.topbar .host:not([hidden]) ~ #btn-palette { margin-left: 0; }
 .palette { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; align-items: flex-start; padding: calc(env(safe-area-inset-top) + 12vh) 16px 16px; background: var(--scrim); }
 .palette[hidden] { display: none; }
 .palette-box { width: min(640px, 100%); max-height: min(560px, 76dvh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-default); border-radius: var(--radius-panel); background: var(--surface-panel); box-shadow: var(--shadow-overlay); }

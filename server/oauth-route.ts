@@ -135,10 +135,15 @@ export async function handleOAuthRoute(req: Request, deps: OAuthRouteDeps): Prom
   if (path === "/oauth/token" && method === "POST") {
     if (deps.rateLimited(`otok:${deps.clientIp(req)}`, 60)) return noStoreJson({ error: "slow_down" }, 429);
     const type = req.headers.get("content-type") ?? "";
-    const form = type.includes("application/json")
-      ? new URLSearchParams(Object.entries(await req.json().catch(() => ({})) as Record<string, unknown>)
-          .map(([k, v]): [string, string] => [k, String(v)]))
-      : new URLSearchParams(await req.text());
+    let form: URLSearchParams;
+    if (type.includes("application/json")) {
+      // Valid JSON that isn't an object (null, a string) is as unusable as bad JSON.
+      const body: unknown = await req.json().catch(() => null);
+      form = new URLSearchParams(Object.entries(body !== null && typeof body === "object" ? body : {})
+        .map(([k, v]): [string, string] => [k, String(v)]));
+    } else {
+      form = new URLSearchParams(await req.text());
+    }
     const r = oauth.exchangeToken(deps.db, form);
     return r.ok ? noStoreJson(r.body) : noStoreJson({ error: r.error, error_description: r.description }, r.status);
   }

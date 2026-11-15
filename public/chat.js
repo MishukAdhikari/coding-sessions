@@ -24,12 +24,14 @@
   const ACTIVE_POLL_MS = 600;
   const HIDDEN_POLL_MS = 15000;
   const RETRY_MS = 5000;
+  const RESTART_GRACE_MS = 30000;
   const MAX_ITEMS = 1000;
 
   let cursor = null;
   let timer = null;
   let gone = false;
   let loaded = false;
+  let missingSince = null; // when a chat that was open first answered 404
 
   const native = window.NativeShell;
   // The page fits above the on-screen keyboard (--chat-vh), and while that keyboard
@@ -100,7 +102,16 @@
       return reconnecting();
     }
     if (res.status === 401) return end("You're signed out.", "Sign in again, then reopen the chat from the app.", "Sign in");
-    if (res.status === 404) return end();
+    if (res.status === 404) {
+      // "Restart with new secrets" ends the session and brings it back under the same id a few
+      // seconds later: an open chat waits that out before it says the session ended.
+      if (!loaded) return end();
+      missingSince ??= Date.now();
+      if (Date.now() - missingSince > RESTART_GRACE_MS) return end();
+      view.setHeader({ status: "Reconnecting…", tone: "starting" });
+      return schedule(POLL_MS);
+    }
+    missingSince = null;
     if (res.status === 422) {
       const body = await res.json().catch(() => ({}));
       return end("No chat for this session.", body.error || "Open its web terminal from the app instead.");
@@ -479,7 +490,7 @@
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
-      const url = `/term.html?id=${encodeURIComponent(body.id)}&name=${encodeURIComponent(name)}&mux=${encodeURIComponent(body.mux ?? "screen")}&chat=1`;
+      const url = `/term.html?id=${encodeURIComponent(body.id)}&name=${encodeURIComponent(id.slice(5))}&mux=${encodeURIComponent(body.mux ?? "screen")}&chat=1`;
       await screen.go(url);
     } catch (e) {
       screen.cancel();

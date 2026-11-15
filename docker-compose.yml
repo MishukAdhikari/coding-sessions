@@ -24,7 +24,9 @@ services:
     image: caddy:2
     profiles: [https]
     restart: unless-stopped
-    command: caddy reverse-proxy --from ${CS_HOSTNAME} --to app:9121
+    # The app trusts X-Real-IP from this proxy, so it is always set to the visitor's address.
+    command: ["caddy", "reverse-proxy", "--from", "${CS_HOSTNAME}", "--to", "app:9121",
+      "--header-up", "X-Real-IP: {http.request.remote.host}"]
     ports:
       - "80:80"
       - "443:443"

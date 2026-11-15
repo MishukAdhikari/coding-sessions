@@ -6,7 +6,7 @@
  * pending request's options, so an MCP driver in the "asking" state can answer it.
  */
 import type { Database } from "bun:sqlite";
-import { sendBridgeCommand, type BridgeAnswer, type BridgeCommand } from "./client";
+import { MAX_PROMPT_JSON_BYTES, sendBridgeCommand, type BridgeAnswer, type BridgeCommand } from "./client";
 import { readEventWindow, readState, type AcpEvent } from "./event-log";
 import { findAcpSession } from "./route";
 
@@ -70,6 +70,9 @@ export function acpAwareIo(io: SessionIo, deps: { database: Database; dataDir: s
         return done(await send(found.paths.socket, { op: "permission", requestId: pending.requestId, optionId: option.optionId }));
       }
       if (!text.trim()) return { ok: false, error: "Chat sessions take a message, not an empty Enter." };
+      if (Buffer.byteLength(JSON.stringify(text)) > MAX_PROMPT_JSON_BYTES) {
+        return { ok: false, error: "That message is too long for a Chat session (about 60 KB at most). Save long content to a file in the session's folder and point the agent at it." };
+      }
       return done(await send(found.paths.socket, { op: "prompt", text }));
     },
 

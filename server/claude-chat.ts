@@ -69,7 +69,7 @@ export function queueChatDeletion(claudeUrl: string | null): boolean {
   if (!sid) return false;
   db.query(
     "INSERT INTO chat_deletions (sid, created_at) VALUES (?, ?) " +
-    "ON CONFLICT(sid) DO UPDATE SET status = 'pending' WHERE chat_deletions.status = 'failed'",
+    "ON CONFLICT(sid) DO UPDATE SET status = 'pending', attempts = 0 WHERE chat_deletions.status = 'failed'",
   ).run(sid, Date.now());
   setTimeout(() => { processQueue(); }, 500); // fire soon, off the request path
   return true;
@@ -80,6 +80,9 @@ let processing = false;
 export async function processQueue(): Promise<void> {
   // Two Chromiums on one profile corrupt it; the 5-minute sweep picks the queue up after sign-in.
   if (processing || loginRunning()) return;
+  // Out of attempts with no verdict from the script: failed, so "retry" can pick it
+  // up again, rather than pending forever with nothing left to run it.
+  db.query("UPDATE chat_deletions SET status = 'failed', last_error = 'no result from the browser' WHERE status = 'pending' AND attempts >= 3").run();
   const rows = db.query(
     "SELECT sid FROM chat_deletions WHERE status = 'pending' AND attempts < 3 LIMIT 20",
   ).all() as { sid: string }[];

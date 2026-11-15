@@ -13,6 +13,9 @@ export type BridgeCommand =
 
 export type BridgeAnswer = { ok: true; [key: string]: unknown } | { ok: false; error: string };
 
+/** The longest prompt, as JSON text, that fits the bridge's 64 KiB command line with room for its envelope. */
+export const MAX_PROMPT_JSON_BYTES = 60 * 1024;
+
 const UNREACHABLE = "The chat bridge isn't answering. The session may have ended.";
 
 export async function sendBridgeCommand(socketPath: string, command: BridgeCommand, timeoutMs = 5000): Promise<BridgeAnswer> {
@@ -27,10 +30,14 @@ export async function sendBridgeCommand(socketPath: string, command: BridgeComma
     };
     const timer = setTimeout(() => finish({ ok: false, error: UNREACHABLE }), timeoutMs);
     const framer = createLineFramer(1024 * 1024);
+    let rest: Buffer = Buffer.from(`${JSON.stringify({ id: 1, ...command })}\n`);
     Bun.connect({
       unix: socketPath,
       socket: {
-        open(socket) { socket.write(`${JSON.stringify({ id: 1, ...command })}\n`); },
+        // A Unix socket takes only what fits its buffer (8 KiB on macOS): send the rest on drain,
+        // or a long prompt arrives cut short and the bridge never answers.
+        open(socket) { rest = rest.subarray(Math.max(0, socket.write(rest))); },
+        drain(socket) { if (rest.length) rest = rest.subarray(Math.max(0, socket.write(rest))); },
         data(socket, chunk) {
           for (const line of framer.push(chunk)) {
             try {

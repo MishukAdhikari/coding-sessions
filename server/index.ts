@@ -212,6 +212,11 @@ async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
   return body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
 }
 
+/** A path segment decoded; null when its percent-encoding is malformed. */
+function decodePathPart(part: string): string | null {
+  try { return decodeURIComponent(part); } catch { return null; }
+}
+
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...headers } });
 
@@ -511,6 +516,7 @@ const server = Bun.serve<TermSocketData>({
       if (typeof body.password !== "string" || !(await auth.verifyPassword(body.password))) {
         return json({ error: "Wrong password." }, 401);
       }
+      auth.clearRateLimit(`pw:${ip}`);
       const token = auth.createAuthSession(req.headers.get("user-agent"));
       return json({ ok: true }, 200, { "set-cookie": authCookie(token, 30 * 24 * 3600) });
     }
@@ -518,7 +524,7 @@ const server = Bun.serve<TermSocketData>({
     // One-time link from `coding-sessions setup-link`: signs this browser in once.
     if (path === "/api/auth/setup" && method === "POST") {
       if (auth.rateLimited(`setup:${clientIp(req, srv)}`)) return json({ error: "Too many attempts. Try again in 15 minutes." }, 429);
-      const body = await req.json().catch(() => ({})) as { token?: unknown };
+      const body = await readJsonObject(req);
       if (!consumeSetupToken({ get: getMeta, set: setMeta, delete: deleteMeta }, body.token)) {
         return json({ error: "This sign-in link is invalid, already used or expired. Run `sudo coding-sessions setup-link` on the server for a new one." }, 401);
       }
@@ -532,10 +538,12 @@ const server = Bun.serve<TermSocketData>({
     }
 
     if (path === "/api/auth/login/verify" && method === "POST") {
-      if (auth.rateLimited(`lv:${clientIp(req, srv)}`, 15)) return json({ error: "Too many attempts." }, 429);
+      const ip = clientIp(req, srv);
+      if (auth.rateLimited(`lv:${ip}`, 15)) return json({ error: "Too many attempts." }, 429);
       const body = await readJsonObject(req);
       const result = await auth.verifyAuthentication(String(body.challengeId ?? ""), body.response);
       if (!result.verified) return json({ error: result.error }, 401);
+      auth.clearRateLimit(`lv:${ip}`);
       const token = auth.createAuthSession(req.headers.get("user-agent"));
       return json({ ok: true }, 200, { "set-cookie": authCookie(token, 30 * 24 * 3600) });
     }
@@ -673,11 +681,17 @@ const server = Bun.serve<TermSocketData>({
       return json({ ok: true }, 200, { "set-cookie": authCookie("", 0) });
     }
 
+    /* ----- Passkeys (managed from a web session only) -----
+       A passkey is a way to sign in and to confirm protected changes, so a bearer token
+       must not be able to add one for itself or remove the operator's. */
+
     if (path === "/api/auth/register/options" && method === "GET") {
+      if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
       return json(await auth.registrationOptions());
     }
 
     if (path === "/api/auth/register/verify" && method === "POST") {
+      if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
       const body = await readJsonObject(req);
       const label = typeof body.label === "string" ? body.label.slice(0, 60) : null;
       const result = await auth.verifyRegistration(String(body.challengeId ?? ""), body.response, label);
@@ -685,10 +699,12 @@ const server = Bun.serve<TermSocketData>({
     }
 
     if (path === "/api/passkeys" && method === "GET") {
+      if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
       return json({ passkeys: auth.credentialSummaries() });
     }
 
     if (path.startsWith("/api/passkeys/") && method === "DELETE") {
+      if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
       auth.deleteCredential(Number(path.split("/").pop()));
       return json({ ok: true });
     }
@@ -716,7 +732,7 @@ const server = Bun.serve<TermSocketData>({
 
     if (path === "/api/agent-installs" && method === "POST") {
       if (!isAuthed(req)) return json({ error: "Unauthorized" }, 401);
-      const body = await req.json().catch(() => ({})) as { agents?: unknown };
+      const body = await readJsonObject(req);
       const result = agentInstaller.start(body.agents);
       return result.ok ? json({ job: result.job }, 202) : json({ error: result.error }, result.status);
     }
@@ -788,7 +804,9 @@ const server = Bun.serve<TermSocketData>({
 
     if (path.startsWith("/api/mcp-connections/") && method === "DELETE") {
       if (!hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) return json({ error: "Web session required." }, 403);
-      oauth.revokeClient(db, decodeURIComponent(path.split("/").pop() ?? ""));
+      const clientId = decodePathPart(path.split("/").pop() ?? "");
+      if (clientId === null) return json({ error: "Malformed path." }, 400);
+      oauth.revokeClient(db, clientId);
       return json({ ok: true });
     }
 
@@ -808,7 +826,9 @@ const server = Bun.serve<TermSocketData>({
     }
 
     if (path.startsWith("/api/terminals/") && method === "DELETE") {
-      await terminal.close(decodeURIComponent(path.split("/").pop() ?? ""), url.searchParams.get("quit") === "1");
+      const terminalId = decodePathPart(path.split("/").pop() ?? "");
+      if (terminalId === null) return json({ error: "Malformed path." }, 400);
+      await terminal.close(terminalId, url.searchParams.get("quit") === "1");
       return json({ ok: true });
     }
 
@@ -877,6 +897,13 @@ const server = Bun.serve<TermSocketData>({
       return result.ok ? json(result) : json({ error: result.error }, 422);
     }
 
+    // Agent sign-in drives a machine-wide login and shows its screen (which can hold
+    // credentials), so like the Codex and GitHub sign-in routes it is never for a bearer token.
+    if ((path.startsWith("/api/browser-auth/") || path.startsWith("/api/claude-auth/"))
+      && !hasBrowserSession(req, COOKIE_NAME, auth.checkAuthSession)) {
+      return json({ error: "Web session required." }, 403);
+    }
+
     if (path === "/api/browser-auth/start" && method === "POST") {
       const started = await claudeChat.startBrowserAuth();
       return started.ok ? json(started) : json({ error: started.error }, 422);
@@ -933,19 +960,22 @@ const server = Bun.serve<TermSocketData>({
     }
 
     if (path.startsWith("/api/sessions/") && path.endsWith("/ws-state") && method === "GET") {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/ws-state".length));
+      const id = decodePathPart(path.slice("/api/sessions/".length, -"/ws-state".length));
+      if (id === null) return json({ error: "Malformed path." }, 400);
       return json(await workspaceState(id));
     }
 
     // Restart with new secrets: end and resume the same conversation (server/session-restart.ts).
     if (path.startsWith("/api/sessions/") && path.endsWith("/restart") && method === "POST") {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length, -"/restart".length));
+      const id = decodePathPart(path.slice("/api/sessions/".length, -"/restart".length));
+      if (id === null) return json({ error: "Malformed path." }, 400);
       const result = await restart(id);
       return result.ok ? json(result) : json(result, result.ended ? 500 : 422);
     }
 
     if (path.startsWith("/api/sessions/") && method === "DELETE") {
-      const id = decodeURIComponent(path.slice("/api/sessions/".length));
+      const id = decodePathPart(path.slice("/api/sessions/".length));
+      if (id === null) return json({ error: "Malformed path." }, 400);
       const force = url.searchParams.get("force") === "1";
       const deleteWs = url.searchParams.get("ws") === "1";
       const deleteChat = url.searchParams.get("chat") === "1";

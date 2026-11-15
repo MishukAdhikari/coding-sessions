@@ -246,6 +246,14 @@ describe("MCP I/O for Chat sessions", () => {
     expect(sent).toEqual([{ op: "prompt", text: "next task" }]);
   });
 
+  test("a prompt too long for the bridge's command line is refused here, with a reason", async () => {
+    const { wrapped, sent } = io("idle", []);
+    const result = await wrapped.sendText("m:cs-chat", "x".repeat(70_000));
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toContain("too long");
+    expect(sent).toEqual([]);
+  });
+
   test("read_session appends the pending request; press_keys is refused", async () => {
     const { wrapped } = io("waiting");
     const screen = await wrapped.readScreen("m:cs-chat", 20);
