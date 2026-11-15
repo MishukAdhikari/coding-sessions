@@ -71,11 +71,14 @@ for provider in "$@"; do
   case "$provider" in
     codex|command-code|gemini|kimi|qwen|opencode)
       read -r package bin minimum <<<"$(npm_agent "$provider")"
-      if node_ok "$minimum"; then
-        npm install --global --prefix "$HOME/.local" "$package@latest"
-      else
+      if ! node_ok "$minimum"; then
         # Ubuntu's own Node.js is too old for these agents; Bun runs them instead.
         echo "Node.js $minimum or newer was not found; installing $provider under Bun."
+        bun_package "$package" "$bin"
+      elif ! npm install --global --prefix "$HOME/.local" "$package@latest"; then
+        # A server's npm can be broken while its Node.js is fine (a half-finished npm
+        # self-update is enough). The agent must still install: Bun needs neither.
+        echo "npm could not install $provider; installing it under Bun instead."
         bun_package "$package" "$bin"
       fi
       "$HOME/.local/bin/$bin" --version </dev/null

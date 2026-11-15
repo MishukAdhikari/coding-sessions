@@ -209,6 +209,35 @@ class InstallerContractTests(unittest.TestCase):
             self.assertEqual(run(new, new), ["v0.14.0", new, new])
             self.assertEqual(run("0" * 40, old), ["v0.14.0", old, old])  # unknown commit: as before
 
+    def test_agent_install_falls_back_to_bun_when_npm_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            tools = Path(directory) / "tools"
+            home.mkdir()
+            tools.mkdir()
+            calls = Path(directory) / "calls"
+            for path, body in {
+                tools / "node": "#!/bin/sh\nexit 0\n",
+                tools / "npm": '#!/bin/sh\necho "npm $*" >> "$INSTALL_TEST_CALLS"\necho "npm error Class extends value undefined" >&2\nexit 1\n',
+                tools / "bun": '#!/bin/sh\ncase "$1" in\n  add) echo "bun $*" >> "$INSTALL_TEST_CALLS";;\n  -e) echo "$PWD/entry.js";;\n  *) echo 9.9.9;;\nesac\n',
+            }.items():
+                path.write_text(body)
+                path.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(ROOT / "deploy/install-provider-clis"), "gemini"],
+                env={"HOME": str(home), "PATH": f"{tools}:/usr/bin:/bin", "CS_BUN": str(tools / "bun"), "INSTALL_TEST_CALLS": str(calls)},
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("installing it under Bun instead", result.stdout)
+            self.assertEqual(calls.read_text().splitlines(), [
+                f"npm install --global --prefix {home}/.local @google/gemini-cli@latest",
+                "bun add --backend=copyfile @google/gemini-cli@latest",
+            ])
+            launcher = home / ".local/bin/gemini"
+            self.assertTrue(launcher.is_file() and not launcher.is_symlink())
+            self.assertIn("9.9.9", result.stdout)
+
     def test_updater_refreshes_a_bun_installed_agent_with_the_installer_not_npm(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory) / "home"

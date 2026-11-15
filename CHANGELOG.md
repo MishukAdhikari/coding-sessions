@@ -7,6 +7,13 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-11-15
+
+### Fixed
+- Installing an npm agent (Codex, Command Code, Gemini CLI, Kimi Code, Qwen Code,
+  opencode) no longer fails setup or an upgrade when the server's npm is broken while its
+  Node.js is fine: the agent is installed under the app's Bun instead.
+
 ## [0.15.2] - 2026-11-15
 
 ### Fixed
@@ -303,7 +310,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.2...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.3...HEAD
+[0.15.3]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.3
 [0.15.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.2
 [0.15.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.1
 [0.15.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.0
