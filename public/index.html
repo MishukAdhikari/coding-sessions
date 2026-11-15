@@ -33,7 +33,7 @@
 <link rel="apple-touch-startup-image" media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait) and (prefers-color-scheme: dark)" href="/icons/startup-1320x2868-dark.png">
 <script src="/theme.js?v=2"></script>
 <script src="/native.js?v=1"></script>
-<link rel="stylesheet" href="/app.css?v=52">
+<link rel="stylesheet" href="/app.css?v=53">
 <script src="/vendor/webauthn.js"></script>
 </head>
 <body>
@@ -252,6 +252,11 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <label id="chat-row" class="ws-row" hidden>
     <input type="checkbox" id="chk-delete-chat">
     <span>Also delete its chat from Claude</span>
+  </label>
+  <label id="budget-row" class="budget-row" hidden>
+    <span>Token budget</span>
+    <input id="input-budget" type="text" inputmode="decimal" placeholder="None" autocomplete="off" spellcheck="false" aria-describedby="budget-note">
+    <span id="budget-note" class="budget-note" role="status"></span>
   </label>
   <button id="btn-resume" class="btn btn-primary btn-big" hidden>Resume session</button>
   <a id="btn-open-claude" class="btn btn-ghost btn-big" target="_blank" rel="noopener" data-close hidden>Open old chat in Claude</a>
@@ -877,6 +882,6 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/secrets.js?v=2"></script>
 <script src="/secret-request.js?v=1"></script>
 <script src="/launch-mode.js?v=1"></script>
-<script src="/app.js?v=65"></script>
+<script src="/app.js?v=66"></script>
 </body>
 </html>

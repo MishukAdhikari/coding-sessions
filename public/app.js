@@ -549,6 +549,7 @@
           <span class="card-status">${statusLine(s)}</span>
           ${requestLineHtml(requests)}
           ${prLinksHtml(s.prs)}
+          ${usageLineHtml(s)}
         </span>
         <span class="card-side">
           <span class="card-time">${humanDuration(s.uptimeSec)}</span>
@@ -639,6 +640,26 @@
     draft: "M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z",
   };
   const prIcon = (state) => `<svg class="pr-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="${PR_ICON_PATHS[state] || PR_ICON_PATHS.open}"/></svg>`;
+  /* Tokens a session has used, and its budget when one is set: one quiet line, no colour. */
+  const formatTokens = (n) => {
+    if (!Number.isFinite(n) || n < 0) return "—";
+    const short = (value, unit) => `${value >= 100 ? Math.round(value) : value >= 10 ? Math.round(value * 10) / 10 : Math.round(value * 100) / 100}${unit}`;
+    if (n < 1000) return String(Math.round(n));
+    if (n < 999_500) return short(n / 1e3, "k");
+    if (n < 999_500_000) return short(n / 1e6, "M");
+    return short(n / 1e9, "B");
+  };
+  const usageLineHtml = (s) => {
+    const usage = s.usage && Number.isFinite(s.usage.tokens) ? s.usage : null;
+    const budget = Number.isFinite(s.budget) && s.budget > 0 ? s.budget : null;
+    if (!usage && !budget) return "";
+    const detail = usage ? `${formatTokens(usage.input)} in · ${formatTokens(usage.output)} out · ${formatTokens(usage.cached)} from cache` : "";
+    const text = budget
+      ? `${usage ? formatTokens(usage.tokens) : "—"} of ${formatTokens(budget)} tokens${usage ? ` · ${Math.round((usage.tokens / budget) * 100)}%` : ""}`
+      : `${formatTokens(usage.tokens)} tokens`;
+    return `<span class="card-usage"${detail ? ` title="${escapeHtml(detail)}"` : ""}>${escapeHtml(text)}</span>`;
+  };
+
   const prLinksHtml = (prs) => {
     const valid = (Array.isArray(prs) ? prs : []).filter(pr => pr && PR_URL_RE.test(pr.url) && Number.isInteger(pr.number));
     if (!valid.length) return "";
@@ -1459,6 +1480,10 @@
 
     confirmSessionId = s.id;
     syncSessionActions(s);
+    const budgetRow = $("budget-row");
+    budgetRow.hidden = s.kind !== "managed" || s.status === "ended";
+    $("input-budget").value = Number.isFinite(s.budget) && s.budget > 0 ? formatTokens(s.budget) : "";
+    $("budget-note").textContent = "";
 
     // A managed session reads its secrets when it starts: restarting it picks up new ones.
     const restart = $("btn-restart-session");
@@ -1906,8 +1931,32 @@
 
   /* The confirm sheet is shared: a session's own actions must not survive into a bulk prompt. */
   function hideSessionActions() {
-    for (const id of ["btn-web-term", "btn-chat", "btn-restart-session"]) $(id).hidden = true;
+    for (const id of ["btn-web-term", "btn-chat", "btn-restart-session", "budget-row"]) $(id).hidden = true;
   }
+
+  /* A budget is saved when the field is left or Enter is pressed; empty clears it. */
+  async function saveBudget() {
+    const forId = confirmSessionId;
+    const input = $("input-budget");
+    const note = $("budget-note");
+    if (!forId) return;
+    const current = sessions.find((item) => item.id === forId);
+    const shown = current && Number.isFinite(current.budget) && current.budget > 0 ? formatTokens(current.budget) : "";
+    if (input.value.trim() === shown) return;
+    try {
+      const { budget } = await api(`/api/sessions/${encodeURIComponent(forId)}/budget`, { method: "PUT", body: JSON.stringify({ tokens: input.value.trim() }) });
+      if (confirmSessionId !== forId) return;
+      input.value = budget ? formatTokens(budget) : "";
+      note.textContent = budget ? "Saved" : "Cleared";
+      refresh(true);
+    } catch (error) {
+      if (confirmSessionId === forId) note.textContent = error.message;
+    }
+  }
+  $("input-budget").addEventListener("change", saveBudget);
+  $("input-budget").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  });
 
   $("btn-clear-archive").addEventListener("click", () => {
     confirmSessionId = null;

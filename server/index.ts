@@ -49,6 +49,7 @@ import packageJson from "../package.json";
 
 const APP_VERSION: string = packageJson.version;
 import { createPrLinkTracker, type PrLink } from "./pr-links";
+import { createBudgets, createUsageReader, type SessionUsage } from "./session-usage";
 import { createPrStatusCache, type PrStatus } from "./pr-status";
 import { handleTranscriptRoute } from "./transcript-route";
 import { cliUpdates } from "./cli-updates";
@@ -144,20 +145,32 @@ const setupDeps: McpDeps["setup"] = {
 const COOKIE_NAME = "xs_auth";
 const transcriptRoots = defaultTranscriptRoots();
 const prLinks = createPrLinkTracker();
+const usageReader = createUsageReader();
 const prStatus = createPrStatusCache();
 
-/** Each managed Claude Code or Codex session's PR links, read from its own transcript. */
-function withPrLinks<T extends { id: string; kind?: string; provider?: string }>(sessions: T[]): Array<T & { prs: Array<PrLink & PrStatus> }> {
+/**
+ * Each managed Claude Code or Codex session's PR links and token usage, read from its own
+ * transcript, and the budget set for it (any managed session can carry one).
+ */
+function withPrLinks<T extends { id: string; kind?: string; provider?: string }>(sessions: T[]): Array<T & { prs: Array<PrLink & PrStatus>; usage: SessionUsage | null; budget: number | null }> {
   const paths = new Set<string>();
+  const budgeted = budgets.all();
   const out = sessions.map(session => {
-    if (session.kind !== "managed" || (session.provider !== "claude" && session.provider !== "codex")) return { ...session, prs: [] };
+    const budget = session.kind === "managed" ? budgeted.get(session.id.slice(2)) ?? null : null;
+    if (session.kind !== "managed" || (session.provider !== "claude" && session.provider !== "codex")) return { ...session, prs: [], usage: null, budget };
     const resolved = resolveTranscript(db, session.id, transcriptRoots);
     const path = resolved.ok ? resolved.value.path : null;
     if (path) paths.add(path);
     // GitHub's state comes from the cache at once; a missing or old one refreshes in the background.
-    return { ...session, prs: prLinks.linksFor(path).map(link => ({ ...link, ...prStatus.get(link.url) })) };
+    return {
+      ...session,
+      prs: prLinks.linksFor(path).map(link => ({ ...link, ...prStatus.get(link.url) })),
+      usage: resolved.ok ? usageReader.read(path, resolved.value.provider) : null,
+      budget,
+    };
   });
   prLinks.keepOnly(paths);
+  usageReader.keepOnly(paths);
   return out;
 }
 const PUBLIC_DIR = new URL("../public", import.meta.url).pathname;
@@ -189,7 +202,8 @@ const secretRequests = new SecretRequests({
   secretsFile: id => launchSecrets.path(id),
   inLaunchEnvironment: async (launchId, name) => launchSecrets.fingerprints.compare(launchId, name, (await currentSecretEnv())[name]),
 });
-const restart = (id: string) => restartSession(id, {
+const budgets = createBudgets(db);
+const restartOnly = (id: string) => restartSession(id, {
   blocker: restartBlocker,
   provider: (sessionId) => {
     const row = db.query("SELECT provider FROM launches WHERE screen = ?").get(sessionId.slice(2)) as { provider: SessionProvider } | null;
@@ -200,6 +214,13 @@ const restart = (id: string) => restartSession(id, {
   resume: resumeArchived,
   sleep: (ms) => Bun.sleep(ms),
 });
+/** A restart is the same conversation under a new launch: its budget goes with it. */
+const restart = async (id: string) => {
+  const budget = budgets.get(id.slice(2));
+  const result = await restartOnly(id);
+  if (result.ok && budget !== null) budgets.set(id.slice(2), budget);
+  return result;
+};
 
 const bootstrapPath = await auth.ensureAdminPassword();
 if (bootstrapPath) console.log(`Initial admin credential is in the protected file: ${bootstrapPath}`);
@@ -311,8 +332,11 @@ const mcpDeps: McpDeps = {
     return new Map(withPrLinks(sessions).map((s) => [s.id, {
       prs: s.prs.map((p) => ({ url: p.url, repo: p.repo, number: p.number, state: p.state, title: p.title })),
       requests: s.id.startsWith("m:") ? waiting.get(s.id.slice(2)) ?? [] : [],
+      usage: s.usage,
+      budget: s.budget,
     }]));
   },
+  setBudget: (id, tokens) => budgets.set(id.slice(2), tokens),
   handoff: {
     status: syncedStatus,
     prepare: prepareSynced,
@@ -966,6 +990,14 @@ const server = Bun.serve<TermSocketData>({
     }
 
     // Restart with new secrets: end and resume the same conversation (server/session-restart.ts).
+    if (path.startsWith("/api/sessions/") && path.endsWith("/budget") && method === "PUT") {
+      const id = decodePathPart(path.slice("/api/sessions/".length, -"/budget".length));
+      if (id === null) return json({ error: "Malformed path." }, 400);
+      if (!/^m:cs-[a-z0-9][a-z0-9_-]*$/.test(id)) return json({ error: "No such session." }, 404);
+      const result = budgets.set(id.slice(2), (await readJsonObject(req)).tokens);
+      return result.ok ? json(result) : json({ error: result.error }, result.status);
+    }
+
     if (path.startsWith("/api/sessions/") && path.endsWith("/restart") && method === "POST") {
       const id = decodePathPart(path.slice("/api/sessions/".length, -"/restart".length));
       if (id === null) return json({ error: "Malformed path." }, 400);

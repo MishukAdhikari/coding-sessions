@@ -140,6 +140,12 @@ export function applyDatabaseSchema(database: Database): void {
     CREATE INDEX IF NOT EXISTS communicator_sent_idx ON communicator_messages (sender_id, sequence);
     CREATE INDEX IF NOT EXISTS communicator_rate_idx ON communicator_messages (sender_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS session_budgets (
+      launch_id  TEXT PRIMARY KEY REFERENCES launches(launch_id) ON DELETE CASCADE,
+      tokens     INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS codex_launch_state (
       launch_id     TEXT PRIMARY KEY REFERENCES launches(launch_id) ON DELETE CASCADE,
       screen        TEXT NOT NULL,

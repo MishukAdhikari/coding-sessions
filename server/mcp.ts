@@ -68,6 +68,7 @@ export interface McpDeps {
   restart?(id: string): Promise<RestartResult>;
   /** Per session: PR links found in its transcript, and the secret/connector requests it waits on. */
   sessionExtras?(sessions: SessionInfo[]): Map<string, SessionExtras>;
+  setBudget?(id: string, tokens: unknown): { ok: true; budget: number | null } | { ok: false; status: number; error: string };
   /** Server setup (server_status, setup_agents, doctor, trust_workspaces); absent in tests that predate it. */
   setup?: SetupDeps;
   /** add_project / remove_project (server/project-tools.ts); absent in tests that predate them. */
@@ -102,6 +103,10 @@ export interface SetupDeps {
 export interface SessionExtras {
   prs: Array<{ url: string; repo?: string; number?: number; state?: string; title?: string | null }>;
   requests: Array<{ id: string; kind: string; name: string }>;
+  /** Tokens used so far, from the agent's own transcript; null when it records none or is not read yet. */
+  usage?: { tokens: number; input: number; output: number; cached: number } | null;
+  /** The token budget set for the session, if any. */
+  budget?: number | null;
 }
 
 /* ---------- session state, as the tools describe it ---------- */
@@ -141,6 +146,8 @@ function summarize(s: SessionInfo, turnState: boolean, extras?: SessionExtras) {
     claude_url: s.claudeUrl,
     error: s.errorMessage,
     ...(extras ? { prs: extras.prs, pending_requests: extras.requests } : {}),
+    ...(extras?.usage ? { usage: extras.usage } : {}),
+    ...(extras?.budget ? { budget_tokens: extras.budget, ...(extras.usage ? { budget_used_percent: Math.round((extras.usage.tokens / extras.budget) * 100) } : {}) } : {}),
   };
 }
 
@@ -407,6 +414,16 @@ export const TOOLS = [
     description: "Whether a connector exists, its state, auth mode and granted tool count, and the latest request for it. With session_id, whether that session can use it now. Never returns credentials.",
     inputSchema: { type: "object", properties: { name: { type: "string" }, session_id: { ...sessionId, description: "Optional." } }, required: ["name"] },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "set_session_budget",
+    title: "Set a session's token budget",
+    description: "Set, change or clear the token budget of a managed session. The session's card and list_sessions then show tokens used against it (usage.tokens: fresh input plus output, cache reads apart; budget_tokens; budget_used_percent). A budget is shown, never enforced: nothing stops a session that passes it. tokens: a number, or text such as \"2M\" or \"500k\"; 0 clears it.",
+    inputSchema: { type: "object", properties: {
+      session_id: sessionId,
+      tokens: { type: ["number", "string"], description: "Tokens, e.g. 2000000, \"2M\" or \"500k\". 0 clears the budget." },
+    }, required: ["session_id", "tokens"] },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "restart_session",
@@ -887,6 +904,14 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
     case "request_connector":
     case "connector_status":
       return secretTool(deps, name, args);
+
+    case "set_session_budget": {
+      if (!deps.setBudget) return fail("Budgets are unavailable on this server.", "unavailable");
+      const id = str(args.session_id);
+      if (!id.startsWith("m:")) return fail("Only a managed session (id \"m:cs-…\") can carry a budget.", "invalid_argument");
+      const r = deps.setBudget(id, args.tokens);
+      return r.ok ? ok({ session_id: id, budget_tokens: r.budget, next: "list_sessions" }) : fail(r.error, r.status === 404 ? "not_found" : "invalid_argument");
+    }
 
     case "restart_session": {
       if (!deps.restart) return fail("Restart is unavailable on this server.", "unavailable");
