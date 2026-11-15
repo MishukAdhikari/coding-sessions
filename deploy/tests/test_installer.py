@@ -209,6 +209,7 @@ class InstallerContractTests(unittest.TestCase):
             self.assertEqual(run(new, new), ["v0.14.0", new, new])
             self.assertEqual(run("0" * 40, old), ["v0.14.0", old, old])  # unknown commit: as before
 
+    @unittest.skipIf(os.geteuid() == 0, "the agent installer refuses to run as root")
     def test_agent_install_falls_back_to_bun_when_npm_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory) / "home"
