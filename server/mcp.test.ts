@@ -448,12 +448,17 @@ test("list_sessions filters by agent, state and query, bounds by limit, and adds
     sessionExtras: (list) => new Map(list.map((s) => [s.id, {
       prs: s.id === "m:cs-a" ? [{ url: "https://github.com/me/a/pull/7", repo: "me/a", number: 7, state: "open", title: "Fix" }] : [],
       requests: s.id === "m:cs-c" ? [{ id: "r1", kind: "secret", name: "API_KEY" }] : [],
+      usage: s.id === "m:cs-a" ? { tokens: 500_000, input: 450_000, output: 50_000, cached: 9_000_000 } : null,
+      budget: s.id === "m:cs-a" ? 2_000_000 : null,
     }])),
   });
   const list = async (args: object) => (await call(deps, "list_sessions", args)).structuredContent;
   const all = await list({});
   expect(all.total).toBe(3);
   expect(all.sessions[0]).toMatchObject({ id: "m:cs-a", session_id: "m:cs-a", mode: "terminal", prs: [{ number: 7, state: "open" }], pending_requests: [] });
+  expect(all.sessions[0]).toMatchObject({ usage: { tokens: 500_000, cached: 9_000_000 }, budget_tokens: 2_000_000, budget_used_percent: 25 });
+  expect(all.sessions[1]).not.toHaveProperty("usage");
+  expect(all.sessions[1]).not.toHaveProperty("budget_tokens");
   expect(all.sessions[1].mode).toBe("acp");
   expect(all.sessions[2].pending_requests).toEqual([{ id: "r1", kind: "secret", name: "API_KEY" }]);
   expect((await list({ agent: "codex" })).sessions.map((s: any) => s.id)).toEqual(["m:cs-b"]);
@@ -545,4 +550,20 @@ test("handoff_session validates its input and refuses names already in use", asy
   expect(await code(base, handoffHarness("live").deps)).toBe("conflict");
   expect(await code(base, handoffHarness("resumable").deps)).toBe("conflict");
   expect(await code(base, harness().deps)).toBe("unavailable");
+});
+
+test("set_session_budget passes the value through for a managed session and reports refusals", async () => {
+  const seen: Array<[string, unknown]> = [];
+  const { deps } = harness({
+    setBudget: (id, tokens) => {
+      seen.push([id, tokens]);
+      return tokens === "lots" ? { ok: false, status: 422, error: "A budget is a number of tokens." } : { ok: true, budget: tokens === 0 ? null : 2_000_000 };
+    },
+  });
+  expect((await call(deps, "set_session_budget", { session_id: "m:cs-demo", tokens: "2M" })).structuredContent).toMatchObject({ session_id: "m:cs-demo", budget_tokens: 2_000_000 });
+  expect((await call(deps, "set_session_budget", { session_id: "m:cs-demo", tokens: 0 })).structuredContent).toMatchObject({ budget_tokens: null });
+  expect((await call(deps, "set_session_budget", { session_id: "m:cs-demo", tokens: "lots" })).isError).toBe(true);
+  expect((await call(deps, "set_session_budget", { session_id: "e:123", tokens: "2M" })).isError).toBe(true);
+  expect(seen).toEqual([["m:cs-demo", "2M"], ["m:cs-demo", 0], ["m:cs-demo", "lots"]]);
+  expect((await call(harness().deps, "set_session_budget", { session_id: "m:cs-demo", tokens: 1 })).isError).toBe(true);
 });

@@ -7,6 +7,16 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-15
+
+### Added
+- A Session's card shows the tokens it has used (Claude Code and Codex, read from the
+  agent's own transcript): fresh input plus output, with cache reads in the tooltip. Set
+  a token budget in the Session's sheet or with MCP `set_session_budget` and the line
+  reads used of budget, with the percentage. A budget is shown, never enforced, and a
+  restart keeps it. `list_sessions` reports `usage`, `budget_tokens` and
+  `budget_used_percent`.
+
 ## [0.15.3] - 2026-11-15
 
 ### Fixed
@@ -310,7 +320,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.15.3...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.0
 [0.15.3]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.3
 [0.15.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.2
 [0.15.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.1
