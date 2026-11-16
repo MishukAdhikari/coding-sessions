@@ -255,6 +255,22 @@ a.btn { display: block; text-align: center; text-decoration: none; }
   .chip { font-size: 9px; padding-inline: 5px; }
   .sheet { padding-inline: 20px; }
 }
+/* Phones and narrow windows: the card's details read as one compact block. Status and
+   PR chips share a row, the token line sits under them, and the side column stays light. */
+@media (max-width: 759px) {
+  .card { padding-block: 18px; align-items: flex-start; }
+  .card-main { display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; }
+  .card-name, .card-sub, .card-usage, .card-request { flex: 1 0 100%; }
+  .card-request { flex-basis: auto; }
+  .card-sub { margin-top: 2px; }
+  .card-status { flex: 0 1 auto; min-width: 0; margin-top: 6px; }
+  .card-prs { flex: 0 1 auto; min-width: 0; margin-top: 6px; }
+  .card-usage { margin-top: 4px; }
+  .card.failed .card-status { flex-basis: 100%; }
+  .card-side { padding-top: 2px; }
+  .card-side br { display: none; }
+  .card-side .chip { display: table; margin: 5px 0 0 auto; }
+}
 @media (min-width: 760px) {
   #app { padding-inline: 32px; }
   .topbar { padding-top: var(--space-6); padding-bottom: var(--space-5); }

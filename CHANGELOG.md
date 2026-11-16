@@ -7,6 +7,13 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-16
+
+### Changed
+- Session cards on phones and narrow windows are more compact: the status and PR links
+  share a row, the token line sits under them, and the agent and model labels stack
+  neatly on the right.
+
 ## [0.16.0] - 2026-11-15
 
 ### Added
@@ -320,7 +327,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.1
 [0.16.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.0
 [0.15.3]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.3
 [0.15.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.2
