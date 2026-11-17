@@ -5,12 +5,12 @@ import { childEnvironment } from "./child-env";
  *
  *  - zmx: `zmx history` prints the scrollback as plain text; `zmx send` writes raw
  *    bytes to the session's pty, exactly as a keyboard would.
- *  - GNU screen (legacy): `hardcopy -h` and `stuff`.
+ *  - GNU screen (legacy): `hardcopy -h`, and its paste buffer for typing (see screenPasteArgs).
  *
  * Only `cs-*` sessions are reachable: an External Session has no holder to type into.
  */
 import { randomBytes } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as mux from "./mux";
@@ -112,6 +112,37 @@ export async function readScreen(id: string, lines = 60): Promise<IoResult<strin
   }
 }
 
+/**
+ * screen's command to paste the file's bytes into window 0, exactly as they are. Pure, for tests.
+ *
+ * Not `stuff`: GNU screen 4.9 runs its string through the command parser, so `^C` became
+ * Ctrl-C, `$HOME` the server's home folder, and a message longer than about 1 KB was
+ * dropped without an error: the chat showed it sent while the agent never got it. The
+ * paste buffer takes the bytes from a file, unchanged and at any length. `-p 0`: a
+ * session has one window, and older screens address none while no one is attached.
+ */
+export function screenPasteArgs(name: string, file: string): string[] {
+  return ["screen", "-S", name, "-p", "0", "-X", "eval", `readbuf ${file}`, "paste ."];
+}
+
+async function screenPaste(name: string, bytes: string): Promise<{ code: number; err: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "cs-paste-"));
+  const file = join(dir, "text");
+  try {
+    writeFileSync(file, bytes, { mode: 0o600 });
+    const r = await run(screenPasteArgs(name, file));
+    await Bun.sleep(150); // screen reads the file from its own process
+    return r;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** How long to let the agent's input take a paste in before Enter, longer for a long one. Pure. */
+export function settleMs(text: string): number {
+  return text ? 250 + Math.min(1500, Math.floor(text.length / 40)) : 0;
+}
+
 async function write(session: mux.MuxSession, bytes: string): Promise<IoResult<true>> {
   if (bytes.includes("\0")) return { ok: false, error: "Text can't contain NUL." };
   if (session.backend === "herdr") {
@@ -121,8 +152,7 @@ async function write(session: mux.MuxSession, bytes: string): Promise<IoResult<t
   }
   const r = session.backend === "zmx"
     ? await run([mux.ZMX_BIN ?? "zmx", "send", session.name, bytes])
-    // screen's `stuff` reads backslash escapes; double them so text arrives as typed.
-    : await run(["screen", "-S", session.name, "-X", "stuff", bytes.replace(/\\/g, "\\\\")]);
+    : await screenPaste(session.name, bytes);
   return r.code === 0 ? { ok: true, value: true } : { ok: false, error: r.err.trim() || "Couldn't type into the session." };
 }
 
@@ -137,7 +167,7 @@ export async function sendText(id: string, text: string, submit = true): Promise
   if (!submit) return { ok: true, value: true };
   // Enter on its own write, after the TUI has taken the paste in: sent together, a
   // TUI can read the CR as part of the paste and leave the message unsent.
-  await Bun.sleep(text ? 250 : 0);
+  await Bun.sleep(settleMs(text));
   return write(h.value, KEYS.enter!);
 }
 

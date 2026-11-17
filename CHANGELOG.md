@@ -7,6 +7,14 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-11-17
+
+### Fixed
+- Chat replies and MCP `send_message` on screen-held sessions: a message longer than
+  about 1 KB never reached the agent although the chat showed it sent, `^C` in the text
+  pressed Ctrl-C, and `$NAME` was replaced by the server's environment. Text now goes in
+  through screen's paste buffer, byte for byte and at any length.
+
 ## [0.16.1] - 2026-11-16
 
 ### Changed
@@ -327,7 +335,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.16.2...HEAD
+[0.16.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.2
 [0.16.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.1
 [0.16.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.0
 [0.15.3]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.15.3
