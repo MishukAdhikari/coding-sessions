@@ -7,6 +7,13 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-17
+
+### Fixed
+- Claude.ai browser sign-in: when claude.ai refuses the server's browser ("Couldn't verify
+  your browser"), the sheet says so at once. Before, it showed a human check with nothing to
+  solve, then reported after six minutes that the check wasn't finished in time.
+
 ## [0.19.0] - 2026-11-17
 
 ### Added
@@ -372,7 +379,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.1
 [0.19.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.0
 [0.18.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.18.0
 [0.17.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.1
