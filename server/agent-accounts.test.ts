@@ -40,7 +40,7 @@ test("Codex keeps its device sign-in with opencode installed", async () => {
   const { calls, controller } = installedOnly(["codex", "opencode"]);
   const { accounts, agents } = await controller.list();
   expect(accounts.find(a => a.provider === "codex")).toMatchObject({ installed: true, loggedIn: false });
-  expect(agents.find(a => a.id === "opencode")).toMatchObject({ installed: true, envVar: null });
+  expect(agents.find(a => a.id === "opencode")).toMatchObject({ installed: true, envVar: "OPENCODE_API_KEY" });
   expect(await controller.action("codex", "login")).toMatchObject({ ok: true });
   expect(calls).toContain("start:codex");
 });

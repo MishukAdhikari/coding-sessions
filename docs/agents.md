@@ -28,7 +28,7 @@ These are third-party tools. Each comes from its own vendor and has its own acco
 | Vendor | Google | Moonshot AI | Alibaba (Qwen) | Anomaly (opencode) |
 | npm package | `@google/gemini-cli` | `@moonshot-ai/kimi-code` | `@qwen-code/qwen-code` | `opencode-ai` |
 | Node.js | 22+ | 22.19+ | 22+ | 22+ |
-| Sign-in | `GEMINI_API_KEY` (Add key), or Gemini Code Assist | `kimi login` in the server terminal | `OPENAI_API_KEY` for an OpenAI-compatible endpoint (Add key), or `/auth` in the agent | `opencode auth login` in the server terminal |
+| Sign-in | `GEMINI_API_KEY` (Add key), or Gemini Code Assist | `kimi login` in the server terminal | `OPENAI_API_KEY` for an OpenAI-compatible endpoint (Add key), or `/auth` in the agent | An OpenCode Go (or Zen) subscription: its API key as `OPENCODE_API_KEY` (Add key). Other providers: `opencode auth login` in the server terminal |
 | Coding Sessions MCP | entry in `~/.gemini/settings.json` | entry in `~/.kimi-code/mcp.json` | `--mcp-config` at launch | `OPENCODE_CONFIG_CONTENT` at launch |
 | Unrestricted mode adds | `--approval-mode=yolo --skip-trust` | `--auto` | `--approval-mode yolo` | `--auto` |
 | License | Apache-2.0 | MIT | Apache-2.0 | MIT |
