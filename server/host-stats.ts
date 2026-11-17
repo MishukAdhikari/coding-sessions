@@ -95,7 +95,7 @@ function diskNow(): { pct: number; freeGb: number; totalGb: number } | null {
     if (!blocks || !bsize) return null;
     // Match df: capacity is measured against what a non-root user can actually claim.
     const usable = blocks - (bfree - bavail);
-    return { pct: usable > 0 ? clampPct(((usable - bavail) / usable) * 100) : 0, freeGb: gb(bavail * bsize), totalGb: gb(usable * bsize) };
+    return { pct: usable > 0 ? clampPct(((usable - bavail) / usable) * 100) : 0, freeGb: gb(bavail * bsize), totalGb: gb(blocks * bsize) };
   } catch {
     return null;
   }
@@ -107,7 +107,8 @@ export function hostStats(): HostStats | null {
   const mem = memNow();
   const disk = diskNow();
   if (!disk) return null;
-  // Cores the app may use (CPU affinity), not the host's sockets; the disk the free figure is part of.
+  // Cores the app may use (CPU affinity), not the host's sockets; the disk's whole size, as df's
+  // Size column and the provider's plan count it (root's reserved blocks included).
   size ??= { cpuCores: Math.max(1, availableParallelism?.() ?? cpus().length), diskTotalGb: disk.totalGb };
   return {
     cpu: cpuNow(),

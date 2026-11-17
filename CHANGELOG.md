@@ -7,6 +7,12 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-17
+
+### Fixed
+- The disk size under the host meters is the disk's whole size, as `df` and the
+  provider's plan state it (75 GB, not the 71.7 GB left after root's reserve).
+
 ## [0.17.0] - 2026-11-17
 
 ### Added
@@ -342,7 +348,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.1
 [0.17.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.0
 [0.16.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.2
 [0.16.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.1
