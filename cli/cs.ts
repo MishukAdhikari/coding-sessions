@@ -770,11 +770,34 @@ async function cmdDoctor(cfg: Config): Promise<void> {
     checks.push({ label: "token", ok: false, hint: "no token — run `cs login`" });
   }
 
+  // The server's own checks (agents, onboarding, disk, the claude.ai browser …), as its MCP doctor reports them.
+  type Finding = { check: string; status: "ok" | "warn" | "fail"; detail?: string; fix?: string };
+  let serverFindings: Finding[] = [];
+  if (checks.find((c) => c.label === "token")?.ok) {
+    try {
+      const r = await api(cfg, "/mcp", {
+        method: "POST", timeoutMs: 20_000,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "doctor", arguments: {} } }),
+      });
+      serverFindings = (r?.result?.structuredContent?.findings ?? []) as Finding[];
+    } catch {} // an older server has no doctor tool: the local checks still stand
+  }
+
   for (const c of checks) {
     console.log(`${c.ok ? paint("✓", "32") : paint("✗", "31")} ${c.label}`);
     if (!c.ok && c.hint) { console.log(`  ${paint(c.hint, "2")}`); }
   }
-  const failed = checks.filter((c) => !c.ok).length;
+  if (serverFindings.length) console.log(paint(`\non ${serverLabel(cfg)}:`, "2"));
+  for (const f of serverFindings) {
+    const mark = f.status === "ok" ? paint("✓", "32") : f.status === "warn" ? paint("!", "33") : paint("✗", "31");
+    console.log(`${mark} ${f.check}`);
+    if (f.status !== "ok") {
+      if (f.detail) console.log(`  ${paint(f.detail, "2")}`);
+      if (f.fix) console.log(`  ${paint(`fix: ${f.fix}`, "2")}`);
+    }
+  }
+  // A warning is worth reading but is not a broken setup; a failure on the server is.
+  const failed = checks.filter((c) => !c.ok).length + serverFindings.filter((f) => f.status === "fail").length;
   console.log(failed
     ? paint(`\n${failed} check${failed === 1 ? "" : "s"} failed.`, "31")
     : paint("\nAll good.", "32"));

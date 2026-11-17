@@ -28,7 +28,7 @@ cd coding-sessions
 bun install
 bun link            # puts `cs` on your PATH
 cs server add personal https://sessions.example.com --ssh you@sessions.example.com
-cs doctor           # checks everything is wired up
+cs doctor           # checks everything is wired up, here and on the server
 ```
 
 `cs server add` prints a link and a short code and opens the app in your browser.
