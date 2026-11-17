@@ -473,10 +473,38 @@
     row.title = title;
   }
 
+  /* The machine's size, once: "4 cores · 7.6 GB RAM · 75 GB disk", and on a phone, in the
+     meters' own order and units, "4 cores · 7.6G · 75G". */
+  const sizeNum = (n) => n >= 1000 ? `${Math.round(n / 100) / 10}` : n >= 10 ? `${Math.round(n)}` : `${Math.round(n * 10) / 10}`;
+  const sizeUnit = (n) => (n >= 1000 ? "T" : "G");
+  function hostSizeText(h, short = false) {
+    const parts = [];
+    if (h.cpuCores > 0) parts.push(`${h.cpuCores} ${h.cpuCores === 1 ? "core" : "cores"}`);
+    if (h.memTotalGb > 0) parts.push(short ? `${sizeNum(h.memTotalGb)}${sizeUnit(h.memTotalGb)}` : `${sizeNum(h.memTotalGb)} ${sizeUnit(h.memTotalGb)}B RAM`);
+    if (h.diskTotalGb > 0) parts.push(short ? `${sizeNum(h.diskTotalGb)}${sizeUnit(h.diskTotalGb)}` : `${sizeNum(h.diskTotalGb)} ${sizeUnit(h.diskTotalGb)}B disk`);
+    return parts.join(" · ");
+  }
+
   function renderHost(h) {
     const el = $("host");
     if (!h || typeof h.cpu !== "number") { el.hidden = true; return; }
     el.hidden = false;
+    const size = $("host-size");
+    if (size.hidden) {
+      const text = hostSizeText(h);
+      if (text) {
+        const full = document.createElement("span");
+        const short = document.createElement("span");
+        full.className = "host-size-full";
+        short.className = "host-size-short";
+        full.textContent = text;
+        short.textContent = hostSizeText(h, true);
+        short.setAttribute("aria-hidden", "true");
+        size.replaceChildren(full, short);
+        size.title = text;
+        size.hidden = false;
+      }
+    }
     setMeter("cpu", h.cpu, `${h.cpu}%`, `CPU ${h.cpu}% busy`);
     setMeter("mem", h.mem, `${h.mem}%`, `RAM ${h.memUsedGb}G of ${h.memTotalGb}G used`);
     setMeter("disk", h.disk, `${h.diskFreeGb}G free`,

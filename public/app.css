@@ -31,6 +31,12 @@ h1, h2 { text-wrap: balance; line-height: 1.1; }
 .host-meter { height: 5px; border-radius: 3px; background: var(--surface-muted); overflow: hidden; }
 .host-meter > i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--status-positive); transition: width 600ms ease, background-color 600ms ease; }
 .host-v { text-align: right; }
+.host-size { margin-top: 2px; color: var(--text-muted); text-align: right; white-space: nowrap; }
+/* The size line can be wider than the meters: they stay flush right with it. */
+.host-row { justify-content: end; }
+.host-size[hidden] { display: none; }
+.host-size-short { display: none; }
+@media (max-width: 420px) { .host-size-full { display: none; } .host-size-short { display: inline; } }
 .host-row[data-level="warn"] .host-meter > i { background: var(--status-working); }
 .host-row[data-level="warn"] .host-v { color: var(--status-working); }
 .host-row[data-level="hot"] .host-meter > i { background: var(--status-danger); }
@@ -313,9 +319,10 @@ a.btn { display: block; text-align: center; text-decoration: none; }
   .topbar { flex-wrap: wrap; }
   .host { order: 3; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; font-size: 9px; }
   .host:not([hidden]) + .topbar-actions { margin-left: auto; }
-  .host-row { grid-template-columns: auto 1fr; gap: 4px 8px; }
+  .host-row { grid-template-columns: auto 1fr; gap: 4px 8px; justify-content: stretch; }
   .host-meter { grid-column: 1 / -1; grid-row: 2; }
   .host-v { grid-column: 2; grid-row: 1; white-space: nowrap; }
+  .host-size { grid-column: 1 / -1; margin-top: 0; text-align: left; }
 }
 
 .setting-label, .row-with-icon { display: flex; align-items: center; gap: 10px; }

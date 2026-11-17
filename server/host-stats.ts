@@ -7,7 +7,7 @@
  * so the strip in the top bar warns before a launch is refused.
  */
 import { readFileSync, statfsSync } from "node:fs";
-import { cpus, freemem, loadavg, totalmem } from "node:os";
+import { availableParallelism, cpus, freemem, loadavg, totalmem } from "node:os";
 
 export interface HostStats {
   cpu: number;        // 0-100, busy share since the previous sample
@@ -16,6 +16,9 @@ export interface HostStats {
   memTotalGb: number;
   disk: number;       // 0-100, used share of /
   diskFreeGb: number;
+  /** The machine's size, read once: it does not change while the app runs. */
+  cpuCores: number;
+  diskTotalGb: number;
 }
 
 export interface CpuSample { busy: number; total: number }
@@ -85,23 +88,27 @@ function memNow(): { pct: number; usedGb: number; totalGb: number } {
   };
 }
 
-function diskNow(): { pct: number; freeGb: number } | null {
+function diskNow(): { pct: number; freeGb: number; totalGb: number } | null {
   try {
     const { bsize, blocks, bfree, bavail } = statfsSync("/") as unknown as
       { bsize: number; blocks: number; bfree: number; bavail: number };
     if (!blocks || !bsize) return null;
     // Match df: capacity is measured against what a non-root user can actually claim.
     const usable = blocks - (bfree - bavail);
-    return { pct: usable > 0 ? clampPct(((usable - bavail) / usable) * 100) : 0, freeGb: gb(bavail * bsize) };
+    return { pct: usable > 0 ? clampPct(((usable - bavail) / usable) * 100) : 0, freeGb: gb(bavail * bsize), totalGb: gb(usable * bsize) };
   } catch {
     return null;
   }
 }
 
+let size: { cpuCores: number; diskTotalGb: number } | null = null;
+
 export function hostStats(): HostStats | null {
   const mem = memNow();
   const disk = diskNow();
   if (!disk) return null;
+  // Cores the app may use (CPU affinity), not the host's sockets; the disk the free figure is part of.
+  size ??= { cpuCores: Math.max(1, availableParallelism?.() ?? cpus().length), diskTotalGb: disk.totalGb };
   return {
     cpu: cpuNow(),
     mem: mem.pct,
@@ -109,5 +116,6 @@ export function hostStats(): HostStats | null {
     memTotalGb: mem.totalGb,
     disk: disk.pct,
     diskFreeGb: disk.freeGb,
+    ...size,
   };
 }
