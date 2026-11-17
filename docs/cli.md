@@ -180,6 +180,7 @@ An agent without a terminal can do the same through MCP: `handoff_session` (see
 
 ```text
 cs live [name] [--json]
+cs live --all [--json]
 cs --live [name]
 cs --server --live "<prompt>"
 cs handoff --live ["<next>"]
@@ -210,6 +211,37 @@ Follows what a session is doing, from your terminal, without attaching to it:
 - `--json` prints one JSON frame per line (`hello`, `state`, `message`, `tool`, `ask`, `pr`,
   `notice`, `end`), for scripts.
 - `--live` on `cs --server` or `cs handoff` launches as usual, then follows the session.
+
+### Every session at once
+
+`cs live --all` (also `cs live -A` or `cs --live --all`) prints one board of every running
+session on every saved server, then exits:
+
+```text
+Needs you
+● fix-login  lab · 2h 10m · #42
+  permission: Write config.json
+
+Cooking
+● docs-pass  home · 25m
+  The guide now covers both installs. Checking the links next.
+
+Idle
+○ cleanup  lab · 1d 3h · #40 · +1
+  Merged and deployed; the old flag is gone.
+
+Needs you 1 · Cooking 1 · Idle 1
+```
+
+- Groups, in order: **Needs you** (a question or a permission request), **Cooking** (working
+  or starting) and **Idle** (finished, ready or connected).
+- Each row shows the server, uptime and newest PR (`+N` for more). Under it comes the
+  question, or the first one or two sentences of the agent's last reply, or its last tool
+  call, or "no messages yet".
+- A server that doesn't answer within 15 s gets one `unreachable` line. The command fails
+  only when no server answered.
+- `--json` returns `{sessions, counts, servers}`, each session with its `group` and
+  `summary`.
 
 It works for Claude Code, Codex and Chat (ACP) sessions; other agents show their state changes
 and PR links only. The server reads the same transcript or chat log as the app's chat view and

@@ -14,6 +14,7 @@ import {
   rsyncIgnoredExcludes, rsyncWorkTreeArgs, claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpNameFor, mcpPinFor, mcpRemoveCommand, mcpStateIn, migrateConfig,
   mcpListedLine, registeredNameFor, registeredNames, MCP_NAME, type McpPin,
+  boardGroup, boardSummary, prLabels, renderBoard, type BoardItem,
   parseServerArgs, prettyProject, RUN, renderLiveFrame, newLiveRenderState, liveBackoffMs, liveSocketUrl, type LiveFrame, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
@@ -662,6 +663,69 @@ async function followLive(cfg: Config, target: { id: string; name: string }, jso
   }
 }
 
+/** Run `work` over `items` with at most `limit` at a time, keeping order. */
+async function pooled<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next++; out[i] = await work(items[i]!); }
+  }));
+  return out;
+}
+
+/**
+ * `cs live --all`: one look at every session on every saved server — what needs you, what's
+ * cooking, what's idle — each with its question or its last reply in a sentence or two.
+ * Same fan-out as `cs list --all`: a server that doesn't answer is one line.
+ */
+async function cmdLiveAll(args: string[]): Promise<void> {
+  const file = loadConfigFile();
+  const names = Object.keys(file.servers);
+  if (!names.length) die("no servers yet — run `cs server add <name> <url>` first.");
+  const withTimeout = <T,>(p: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([p, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("no answer in 15 s")), 15_000); })])
+      .finally(() => clearTimeout(timer));
+  };
+  const perServer = await Promise.all(names.map(async (server) => {
+    const cfg = resolveServer(file, server);
+    try {
+      const { sessions } = await withTimeout(api(cfg, "/api/sessions", { timeoutMs: 15_000 }));
+      const live = (sessions as any[]).filter((s) => s.status !== "ended");
+      const rows = await pooled(live, 4, async (s) => {
+        let frames: LiveFrame[] = [];
+        try { frames = (await withTimeout(api(cfg, `/api/sessions/${encodeURIComponent(s.id)}/live`, { timeoutMs: 15_000 }))).frames ?? []; } catch {}
+        // Newest first, as both the feed and the session list send them.
+        const prs = frames.filter((f) => f.type === "pr").map((f) => ({ repo: f.repo, number: f.number }));
+        return { server, s, frames, prs: prs.length ? prs : (s.prs ?? []) };
+      });
+      return { server, url: cfg.api, rows };
+    } catch (e) {
+      return { server, url: cfg.api, error: (e as Error).message || "unreachable" };
+    }
+  }));
+  const rows = perServer.flatMap((r) => r.rows ?? []);
+  const oneRepo = new Set(rows.flatMap((r) => r.prs.map((p: any) => p.repo))).size <= 1;
+  const items: BoardItem[] = rows.map(({ server, s, frames, prs }) => ({
+    server, name: s.name, activity: String(s.activity ?? "connected"), uptimeSec: s.uptimeSec ?? null,
+    prs: prLabels(prs, oneRepo),
+    summary: boardSummary(frames, String(s.activity ?? ""), s.asking === true),
+  }));
+  const unreachable = perServer.filter((r) => r.error).map((r) => ({ server: r.server, error: r.error! }));
+  if (args.includes("--json")) {
+    const group = (i: BoardItem) => boardGroup(i.activity, i.summary.kind === "ask");
+    const count = (g: string) => items.filter((i) => group(i) === g).length;
+    console.log(JSON.stringify({
+      sessions: items.map((i) => ({ ...i, group: group(i) })),
+      counts: { needs_you: count("needs"), cooking: count("cooking"), idle: count("idle") },
+      servers: perServer.map((r) => ({ server: r.server, url: r.url, ...(r.error ? { error: r.error } : { sessions: r.rows!.length }) })),
+    }, null, 2));
+  } else {
+    console.log(renderBoard(items, unreachable, !!process.stdout.isTTY && !process.env.NO_COLOR, Math.min(process.stdout.columns || 80, 100)));
+  }
+  process.exit(perServer.every((r) => r.error) ? 1 : 0);
+}
+
 async function cmdLive(cfg: Config, args: string[]): Promise<void> {
   const json = args.includes("--json");
   const nameArg = args.find((a) => !a.startsWith("-"));
@@ -1296,6 +1360,8 @@ USAGE
   cs mirror [name]               mirror a LIVE server session in your terminal
   cs live [name] [--json]        follow a session's progress: messages, tool calls, questions,
                                    PR links (also cs --live [name]); Ctrl-C detaches
+  cs live --all [--json]         one board of every session on every saved server: what
+                                   needs you, what is cooking, what is idle (also -A)
   cs mcp add|status|remove       let Claude Code / Codex drive sessions over MCP
   cs install [agent…]            install agents on the server (no args: list them)
                                    claude codex command-code gemini kimi qwen opencode
@@ -1328,7 +1394,7 @@ try {
     case "term": case "attach": await cmdTerm(cfg(), args); break;
     case "mirror": await cmdMirror(cfg(), args[0]); break;
     case "handoff": await cmdHandoff(cfg(), args); break;
-    case "live": await cmdLive(cfg(), args); break;
+    case "live": if (args.includes("--all") || args.includes("-A")) await cmdLiveAll(args); else await cmdLive(cfg(), args); break;
     case "pull": process.exit(run(["git", "pull"])); break;
     case "server": await cmdServer(args); break;
     case "login": await cmdLogin(chosenServer); break;

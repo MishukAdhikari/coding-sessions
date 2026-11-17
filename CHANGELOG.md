@@ -7,6 +7,14 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-17
+
+### Added
+- `cs live --all` (`-A`, or `cs --live --all`): one board of every session on every saved
+  server, grouped into Needs you, Cooking and Idle. Each session shows its question, or the
+  first sentence or two of its last reply, plus server, uptime and newest PR. A server that
+  doesn't answer gets one line. `--json` gives the same data.
+
 ## [0.18.0] - 2026-11-17
 
 ### Added
@@ -364,7 +372,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.0
 [0.18.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.18.0
 [0.17.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.1
 [0.17.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.0
