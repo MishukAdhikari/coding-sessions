@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { approveClaudeApiKey, claudeOnboardingDone, completeClaudeOnboarding, runDoctor, type DoctorDeps } from "./server-setup";
+import { approveClaudeApiKey, chatBrowserFinding, claudeOnboardingDone, completeClaudeOnboarding, runDoctor, type ChatBrowserState, type DoctorDeps } from "./server-setup";
 import { handleMcpPost, type McpDeps, type SetupDeps } from "./mcp";
 import { LiveFeed } from "./live";
 
@@ -177,4 +177,27 @@ test("cs live shows a Claude Code first-run screen once, as a question", () => {
   expect((first[0] as any).text).toContain("first-run screen");
   expect(feed.step(view, read, [], screen).frames.filter((f) => f.type === "ask")).toHaveLength(0);
   expect(feed.step(view, read, [], { ...screen, kind: "folder_trust" }).frames.filter((f) => f.type === "ask")).toHaveLength(1);
+});
+
+const cb = (over: Partial<ChatBrowserState> = {}): ChatBrowserState =>
+  ({ running: false, state: "success", email: "owner@example.test", authed: true, authExpired: false, pending: 0, failed: 0, ...over });
+
+test("doctor says when claude.ai refused the server's browser, and what is waiting", () => {
+  expect(chatBrowserFinding(cb({ state: "blocked", failed: 2 }))).toMatchObject({
+    status: "warn", human: true,
+    detail: "claude.ai refused this server's browser (“Couldn't verify your browser”), so chats can't be deleted from here. 2 chat deletions are waiting.",
+  });
+  expect(chatBrowserFinding(cb({ authExpired: true, failed: 1 }))).toMatchObject({ status: "warn", detail: "The claude.ai login expired. 1 chat deletion is waiting." });
+  expect(chatBrowserFinding(cb({ authed: false }))?.detail).toBe("Not signed in to claude.ai.");
+  expect(chatBrowserFinding(cb({ failed: 3 }))).toMatchObject({ status: "warn", detail: "3 chat deletions failed." });
+  expect(chatBrowserFinding(cb({ running: true, state: "blocked" }))?.status).toBe("ok");
+  expect(chatBrowserFinding(cb())).toMatchObject({ status: "ok", detail: "Signed in as owner@example.test; chat deletions work." });
+});
+
+test("doctor stays quiet about the claude.ai browser when nobody uses it", () => {
+  expect(chatBrowserFinding(cb({ email: "", authed: false, state: "idle" }))).toBeNull();
+  const findings = runDoctor(doctorDeps(home(), { chatBrowser: () => cb({ email: "", authed: false, state: "idle" }) }), false);
+  expect(findings.some((f) => f.check.startsWith("Claude.ai browser"))).toBe(false);
+  const blocked = runDoctor(doctorDeps(home(), { chatBrowser: () => cb({ state: "blocked" }) }), false);
+  expect(blocked.find((f) => f.check === "Claude.ai browser sign-in")?.status).toBe("warn");
 });

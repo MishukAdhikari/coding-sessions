@@ -7,6 +7,15 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-11-17
+
+### Added
+- The doctor checks the claude.ai browser sign-in: claude.ai refused the server's browser,
+  the login expired, not signed in, or deletions failed, each with how many chat deletions
+  are waiting and what to do. It stays quiet when the feature isn't used.
+- `cs doctor` on your laptop also shows the server's own doctor findings: warnings with
+  their fix, and failures counted in its exit code.
+
 ## [0.19.1] - 2026-11-17
 
 ### Fixed
@@ -379,7 +388,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.19.2...HEAD
+[0.19.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.2
 [0.19.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.1
 [0.19.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.0
 [0.18.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.18.0

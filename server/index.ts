@@ -136,6 +136,7 @@ const setupDeps: McpDeps["setup"] = {
     browserInstalled: () => playwrightChromium(),
     claudeInstalled: () => !!agentBin("claude"),
     claudeVersion: () => null,
+    chatBrowser: () => ({ ...claudeChat.browserAuthStatus(), ...claudeChat.queueState() }),
   }, fix),
   setTrust: (enabled) => {
     const r = serverSettings.set("trustWorkspaces", enabled ? "on" : "off", "mcp");

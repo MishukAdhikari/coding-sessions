@@ -104,6 +104,38 @@ export interface DoctorDeps {
   browserInstalled(): boolean;
   claudeInstalled(): boolean;
   claudeVersion(): string | null;
+  /** The claude.ai browser that deletes chats: its last sign-in and the deletion queue. */
+  chatBrowser?(): ChatBrowserState;
+}
+
+export interface ChatBrowserState {
+  running: boolean;     // a sign-in is in progress
+  state: string;        // the last sign-in's outcome: idle, success, error, blocked, …
+  email: string;        // the account it signs in as; empty when the feature is not set up
+  authed: boolean;      // a signed-in profile exists
+  authExpired: boolean; // deletions found the login expired
+  pending: number;
+  failed: number;
+}
+
+/** The doctor's word on the claude.ai browser, or null when nobody uses it. Pure. */
+export function chatBrowserFinding(cb: ChatBrowserState): Finding | null {
+  if (!cb.email && !cb.authed && !cb.pending && !cb.failed) return null;
+  const check = "Claude.ai browser sign-in";
+  const queued = cb.pending + cb.failed;
+  const waiting = queued ? ` ${queued} chat deletion${queued === 1 ? " is" : "s are"} waiting.` : "";
+  const settings = "Settings → Claude.ai browser";
+  if (cb.running) return { check, status: "ok", detail: "A sign-in is in progress." };
+  if (cb.state === "blocked") {
+    return { check, status: "warn", human: true,
+      detail: `claude.ai refused this server's browser (“Couldn't verify your browser”), so chats can't be deleted from here.${waiting}`,
+      fix: `Delete chats in Claude yourself; try signing in again later (${settings}).` };
+  }
+  if (cb.authExpired || !cb.authed) {
+    return { check, status: "warn", human: true, detail: `${cb.authExpired ? "The claude.ai login expired" : "Not signed in to claude.ai"}.${waiting}`, fix: `${settings} → Sign in; failed deletions then retry.` };
+  }
+  if (cb.failed) return { check, status: "warn", human: true, detail: `${cb.failed} chat deletion${cb.failed === 1 ? "" : "s"} failed.`, fix: `${settings} → Sign in again; failed deletions then retry.` };
+  return { check, status: "ok", detail: `Signed in${cb.email ? ` as ${cb.email}` : ""}; chat deletions work.${cb.pending ? ` ${cb.pending} queued.` : ""}` };
 }
 
 export const ROOT_DOCTOR = "sudo coding-sessions doctor --fix";
@@ -175,6 +207,11 @@ export function runDoctor(deps: DoctorDeps, fix: boolean): Finding[] {
   }
 
   if (!deps.browserInstalled()) add({ check: "Claude.ai browser", status: "warn", detail: "Playwright Chromium is not installed (only needed for the Claude.ai browser sign-in).", fix: "sudo coding-sessions browser install", human: true });
+  else {
+    const cb = deps.chatBrowser?.();
+    const finding = cb ? chatBrowserFinding(cb) : null;
+    if (finding) add(finding);
+  }
   return findings;
 }
 
