@@ -53,4 +53,12 @@ test("hostStats reports percentages in range on this host", () => {
   expect(s!.memTotalGb).toBeGreaterThan(0);
   expect(s!.memUsedGb).toBeLessThanOrEqual(s!.memTotalGb);
   expect(s!.diskFreeGb).toBeGreaterThanOrEqual(0);
+  expect(Number.isInteger(s!.cpuCores) && s!.cpuCores >= 1).toBe(true);
+  expect(s!.diskTotalGb).toBeGreaterThanOrEqual(s!.diskFreeGb);
+});
+
+test("the machine's size is read once and stays the same between reads", () => {
+  const a = hostStats()!;
+  const b = hostStats()!;
+  expect([b.cpuCores, b.diskTotalGb]).toEqual([a.cpuCores, a.diskTotalGb]);
 });

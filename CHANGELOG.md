@@ -7,6 +7,13 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-17
+
+### Added
+- The server's size under the CPU, RAM and disk meters, read once at start:
+  "4 cores · 7.6 GB RAM · 75 GB disk" ("4 cores · 7.6G · 75G" on a phone). The host
+  stats in `/api/sessions` and MCP `list_sessions` carry `cpuCores` and `diskTotalGb`.
+
 ## [0.16.2] - 2026-11-17
 
 ### Fixed
@@ -335,7 +342,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.16.2...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.0
 [0.16.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.2
 [0.16.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.1
 [0.16.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.0
