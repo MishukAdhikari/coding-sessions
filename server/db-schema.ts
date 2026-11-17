@@ -179,6 +179,8 @@ export function applyDatabaseSchema(database: Database): void {
   addColumn(database, "ALTER TABLE custom_commands ADD COLUMN token TEXT");
   // Set when a Command was registered from an agent preset (server/agent-presets.ts).
   addColumn(database, "ALTER TABLE custom_commands ADD COLUMN preset TEXT");
+  // opencode registered before it took an OpenCode Go key: give it the key variable its preset now names.
+  database.exec("UPDATE custom_commands SET env_var = 'OPENCODE_API_KEY' WHERE preset = 'opencode' AND (env_var IS NULL OR env_var = '')");
 
   // Secrets (see server/secret-store.ts): named values delivered to every managed
   // session's environment. Values and source credentials are AES-GCM sealed; the

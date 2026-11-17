@@ -94,3 +94,13 @@ test("connector auth migration keeps bearer and anonymous rows working, adds epo
   expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
   database.close();
 });
+
+test("an opencode Command registered before OpenCode Go support gets its key variable", () => {
+  const db = new Database(":memory:");
+  applyDatabaseSchema(db);
+  db.query("INSERT INTO custom_commands (slug, label, bin, args, env_var, preset, created_at) VALUES ('opencode', 'opencode', '/bin/opencode', '[]', NULL, 'opencode', 1)").run();
+  db.query("INSERT INTO custom_commands (slug, label, bin, args, env_var, preset, created_at) VALUES ('mine', 'mine', '/bin/mine', '[]', NULL, NULL, 1)").run();
+  applyDatabaseSchema(db);
+  const rows = db.query("SELECT slug, env_var FROM custom_commands ORDER BY slug").all();
+  expect(rows).toEqual([{ slug: "mine", env_var: null }, { slug: "opencode", env_var: "OPENCODE_API_KEY" }]);
+});

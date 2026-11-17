@@ -7,6 +7,14 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-17
+
+### Added
+- OpenCode Go (and OpenCode Zen) for the opencode preset. Store the subscription's API key
+  from opencode.ai/auth with **Add key** or **Manage token**. Sessions get it as
+  `OPENCODE_API_KEY` and opencode offers the `opencode-go/*` models, without signing in
+  in a terminal. An opencode Command added before this picks up the key variable on its own.
+
 ## [0.19.2] - 2026-11-17
 
 ### Added
@@ -388,7 +396,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.19.2...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.0
 [0.19.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.2
 [0.19.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.1
 [0.19.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.0

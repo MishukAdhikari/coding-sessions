@@ -64,12 +64,13 @@ export const AGENT_PRESETS: readonly AgentPreset[] = [
     loginArgs: [], loginHint: "Starts Qwen Code; type /auth and choose a sign-in method.",
   },
   {
-    id: "opencode", label: "opencode", bin: "opencode", envVar: null, npmPackage: "opencode-ai",
+    // OPENCODE_API_KEY is the key of an OpenCode Go subscription (or OpenCode Zen); opencode reads it for both.
+    id: "opencode", label: "opencode", bin: "opencode", envVar: "OPENCODE_API_KEY", npmPackage: "opencode-ai",
     unrestrictedArgs: ["--auto"],
     mcp: "OPENCODE_CONFIG_CONTENT at launch", homepage: "https://github.com/anomalyco/opencode",
-    notes: "Sign in with `opencode auth login` in the server terminal.",
+    notes: "An OpenCode Go subscription (or OpenCode Zen) works with its API key from opencode.ai/auth: Add key. Other providers sign in with `opencode auth login` in the server terminal.",
     turnState: false,
-    loginArgs: ["auth", "login"], loginHint: "Runs opencode auth login; pick a provider and follow its prompts.",
+    loginArgs: ["auth", "login"], loginHint: "Runs opencode auth login; pick a provider and follow its prompts. For OpenCode Go, Manage token takes the key instead.",
   },
 ];
 
