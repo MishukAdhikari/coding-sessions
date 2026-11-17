@@ -624,9 +624,10 @@
       if (step === "human_check") startLive(); else stopLive();
       start.disabled = step === "starting";
       start.textContent = step === "error" ? "Try again — email me a code"
+        : step === "blocked" ? "Try again later"
         : step === "success" ? "Sign in again" : "Sign in — email me a code";
-      start.classList.toggle("btn-primary", step !== "success");
-      start.classList.toggle("btn-ghost", step === "success");
+      start.classList.toggle("btn-primary", step !== "success" && step !== "blocked");
+      start.classList.toggle("btn-ghost", step === "success" || step === "blocked");
       $("form-browser-code").hidden = !(step === "code_sent" || step === "submitting");
       $("btn-browser-resend").hidden = step !== "code_sent";
       // While the server types the code into claude.ai and waits (~20s), show it is working.
@@ -677,6 +678,11 @@
       } else if (status.state === "error") {
         submittingCode = false;
         browserStep("error", `Failed: ${status.message || "unknown error"}`);
+      } else if (status.state === "blocked") {
+        // claude.ai refused the server's browser: say so, and don't invite another code as if it would work.
+        submittingCode = false;
+        browserStep("blocked", status.message || "claude.ai refused this server's browser.");
+        stopBrowserPoll();
       }
     }
 

@@ -137,3 +137,15 @@ test("a human check shows the live view and replays taps and drags", async () =>
   await t.poll();
   expect(t.$("browser-live").hidden).toBe(true);
 });
+
+test("a browser claude.ai refused is shown as such, without a check to solve or a primary retry", async () => {
+  const t = load({ state: "blocked", email: "owner@example.test", message: "claude.ai refused this server's browser." });
+  t.$("btn-browser-auth").handlers.click!();
+  await t.settle();
+  expect(t.$("browser-wait").textContent).toBe("claude.ai refused this server's browser.");
+  expect(t.$("browser-live").hidden).toBe(true);
+  expect(t.$("form-browser-code").hidden).toBe(true);
+  const start = t.$("btn-browser-start");
+  expect(start.textContent).toBe("Try again later");
+  expect(start.classes.has("btn-primary")).toBe(false);
+});

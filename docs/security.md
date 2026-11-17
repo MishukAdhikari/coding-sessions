@@ -92,7 +92,7 @@ herdr saves each pane's launch command, not its environment, in `session.json` a
 
 ## Optional claude.ai browser integration
 
-The separate chat-management browser login requires an explicit `CAI_EMAIL` and a provisioned Playwright Chromium/Xvfb runtime. The standard installer does not install that optional browser stack. The email is passed only to the login process; no personal account is assumed. Its persistent browser profile is sensitive account state, separate from Claude Code authentication.
+The separate chat-management browser login requires an explicit `CAI_EMAIL` and a provisioned Playwright Chromium/Xvfb runtime. The standard installer does not install that optional browser stack. The email is passed only to the login process; no personal account is assumed. Its persistent browser profile is sensitive account state, separate from Claude Code authentication. claude.ai may refuse an automated browser ("Couldn't verify your browser"). The app then reports it and stops; it does not try to disguise the browser.
 
 ## Existing production deployments
 

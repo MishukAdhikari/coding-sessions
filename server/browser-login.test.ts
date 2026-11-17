@@ -15,3 +15,13 @@ test("optional browser login refuses an unspecified email before browser or netw
     expect(status.message).toBe("Configure CAI_EMAIL before starting browser login.");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test("claude.ai refusing the browser ends the sign-in as blocked, not as an unsolved check", () => {
+  const { pageOutcome } = require("../scripts/browser-login.cjs");
+  const login = "https://claude.ai/login";
+  expect(pageOutcome(login, "If the link shows a verification code instead of signing you in, enter it here. Verify email address Couldn’t verify your browser. Try again.")).toBe("blocked");
+  expect(pageOutcome(login, "Couldn't verify your browser.")).toBe("blocked");
+  expect(pageOutcome(login, "That code is invalid or expired.")).toBe("rejected");
+  expect(pageOutcome(login, "Enter the code we sent you")).toBe("pending");
+  expect(pageOutcome("https://claude.ai/new", "")).toBe("success");
+});

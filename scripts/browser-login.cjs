@@ -38,6 +38,19 @@ async function recordFailure(reason, shot = SHOT_FILE) {
 }
 const CODE_INPUT = 'input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="text"]:visible, input:not([type]):visible';
 const REJECTED = /invalid|incorrect|expired|wrong code/i;
+// claude.ai's answer when it refuses this browser outright: no check is offered, so nothing a
+// person can solve here, and another code would only end the same way.
+const BLOCKED = /couldn['’]t verify your browser/i;
+const BLOCKED_MESSAGE = "claude.ai refused this server's browser (“Couldn't verify your browser”), so it can't sign in from here. "
+  + "Delete chats in Claude yourself for now; your sessions are not affected.";
+
+/** Where the sign-in stands from the page's address and text. Pure, for tests. */
+function pageOutcome(url, text) {
+  if (!url.includes("login")) return "success";
+  if (BLOCKED.test(text)) return "blocked";
+  if (REJECTED.test(text)) return "rejected";
+  return "pending";
+}
 
 let clip = null; // the part of the page the live view shows (the challenge, when found)
 
@@ -154,9 +167,9 @@ async function main() {
   for (let i = 0; outcome === "pending" && Date.now() < deadline; i++) {
     if (humanCheck) { await applyInput(); await liveFrame(); }
     await page.waitForTimeout(humanCheck ? 400 : 1000);
-    if (!page.url().includes("login")) outcome = "success";
-    else if (REJECTED.test(await page.locator("body").innerText({ timeout: 2000 }).catch(() => ""))) outcome = "rejected";
-    else if (!humanCheck && (i >= 8 || page.frames().some((f) => CHALLENGE.test(f.url())))) {
+    outcome = pageOutcome(page.url(), page.url().includes("login") ? await page.locator("body").innerText({ timeout: 2000 }).catch(() => "") : "");
+    if (outcome !== "pending") break;
+    if (!humanCheck && (i >= 8 || page.frames().some((f) => CHALLENGE.test(f.url())))) {
       // A check only a person can answer (or a page that will not move on): hand it to them.
       humanCheck = true;
       try { fs.unlinkSync(INPUT_FILE); } catch {}
@@ -165,6 +178,12 @@ async function main() {
     }
   }
   fs.rmSync(LIVE_FILE, { force: true });
+  if (outcome === "blocked") {
+    await recordFailure("claude.ai refused the browser", path.join(DIR, "after-code.png"));
+    setStatus("blocked", BLOCKED_MESSAGE);
+    await ctx.close();
+    process.exit(1);
+  }
   if (outcome === "pending" && humanCheck) {
     await recordFailure("human check not finished", path.join(DIR, "after-code.png"));
     setStatus("error", "The check wasn't finished in time — try again.");
@@ -194,4 +213,4 @@ if (require.main === module) {
   main().catch(async (e) => { await recordFailure(e.message); setStatus("error", e.message.slice(0, 200)); process.exit(1); });
 }
 // For tests: drive the live view against another page.
-module.exports = { useLivePage: (p) => { page = p; }, liveFrame, applyInput, LIVE_FILE, INPUT_FILE };
+module.exports = { useLivePage: (p) => { page = p; }, liveFrame, applyInput, pageOutcome, LIVE_FILE, INPUT_FILE };
