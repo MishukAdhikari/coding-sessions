@@ -314,6 +314,7 @@ const handoffRouteDeps = {
 };
 
 const mcpDeps: McpDeps = {
+  origin: auth.ORIGIN,
   setup: setupDeps,
   projects: {
     workspacesDir: join(homedir(), "workspaces"),

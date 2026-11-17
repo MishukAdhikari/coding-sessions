@@ -68,6 +68,11 @@ cs list -S lab
 CS_SERVER=lab cs list
 ```
 
+`cs list --all` (or `-A`) lists the running sessions on every saved server at once, each
+row naming its server; a server that does not answer shows as one `unreachable` line.
+`--json` gives `[{server, url, sessions}]`, with `error` in place of `sessions` for a
+server that did not answer.
+
 `cs term` keeps `-S` as its short `--sync`, so pick its server with `--server=<name>`.
 `CS_API`, `CS_TOKEN` and `CS_SSH` still work for a one-off server that is not saved;
 they are ignored when you name a server.
@@ -231,3 +236,8 @@ Each server gets its own MCP connection: `coding-sessions` for the default serve
 `coding-sessions-<name>` for the others. `cs mcp add --server=lab` adds lab's, `cs mcp add
 --all` adds every saved server, and `cs mcp status` shows them all. With `--token`, Codex
 reads a non-default server's token from `$CS_TOKEN_<NAME>`, such as `$CS_TOKEN_LAB`.
+
+A connection keeps its name once added: `cs server use` and `cs server rename` never move
+it to another server, and a new default never takes the name another server already has.
+`cs mcp status` says when a connection points at a different address than its server's.
+With one server nothing changes: it is `coding-sessions`, as before.

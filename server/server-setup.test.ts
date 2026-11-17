@@ -153,6 +153,12 @@ test("doctor passes fix through", async () => {
   expect(calls).toEqual(["doctor true"]);
 });
 
+test("server_status names the server by its public address", async () => {
+  const d = deps(setupDeps().setup);
+  d.origin = "https://lab.example.com";
+  expect((await call(d, "server_status")).structuredContent.server).toEqual({ url: "https://lab.example.com" });
+});
+
 test("tools are unavailable without setup deps", async () => {
   const d = deps(setupDeps().setup);
   delete d.setup;

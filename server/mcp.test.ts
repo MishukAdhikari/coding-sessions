@@ -567,3 +567,9 @@ test("set_session_budget passes the value through for a managed session and repo
   expect(seen).toEqual([["m:cs-demo", "2M"], ["m:cs-demo", 0], ["m:cs-demo", "lots"]]);
   expect((await call(harness().deps, "set_session_budget", { session_id: "m:cs-demo", tokens: 1 })).isError).toBe(true);
 });
+
+test("list_sessions says which server answered, when the app knows its address", async () => {
+  const withOrigin = harness({ origin: "https://lab.example.com" }).deps;
+  expect((await call(withOrigin, "list_sessions", {})).structuredContent.server).toEqual({ url: "https://lab.example.com" });
+  expect((await call(harness().deps, "list_sessions", {})).structuredContent).not.toHaveProperty("server");
+});

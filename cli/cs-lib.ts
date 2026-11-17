@@ -100,6 +100,13 @@ export interface ServerEntry {
   origin?: string;   // server-local API URL used in SSH mode (default http://127.0.0.1:9121)
   cfId?: string;     // Cloudflare Access service-token Client-Id
   cfSecret?: string; // Cloudflare Access service-token Client-Secret
+  mcp?: McpPin;      // the agent connection registered for it (cs mcp add); kept through use and rename
+}
+
+/** A server's agent connection, fixed when it is first registered. */
+export interface McpPin {
+  name: string;      // coding-sessions, or coding-sessions-<server>
+  tokenEnv: string;  // the variable Codex reads its token from: CS_TOKEN, or CS_TOKEN_<SERVER>
 }
 
 export interface ConfigFile {
@@ -151,6 +158,49 @@ export const mcpNameFor = (server: string | undefined, isDefault: boolean) =>
 /** The env var Codex reads a server's token from: CS_TOKEN, or CS_TOKEN_LAB for "lab". */
 export const tokenEnvFor = (server: string | undefined, isDefault: boolean) =>
   isDefault || !server ? "CS_TOKEN" : `CS_TOKEN_${server.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+
+/**
+ * A saved server's agent connection: its pin, else the name it would get now. Only an
+ * unpinned default whose plain name no other server holds gets the plain name, so one
+ * server is always `coding-sessions` and a new default never takes another's. Pure.
+ */
+export function mcpPinFor(file: ConfigFile, server: string): McpPin {
+  const pinned = file.servers[server]?.mcp;
+  if (pinned?.name) return { name: pinned.name, tokenEnv: pinned.tokenEnv || tokenEnvFor(server, pinned.name === MCP_NAME) };
+  const taken = new Set(Object.entries(file.servers).filter(([n]) => n !== server).map(([, e]) => e.mcp?.name).filter(Boolean));
+  const plain = server === file.default && !taken.has(MCP_NAME);
+  let name = mcpNameFor(server, plain);
+  for (let i = 2; taken.has(name); i++) name = `${mcpNameFor(server, false)}-${i}`;
+  return { name, tokenEnv: tokenEnvFor(server, plain) };
+}
+
+/** The address in an agent's listing line ("coding-sessions: https://x/mcp (HTTP) - ✔ Connected"). Pure. */
+export function listedUrl(line: string): string | null {
+  return line.match(/https?:\/\/[^\s)]+/)?.[0]?.replace(/[.,;]+$/, "") ?? null;
+}
+
+const mcpUrl = (api: string) => `${api.replace(/\/$/, "")}/mcp`;
+
+/** Which of our connections in an agent's listing reaches this server, if any. Pure. */
+export function registeredNameFor(listing: string, api: string): string | null {
+  const want = mcpUrl(api);
+  for (const line of listing.split("\n")) {
+    const m = new RegExp(`^\\s*(${MCP_NAME}(?:-[a-z0-9_-]+)?)(?::|\\s)`).exec(line);
+    if (m && listedUrl(line) === want) return m[1]!;
+  }
+  return null;
+}
+
+export type McpState = { state: "present"; line: string } | { state: "missing" } | { state: "elsewhere"; url: string };
+
+/** Whether `name` is registered in an agent's listing, and to this server's address. Pure. */
+export function mcpStateIn(listing: string, name: string, api: string): McpState {
+  const line = mcpListedLine(listing, name);
+  if (!line) return { state: "missing" };
+  const url = listedUrl(line);
+  // An agent that does not print addresses is taken at its word.
+  return url && url !== mcpUrl(api) ? { state: "elsewhere", url } : { state: "present", line };
+}
 
 /** Subcommands that run on a server and take --server=<name> / -S <name> to choose it. */
 export const SERVER_COMMANDS = new Set(["list", "end", "open", "ssh", "term", "attach", "mirror", "doctor", "mcp", "install", "login", "handoff", "live"]);

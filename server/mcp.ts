@@ -39,6 +39,8 @@ Errors come back with isError and structuredContent.error {code, message, next}:
 Bounds: list_sessions returns at most limit sessions (default 50, filter with agent, state or query); read_session and wait_for_session return at most 400 screen lines.`;
 
 export interface McpDeps {
+  /** This app's public address, so an agent with several servers can tell which one answered. */
+  origin?: string;
   accounts?: {
     list(): Promise<Record<string, unknown>>;
     action(provider: unknown, action: unknown, code?: unknown): Promise<Record<string, unknown>>;
@@ -151,6 +153,9 @@ function summarize(s: SessionInfo, turnState: boolean, extras?: SessionExtras) {
   };
 }
 
+/** Which server answered, by its public address: with several servers, one agent sees them all. */
+const serverIdentity = (deps: McpDeps) => (deps.origin ? { server: { url: deps.origin } } : {});
+
 function extrasFor(deps: McpDeps, sessions: SessionInfo[]): Map<string, SessionExtras> {
   try { return deps.sessionExtras?.(sessions) ?? new Map(); } catch { return new Map(); }
 }
@@ -228,7 +233,7 @@ export const TOOLS = [
   {
     name: "list_sessions",
     title: "List sessions",
-    description: "Live sessions with each one's id, agent, mode (terminal or acp), state, folder, PR links found in its conversation (prs, with GitHub state) and the secret/connector requests it waits on (pending_requests), plus the server's CPU, memory and free disk. Filter by agent, state or a name query; at most limit sessions (total says how many matched). include_ended adds archived (ended) sessions that resume_session can reopen.",
+    description: "Live sessions with each one's id, agent, mode (terminal or acp), state, folder, PR links found in its conversation (prs, with GitHub state) and the secret/connector requests it waits on (pending_requests), plus the server's CPU, memory and free disk, and server.url (which server answered, for agents that drive several). Filter by agent, state or a name query; at most limit sessions (total says how many matched). include_ended adds archived (ended) sessions that resume_session can reopen.",
     inputSchema: { type: "object", properties: {
       include_ended: { type: "boolean", description: "Also list archived sessions. Default false." },
       agent: { type: "string", description: "Only this agent: claude, codex, command-code or cmd:<slug>." },
@@ -699,7 +704,7 @@ async function setupTool(deps: McpDeps, name: string, args: Record<string, unkno
   if (!setup) return fail("Server setup tools are unavailable on this server.", "unavailable");
   switch (name) {
     case "server_status":
-      return ok(await serverStatus(deps, setup));
+      return ok({ ...serverIdentity(deps), ...await serverStatus(deps, setup) });
     case "setup_agents": {
       let started: InstallJob | null = null;
       if (args.agents !== undefined && args.agents !== null) {
@@ -763,7 +768,7 @@ export async function callTool(deps: McpDeps, name: string, args: Record<string,
       const page = matched.slice(0, limit).map(({ s }) => s);
       const extras = extrasFor(deps, page);
       const sessions = page.map((s) => summarize(s, turnStateFor(deps, s.provider), extras.get(s.id) ?? { prs: [], requests: [] }));
-      const data: Record<string, unknown> = { sessions, total: matched.length, truncated: matched.length > page.length, host: deps.hostStats() };
+      const data: Record<string, unknown> = { ...serverIdentity(deps), sessions, total: matched.length, truncated: matched.length > page.length, host: deps.hostStats() };
       if (args.include_ended === true) {
         const ended = deps.listArchive()
           .filter((a) => (!agent || a.provider === agent) && (!q || a.name.toLowerCase().includes(q) || (a.project ?? "").toLowerCase().includes(q)));

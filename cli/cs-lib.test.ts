@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findSession, fmtDur, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig, parseServerArgs, prettyProject, RUN, rsyncIgnoredExcludes, rsyncWorkTreeArgs, sanitizeName, serverNameFromUrl, shq, tokenEnvFor } from "./cs-lib";
+import { findSession, fmtDur, listedUrl, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpPinFor, mcpRemoveCommand, mcpStateIn, registeredNameFor, migrateConfig, parseServerArgs, prettyProject, RUN, rsyncIgnoredExcludes, rsyncWorkTreeArgs, sanitizeName, serverNameFromUrl, shq, tokenEnvFor } from "./cs-lib";
 
 test("session names follow the server's rule", () => {
   expect(sanitizeName("feature/Fix login!!")).toBe("feature-Fix-login");
@@ -197,4 +197,52 @@ test("the upload starts at the repo's top level and never sends a linked worktre
 
 test("ignored paths become anchored literal rsync patterns", () => {
   expect(rsyncIgnoredExcludes("build/\0a*b[1]?.log\0two\nlines\0\0")).toBe("/build/\n/a[*]b[[]1][?].log\n/two?lines\n");
+});
+
+test("one server is always coding-sessions, as before", () => {
+  const file = { servers: { personal: { api: "https://p.example.com", token: "t", ssh: "" } }, default: "personal" };
+  expect(mcpPinFor(file, "personal")).toEqual({ name: "coding-sessions", tokenEnv: "CS_TOKEN" });
+});
+
+test("a pinned connection does not move when the default changes or the server is renamed", () => {
+  const file: any = { servers: {
+    personal: { api: "https://p.example.com", token: "t", ssh: "", mcp: { name: "coding-sessions", tokenEnv: "CS_TOKEN" } },
+    lab: { api: "https://lab.example.com", token: "t", ssh: "", mcp: { name: "coding-sessions-lab", tokenEnv: "CS_TOKEN_LAB" } },
+  }, default: "lab" };
+  expect(mcpPinFor(file, "personal").name).toBe("coding-sessions");
+  expect(mcpPinFor(file, "lab").name).toBe("coding-sessions-lab");
+  file.servers.work = file.servers.lab; delete file.servers.lab; file.default = "work";
+  expect(mcpPinFor(file, "work")).toEqual({ name: "coding-sessions-lab", tokenEnv: "CS_TOKEN_LAB" });
+});
+
+test("a new default never takes a name another server holds", () => {
+  const file: any = { servers: {
+    personal: { api: "https://p.example.com", token: "t", ssh: "", mcp: { name: "coding-sessions", tokenEnv: "CS_TOKEN" } },
+    lab: { api: "https://lab.example.com", token: "t", ssh: "" },
+  }, default: "lab" };
+  expect(mcpPinFor(file, "lab")).toEqual({ name: "coding-sessions-lab", tokenEnv: "CS_TOKEN_LAB" });
+  file.servers.old = { api: "https://o", token: "", ssh: "", mcp: { name: "coding-sessions-lab", tokenEnv: "CS_TOKEN_LAB" } };
+  expect(mcpPinFor(file, "lab").name).toBe("coding-sessions-lab-2");
+});
+
+const LISTING = [
+  "Checking MCP server health…",
+  "",
+  "coding-sessions: https://p.example.com/mcp (HTTP) - ✔ Connected",
+  "coding-sessions-lab: https://lab.example.com/mcp (HTTP) - ! Needs authentication",
+  "other: https://x.example.com/mcp (HTTP) - ✔ Connected",
+].join("\n");
+
+test("a connection added before pins existed is found by its address", () => {
+  expect(listedUrl("coding-sessions: https://p.example.com/mcp (HTTP) - ✔ Connected")).toBe("https://p.example.com/mcp");
+  expect(registeredNameFor(LISTING, "https://p.example.com")).toBe("coding-sessions");
+  expect(registeredNameFor(LISTING, "https://lab.example.com/")).toBe("coding-sessions-lab");
+  expect(registeredNameFor(LISTING, "https://x.example.com")).toBeNull();
+});
+
+test("status tells present, missing and pointing at another server apart", () => {
+  expect(mcpStateIn(LISTING, "coding-sessions", "https://p.example.com").state).toBe("present");
+  expect(mcpStateIn(LISTING, "coding-sessions-new", "https://n.example.com").state).toBe("missing");
+  expect(mcpStateIn(LISTING, "coding-sessions", "https://lab.example.com")).toEqual({ state: "elsewhere", url: "https://p.example.com/mcp" });
+  expect(mcpStateIn("coding-sessions  enabled", "coding-sessions", "https://p.example.com").state).toBe("present");
 });
