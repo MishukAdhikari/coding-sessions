@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findSession, fmtDur, listedUrl, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpPinFor, mcpRemoveCommand, mcpStateIn, registeredNameFor, migrateConfig, parseServerArgs, prettyProject, RUN, rsyncIgnoredExcludes, rsyncWorkTreeArgs, sanitizeName, serverNameFromUrl, shq, tokenEnvFor } from "./cs-lib";
+import { findSession, fmtDur, listedUrl, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpPinFor, mcpRemoveCommand, mcpStateIn, registeredNameFor, registeredNames, migrateConfig, parseServerArgs, prettyProject, RUN, rsyncIgnoredExcludes, rsyncWorkTreeArgs, sanitizeName, serverNameFromUrl, shq, tokenEnvFor } from "./cs-lib";
 
 test("session names follow the server's rule", () => {
   expect(sanitizeName("feature/Fix login!!")).toBe("feature-Fix-login");
@@ -245,4 +245,13 @@ test("status tells present, missing and pointing at another server apart", () =>
   expect(mcpStateIn(LISTING, "coding-sessions-new", "https://n.example.com").state).toBe("missing");
   expect(mcpStateIn(LISTING, "coding-sessions", "https://lab.example.com")).toEqual({ state: "elsewhere", url: "https://p.example.com/mcp" });
   expect(mcpStateIn("coding-sessions  enabled", "coding-sessions", "https://p.example.com").state).toBe("present");
+});
+
+test("a name registered to another saved server is taken; a stale address is not", () => {
+  expect(registeredNames(LISTING, ["https://lab.example.com"])).toEqual(["coding-sessions-lab"]);
+  expect(registeredNames(LISTING, ["https://moved.example.com"])).toEqual([]);
+  const file = { servers: { lab: { api: "https://lab.example.com", token: "", ssh: "" }, personal: { api: "https://p.example.com", token: "", ssh: "" } }, default: "lab" };
+  expect(mcpPinFor(file, "lab", registeredNames(LISTING, ["https://p.example.com"])).name).toBe("coding-sessions-lab");
+  const one = { servers: { personal: { api: "https://moved.example.com", token: "", ssh: "" } }, default: "personal" };
+  expect(mcpPinFor(one, "personal", registeredNames(LISTING, [])).name).toBe("coding-sessions");
 });

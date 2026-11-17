@@ -164,10 +164,11 @@ export const tokenEnvFor = (server: string | undefined, isDefault: boolean) =>
  * unpinned default whose plain name no other server holds gets the plain name, so one
  * server is always `coding-sessions` and a new default never takes another's. Pure.
  */
-export function mcpPinFor(file: ConfigFile, server: string): McpPin {
+export function mcpPinFor(file: ConfigFile, server: string, inUse: Iterable<string> = []): McpPin {
   const pinned = file.servers[server]?.mcp;
   if (pinned?.name) return { name: pinned.name, tokenEnv: pinned.tokenEnv || tokenEnvFor(server, pinned.name === MCP_NAME) };
-  const taken = new Set(Object.entries(file.servers).filter(([n]) => n !== server).map(([, e]) => e.mcp?.name).filter(Boolean));
+  // Names other servers hold, and names an agent already uses for another address.
+  const taken = new Set([...Object.entries(file.servers).filter(([n]) => n !== server).map(([, e]) => e.mcp?.name).filter(Boolean), ...inUse]);
   const plain = server === file.default && !taken.has(MCP_NAME);
   let name = mcpNameFor(server, plain);
   for (let i = 2; taken.has(name); i++) name = `${mcpNameFor(server, false)}-${i}`;
@@ -181,11 +182,21 @@ export function listedUrl(line: string): string | null {
 
 const mcpUrl = (api: string) => `${api.replace(/\/$/, "")}/mcp`;
 
+const OUR_NAME = new RegExp(`^\\s*(${MCP_NAME}(?:-[a-z0-9_-]+)?)(?::|\\s)`);
+
+/** Our connection names in an agent's listing that reach one of `apis` (other saved servers). Pure. */
+export function registeredNames(listing: string, apis: Iterable<string>): string[] {
+  const urls = new Set([...apis].map(mcpUrl));
+  return listing.split("\n")
+    .filter((line) => { const url = listedUrl(line); return !!url && urls.has(url); })
+    .map((line) => OUR_NAME.exec(line)?.[1]).filter((n): n is string => !!n);
+}
+
 /** Which of our connections in an agent's listing reaches this server, if any. Pure. */
 export function registeredNameFor(listing: string, api: string): string | null {
   const want = mcpUrl(api);
   for (const line of listing.split("\n")) {
-    const m = new RegExp(`^\\s*(${MCP_NAME}(?:-[a-z0-9_-]+)?)(?::|\\s)`).exec(line);
+    const m = OUR_NAME.exec(line);
     if (m && listedUrl(line) === want) return m[1]!;
   }
   return null;

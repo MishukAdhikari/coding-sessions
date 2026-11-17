@@ -13,7 +13,7 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
 import {
   rsyncIgnoredExcludes, rsyncWorkTreeArgs, claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
   findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpNameFor, mcpPinFor, mcpRemoveCommand, mcpStateIn, migrateConfig,
-  registeredNameFor, MCP_NAME, type McpPin,
+  mcpListedLine, registeredNameFor, registeredNames, MCP_NAME, type McpPin,
   parseServerArgs, prettyProject, RUN, renderLiveFrame, newLiveRenderState, liveBackoffMs, liveSocketUrl, type LiveFrame, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
@@ -172,7 +172,7 @@ async function sshApiRequest(cfg: Config, method: string, path: string, body: st
   return handleStatus(cfg, status, data);
 }
 
-async function api(cfg: Config, path: string, init?: RequestInit): Promise<any> {
+async function api(cfg: Config, path: string, init?: RequestInit & { timeoutMs?: number }): Promise<any> {
   // Precondition failures throw (not die) so callers like `doctor` can catch
   // and report them; the dispatch loop renders thrown errors the same way.
   if (!cfg.token) throw new Error(cfg.api || cfg.name ? `no token for ${serverLabel(cfg)} — run \`cs server add ${cfg.name || "<name>"} ${cfg.api || "<url>"}\`.` : "no server configured — run `cs server add <name> <url>`.");
@@ -313,14 +313,17 @@ async function cmdListAll(args: string[]): Promise<void> {
   if (!names.length) die("no servers yet — run `cs server add <name> <url>` first.");
   const results = await Promise.all(names.map(async (name) => {
     const cfg = resolveServer(file, name);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const { sessions } = await Promise.race([
-        api(cfg, "/api/sessions"),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("no answer in 15 s")), 15_000)),
+        api(cfg, "/api/sessions", { timeoutMs: 15_000 }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("no answer in 15 s")), 15_000); }),
       ]);
       return { server: name, url: cfg.api, sessions: (sessions as any[]).filter((s) => s.status === "running") };
     } catch (e) {
       return { server: name, url: cfg.api, error: (e as Error).message || "unreachable" };
+    } finally {
+      clearTimeout(timer);
     }
   }));
   if (args.includes("--json")) console.log(JSON.stringify(results, null, 2));
@@ -339,7 +342,8 @@ async function cmdListAll(args: string[]): Promise<void> {
       }
     }
   }
-  if (results.every((r) => r.error)) process.exit(1);
+  // An SSH request that never answers would keep the process alive after the list printed.
+  process.exit(results.every((r) => r.error) ? 1 : 0);
 }
 
 async function cmdList(cfg: Config, args: string[] = []): Promise<void> {
@@ -1125,14 +1129,21 @@ async function cmdMcp(cfg: () => Config, args: string[]): Promise<void> {
       return { name: mcpNameFor(undefined, true), tokenEnv: tokenEnvFor(undefined, true) };
     }
     if (file.servers[server.name]!.mcp?.name) return mcpPinFor(file, server.name);
+    const claimed = new Set(Object.entries(file.servers).filter(([n]) => n !== server.name).map(([, e]) => e.mcp?.name).filter(Boolean));
+    const inUse = new Set<string>();
     if (adopt) {
       for (const c of clients) {
         if (!installed(c)) continue;
         const found = registeredNameFor(listing(c), server.api);
-        if (found) return pin(server.name, { name: found, tokenEnv: found === MCP_NAME ? tokenEnvFor(undefined, true) : tokenEnvFor(server.name, false) });
+        // A name another server already holds stays that server's, even if it was re-pointed.
+        if (found && !claimed.has(found)) return pin(server.name, { name: found, tokenEnv: found === MCP_NAME ? tokenEnvFor(undefined, true) : tokenEnvFor(server.name, false) });
+        // A connection registered before pins to another saved server is that server's; a stale
+        // address no saved server has (a single server that moved) is re-pointed as before.
+        const others = Object.entries(file.servers).filter(([n]) => n !== server.name).map(([, e]) => e.api);
+        for (const n of registeredNames(listing(c), others)) inUse.add(n);
       }
     }
-    return mcpPinFor(file, server.name);
+    return mcpPinFor(file, server.name, inUse);
   };
   let dirty = false;
   const pin = (name: string, p: McpPin): McpPin => {
@@ -1160,6 +1171,7 @@ async function cmdMcp(cfg: () => Config, args: string[]): Promise<void> {
           : c === "claude" ? `Added. In Claude Code run /mcp → ${name} → Authenticate once.` : `Added ${name}. Codex opens a browser to sign in the first time it connects.`);
       }
       if (added && server.name) pin(server.name, { name, tokenEnv });
+      if (dirty) { saveConfigFile(file); dirty = false; }
     }
     if (dirty) saveConfigFile(file);
     return;
@@ -1172,10 +1184,15 @@ async function cmdMcp(cfg: () => Config, args: string[]): Promise<void> {
   }
   if (action === "status") {
     // Every saved server, so a second one's connection shows up next to the default's.
-    const servers: Config[] = Object.keys(file.servers).length
-      ? Object.keys(file.servers).map((n) => resolveServer(file, n))
-      : (() => { try { return [cfg()]; } catch { return []; } })();
-    if (!servers.length) { console.log(`No servers yet. Add one: cs server add <name> <url>`); return; }
+    const servers: Config[] = Object.keys(file.servers).map((n) => resolveServer(file, n));
+    if (!servers.length) {
+      // No saved server (an ad-hoc CS_API one, or none yet): the plain connection, as it always was.
+      for (const c of clients) {
+        if (!installed(c)) { console.log(`${c}: not installed`); continue; }
+        console.log(`${c}: ${mcpListedLine(listing(c), MCP_NAME) ?? `${MCP_NAME} not set up — run \`cs mcp add ${c}\``}`);
+      }
+      return;
+    }
     for (const c of clients) {
       if (!installed(c)) { console.log(`${c}: not installed`); continue; }
       for (const server of servers) {
