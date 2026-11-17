@@ -490,3 +490,119 @@ export function liveSocketUrl(api: string, id: string, after: number | null): st
   const base = api.replace(/\/+$/, "").replace(/^http/i, "ws");
   return `${base}/api/sessions/${encodeURIComponent(id)}/live${after !== null ? `?after=${after}` : ""}`;
 }
+
+/* ---------- cs live --all: one board of every session on every saved server ---------- */
+
+export type BoardGroup = "needs" | "cooking" | "idle";
+
+export interface BoardItem {
+  server: string;
+  name: string;
+  activity: string;          // the server's own activity word (running, waiting, finished, …)
+  uptimeSec: number | null;
+  prs: string[];             // "#42", or "owner/repo#42" when the board spans several repos
+  summary: { kind: "ask" | "message" | "tool" | "none"; text: string };
+}
+
+/** Which group a session belongs to: it needs you, it is working, or it is idle. Pure. */
+export function boardGroup(activity: string, asking = false): BoardGroup {
+  if (asking || activity === "waiting") return "needs";
+  if (activity === "running" || activity === "starting") return "cooking";
+  return "idle";
+}
+
+/** Agent text as one plain line: no code blocks, emphasis, headings, bullets or link targets. Pure. */
+export function plainText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/^\s*\|.*$/gm, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The first `n` sentences, cut at about `max` characters on a word with a real ellipsis. Pure. */
+export function firstSentences(text: string, n = 2, max = 200): string {
+  // A sentence ends at . ! or ? followed by a space; a dot inside a URL or a version is not an end.
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  let out = sentences.slice(0, n).join(" ").replace(/\s+/g, " ").trim();
+  if (out.length > max) {
+    const cut = out.slice(0, max - 1);
+    const space = cut.lastIndexOf(" ");
+    out = `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.]+$/, "")}…`;
+  }
+  return out;
+}
+
+/** What a session is about, from its newest live frames: its question, else its last reply, else its last tool call. Pure. */
+export function boardSummary(frames: LiveFrame[], activity: string, asking = false): BoardItem["summary"] {
+  const last = (type: string, role?: string) => [...frames].reverse().find((f) => f.type === type && (!role || f.role === role));
+  if (boardGroup(activity, asking) === "needs") {
+    const ask = last("ask");
+    return { kind: "ask", text: firstSentences(plainText(String(ask?.text ?? "the agent is waiting for your answer")), 2, 200) };
+  }
+  const message = last("message", "assistant");
+  const text = message ? plainText(String(message.text ?? "")) : "";
+  if (text) return { kind: "message", text: firstSentences(text, 2, 200) };
+  const tool = last("tool");
+  if (tool) return { kind: "tool", text: `working: ${firstSentences(plainText(String(tool.text ?? "")), 1, 180)}` };
+  return { kind: "none", text: "no messages yet" };
+}
+
+/** Words wrapped to `width` columns, every line indented. Pure. */
+export function wrapIndented(text: string, width = 80, indent = "    "): string {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if (line && indent.length + line.length + 1 + word.length > width) { lines.push(line); line = word; }
+    else line = line ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(line);
+  return lines.map((l) => indent + l).join("\n");
+}
+
+const GROUP_TITLE: Record<BoardGroup, string> = { needs: "Needs you", cooking: "Cooking", idle: "Idle" };
+
+/** The whole board as text: three groups, a row and a summary per session, and a footer. Pure. */
+export function renderBoard(items: BoardItem[], unreachable: Array<{ server: string; error: string }>, color = false, width = 80): string {
+  const c = (s: string, code: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
+  const dot: Record<BoardGroup, string> = { needs: c("●", "33"), cooking: c("●", "32"), idle: c("○", "90") };
+  const groups: Record<BoardGroup, BoardItem[]> = { needs: [], cooking: [], idle: [] };
+  for (const item of items) groups[boardGroup(item.activity, item.summary.kind === "ask")].push(item);
+  const out: string[] = [];
+  for (const g of ["needs", "cooking", "idle"] as BoardGroup[]) {
+    if (!groups[g].length) continue;
+    out.push(c(GROUP_TITLE[g], "1"));
+    for (const item of groups[g]) {
+      const meta = [item.server, item.uptimeSec ? fmtDur(item.uptimeSec) : null, ...item.prs].filter(Boolean).join(" · ");
+      out.push(`${dot[g]} ${item.name}  ${c(meta, "2")}`);
+      const summary = wrapIndented(item.summary.text, width, "  ");
+      out.push(item.summary.kind === "none" ? c(summary, "2") : summary);
+    }
+    out.push("");
+  }
+  if (!items.length) out.push(c("Nothing running.", "2"), "");
+  for (const u of unreachable) out.push(`${c("×", "31")} ${u.server}  ${c(`unreachable: ${u.error}`, "2")}`);
+  if (unreachable.length) out.push("");
+  out.push(`${GROUP_TITLE.needs} ${groups.needs.length} · ${GROUP_TITLE.cooking} ${groups.cooking.length} · ${GROUP_TITLE.idle} ${groups.idle.length}`
+    + (unreachable.length ? ` · ${unreachable.length} unreachable` : ""));
+  return out.join("\n");
+}
+
+/**
+ * A row's PR label: its newest PR, "#42" when every PR on the board is in one repo, else
+ * "repo#42", and "+N" for the rest. `prs` is newest first. Pure.
+ */
+export function prLabels(prs: Array<{ repo?: string; number?: number }>, oneRepo: boolean): string[] {
+  const valid = prs.filter((p) => Number.isInteger(p.number));
+  if (!valid.length) return [];
+  const p = valid[0]!;
+  const label = oneRepo || !p.repo ? `#${p.number}` : `${p.repo.split("/").pop()}#${p.number}`;
+  return valid.length > 1 ? [label, `+${valid.length - 1}`] : [label];
+}
