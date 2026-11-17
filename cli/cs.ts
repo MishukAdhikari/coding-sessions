@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   rsyncIgnoredExcludes, rsyncWorkTreeArgs, claudeProjectDir, findClaudeTranscript, fmtBytes, handoffReceiveCommand, parseHandoffArgs, symlinkedTranscripts,
-  findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpListedLine, mcpNameFor, mcpRemoveCommand, migrateConfig,
+  findSession, fmtDur, isServerName, makeMouseStripper, mcpAddCommand, mcpNameFor, mcpPinFor, mcpRemoveCommand, mcpStateIn, migrateConfig,
+  mcpListedLine, registeredNameFor, registeredNames, MCP_NAME, type McpPin,
   parseServerArgs, prettyProject, RUN, renderLiveFrame, newLiveRenderState, liveBackoffMs, liveSocketUrl, type LiveFrame, sanitizeName, serverNameFromUrl, shq, tokenEnvFor,
   type ConfigFile, type McpClient, type ServerEntry,
 } from "./cs-lib";
@@ -171,7 +172,7 @@ async function sshApiRequest(cfg: Config, method: string, path: string, body: st
   return handleStatus(cfg, status, data);
 }
 
-async function api(cfg: Config, path: string, init?: RequestInit): Promise<any> {
+async function api(cfg: Config, path: string, init?: RequestInit & { timeoutMs?: number }): Promise<any> {
   // Precondition failures throw (not die) so callers like `doctor` can catch
   // and report them; the dispatch loop renders thrown errors the same way.
   if (!cfg.token) throw new Error(cfg.api || cfg.name ? `no token for ${serverLabel(cfg)} — run \`cs server add ${cfg.name || "<name>"} ${cfg.api || "<url>"}\`.` : "no server configured — run `cs server add <name> <url>`.");
@@ -303,6 +304,47 @@ async function waitAndJoin(cfg: Config, session: string): Promise<void> {
 }
 
 /* ---------- commands ---------- */
+
+/** `cs list --all`: every saved server at once, each row naming its server. A server that
+ *  doesn't answer is one line; the command fails only when none answered. */
+async function cmdListAll(args: string[]): Promise<void> {
+  const file = loadConfigFile();
+  const names = Object.keys(file.servers);
+  if (!names.length) die("no servers yet — run `cs server add <name> <url>` first.");
+  const results = await Promise.all(names.map(async (name) => {
+    const cfg = resolveServer(file, name);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const { sessions } = await Promise.race([
+        api(cfg, "/api/sessions", { timeoutMs: 15_000 }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("no answer in 15 s")), 15_000); }),
+      ]);
+      return { server: name, url: cfg.api, sessions: (sessions as any[]).filter((s) => s.status === "running") };
+    } catch (e) {
+      return { server: name, url: cfg.api, error: (e as Error).message || "unreachable" };
+    } finally {
+      clearTimeout(timer);
+    }
+  }));
+  if (args.includes("--json")) console.log(JSON.stringify(results, null, 2));
+  else {
+    const width = Math.max(...names.map((n) => n.length));
+    const total = results.reduce((n, r) => n + (r.sessions?.length ?? 0), 0);
+    console.log(`${total} running on ${names.length} server${names.length === 1 ? "" : "s"}:\n`);
+    for (const r of results) {
+      const tag = paint(r.server.padEnd(width), "36");
+      if (r.error) { console.log(`${paint("×", "31")} ${tag}  ${paint(`unreachable: ${r.error}`, "2")}`); continue; }
+      if (!r.sessions!.length) { console.log(`  ${tag}  ${paint("nothing running", "2")}`); continue; }
+      for (const s of r.sessions!) {
+        const dot = s.active ? paint("●", "32") : paint("○", "90");
+        const bits = [s.model, s.uptimeSec ? fmtDur(s.uptimeSec) : null, prettyProject(s)].filter(Boolean);
+        console.log(`${dot} ${tag}  ${s.name}\n  ${" ".repeat(width)}  ${paint(bits.join("  ·  "), "2")}`);
+      }
+    }
+  }
+  // An SSH request that never answers would keep the process alive after the list printed.
+  process.exit(results.every((r) => r.error) ? 1 : 0);
+}
 
 async function cmdList(cfg: Config, args: string[] = []): Promise<void> {
   const { sessions } = await api(cfg, "/api/sessions");
@@ -854,7 +896,7 @@ async function cmdLogin(chosen: string | undefined): Promise<void> {
     cfId = prompt(`  CF Access service-token Client-Id [${prev.cfId ? "keep existing" : "none"}]:`) || cfId;
     cfSecret = prompt(`  CF Access service-token Client-Secret [${prev.cfSecret ? "keep existing" : "none"}]:`) || cfSecret;
   }
-  const entry: ServerEntry = { api: apiUrl, token: "", ssh, sshApi, cfId, cfSecret, ...(prev.origin ? { origin: prev.origin } : {}) };
+  const entry: ServerEntry = { api: apiUrl, token: "", ssh, sshApi, cfId, cfSecret, ...(prev.origin ? { origin: prev.origin } : {}), ...(prev.mcp ? { mcp: prev.mcp } : {}) };
   entry.token = tokenAns || (prev.token && prev.api === apiUrl ? prev.token : "")
     || await browserSignIn({ ...entry, name, origin: entry.origin || DEFAULT_ORIGIN });
   await saveServer(name, entry, false);
@@ -1070,11 +1112,45 @@ async function cmdMcp(cfg: () => Config, args: string[]): Promise<void> {
   const clients: McpClient[] = client ? [client] : ["claude", "codex"];
   if (client && client !== "claude" && client !== "codex") die("choose claude or codex, e.g. `cs mcp add claude`");
   const installed = (bin: string) => capture(["bash", "-lc", `command -v ${bin}`]).code === 0;
-  // One MCP connection per server: `coding-sessions` for the default, `coding-sessions-<name>` for the rest.
+  // One MCP connection per server, named once and kept: `coding-sessions` for the server that was the
+  // default when it was first added, `coding-sessions-<name>` for the others (see mcpPinFor).
   const file = loadConfigFile();
   const targets = (): Config[] => all
     ? Object.keys(file.servers).map((n) => resolveServer(file, n))
     : [cfg()];
+  const listings = new Map<McpClient, string>();
+  const listing = (c: McpClient) => {
+    if (!listings.has(c)) listings.set(c, capture([c, "mcp", "list"]).out);
+    return listings.get(c)!;
+  };
+  // A saved server's pin; a connection added before pins existed is found by its address and kept.
+  const pinFor = (server: Config, adopt: boolean): McpPin => {
+    if (!server.name || !file.servers[server.name]) {
+      return { name: mcpNameFor(undefined, true), tokenEnv: tokenEnvFor(undefined, true) };
+    }
+    if (file.servers[server.name]!.mcp?.name) return mcpPinFor(file, server.name);
+    const claimed = new Set(Object.entries(file.servers).filter(([n]) => n !== server.name).map(([, e]) => e.mcp?.name).filter(Boolean));
+    const inUse = new Set<string>();
+    if (adopt) {
+      for (const c of clients) {
+        if (!installed(c)) continue;
+        const found = registeredNameFor(listing(c), server.api);
+        // A name another server already holds stays that server's, even if it was re-pointed.
+        if (found && !claimed.has(found)) return pin(server.name, { name: found, tokenEnv: found === MCP_NAME ? tokenEnvFor(undefined, true) : tokenEnvFor(server.name, false) });
+        // A connection registered before pins to another saved server is that server's; a stale
+        // address no saved server has (a single server that moved) is re-pointed as before.
+        const others = Object.entries(file.servers).filter(([n]) => n !== server.name).map(([, e]) => e.api);
+        for (const n of registeredNames(listing(c), others)) inUse.add(n);
+      }
+    }
+    return mcpPinFor(file, server.name, inUse);
+  };
+  let dirty = false;
+  const pin = (name: string, p: McpPin): McpPin => {
+    const entry = file.servers[name];
+    if (entry && (entry.mcp?.name !== p.name || entry.mcp?.tokenEnv !== p.tokenEnv)) { entry.mcp = p; dirty = true; }
+    return p;
+  };
 
   if (action === "add") {
     const list = targets();
@@ -1082,40 +1158,55 @@ async function cmdMcp(cfg: () => Config, args: string[]): Promise<void> {
     for (const server of list) {
       if (!server.api) die("no server configured — run `cs server add <name> <url>` first.");
       if (withToken && !server.token) die(`--token needs a CLI token for ${serverLabel(server)} — run \`cs server add\` first.`);
-      const name = mcpNameFor(server.name, server.isDefault ?? !server.name);
-      const tokenEnv = tokenEnvFor(server.name, server.isDefault ?? !server.name);
+      const { name, tokenEnv } = pinFor(server, true);
+      let added = false;
       for (const c of clients) {
         if (!installed(c)) { if (client) die(`\`${c}\` is not installed here.`); continue; }
         const cmd = mcpAddCommand(c, server.api, { name, tokenEnv, withToken: withToken ? server.token : undefined });
         console.log(paint(`$ ${cmd.map((a) => a.startsWith("Authorization:") ? "'Authorization: Bearer •••'" : a).join(" ")}`, "2"));
         if (run(cmd) !== 0) die(`could not add the MCP server to ${c}.`);
+        added = true;
         console.log(withToken
           ? c === "codex" ? `Added ${name} to Codex. Export the token before starting Codex:  export ${tokenEnv}=…` : `Added ${name} to Claude Code with your CLI token.`
           : c === "claude" ? `Added. In Claude Code run /mcp → ${name} → Authenticate once.` : `Added ${name}. Codex opens a browser to sign in the first time it connects.`);
       }
+      if (added && server.name) pin(server.name, { name, tokenEnv });
+      if (dirty) { saveConfigFile(file); dirty = false; }
     }
+    if (dirty) saveConfigFile(file);
     return;
   }
   if (action === "remove") {
     const explicit = args.find((a, i) => i > 1 && !a.startsWith("-"));
-    const names = explicit ? [explicit] : targets().map((t) => mcpNameFor(t.name, t.isDefault ?? !t.name));
+    const names = explicit ? [explicit] : targets().map((t) => pinFor(t, true).name);
     for (const c of clients) if (installed(c)) for (const name of names) run(mcpRemoveCommand(c, name));
     return;
   }
   if (action === "status") {
     // Every saved server, so a second one's connection shows up next to the default's.
-    const names = Object.keys(file.servers).length
-      ? Object.keys(file.servers).map((n) => ({ server: n, mcp: mcpNameFor(n, n === file.default) }))
-      : [{ server: "", mcp: mcpNameFor(undefined, true) }];
+    const servers: Config[] = Object.keys(file.servers).map((n) => resolveServer(file, n));
+    if (!servers.length) {
+      // No saved server (an ad-hoc CS_API one, or none yet): the plain connection, as it always was.
+      for (const c of clients) {
+        if (!installed(c)) { console.log(`${c}: not installed`); continue; }
+        console.log(`${c}: ${mcpListedLine(listing(c), MCP_NAME) ?? `${MCP_NAME} not set up — run \`cs mcp add ${c}\``}`);
+      }
+      return;
+    }
     for (const c of clients) {
       if (!installed(c)) { console.log(`${c}: not installed`); continue; }
-      const listed = capture([c, "mcp", "list"]).out;
-      for (const { server, mcp } of names) {
-        const line = mcpListedLine(listed, mcp);
-        const hint = server && server !== file.default ? `cs mcp add ${c} --server=${server}` : `cs mcp add ${c}`;
-        console.log(`${c}: ${line ?? `${mcp} not set up — run \`${hint}\``}`);
+      for (const server of servers) {
+        const { name } = pinFor(server, true);
+        // Named only with several servers: one server's status reads exactly as it always has.
+        const label = servers.length > 1 && server.name ? `${server.name} → ` : "";
+        const hint = server.name && server.name !== file.default ? `cs mcp add ${c} --server=${server.name}` : `cs mcp add ${c}`;
+        const st = mcpStateIn(listing(c), name, server.api);
+        console.log(`${c}: ${label}${st.state === "present" ? st.line
+          : st.state === "elsewhere" ? `${name} points at ${st.url}, not ${server.api}/mcp — run \`${hint}\``
+          : `${name} not set up — run \`${hint}\``}`);
       }
     }
+    if (dirty) saveConfigFile(file);
     return;
   }
   const shown = (() => { try { return cfg().api; } catch { return ""; } })();
@@ -1195,6 +1286,7 @@ USAGE
                                    --full, --compact or --lean (default: by size), --agent claude
 
   cs list [--json]               list sessions running on the server
+  cs list --all [--json]         …on every saved server at once (also -A)
   cs end <name> [-y]             end a running session (-y skips the confirm)
   cs open [name]                 print, open, and copy the claude.ai link
   cs ssh [name]                  shell on the server (in the session's workspace)
@@ -1229,7 +1321,7 @@ const cfg = (): Config => (resolved ??= resolveServer(loadConfigFile(), chosenSe
 
 try {
   switch (sub) {
-    case "list": await cmdList(cfg(), args); break;
+    case "list": if (args.includes("--all") || args.includes("-A")) await cmdListAll(args); else await cmdList(cfg(), args); break;
     case "end": await cmdEnd(cfg(), args); break;
     case "open": await cmdOpen(cfg(), args[0]); break;
     case "ssh": await cmdSsh(cfg(), args[0]); break;

@@ -7,6 +7,22 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-17
+
+### Added
+- `cs list --all` (`-A`): running sessions on every saved server in one list, each row
+  naming its server; a server that does not answer shows as one unreachable line.
+- MCP `list_sessions` and `server_status` carry `server.url`, so an agent connected to
+  several servers can tell which one answered.
+
+### Fixed
+- An agent connection added with `cs mcp add` keeps its name and server. Before,
+  `cs server use` made `coding-sessions` mean the new default, so `cs mcp add` could
+  overwrite another server's connection and `cs mcp status` reported a connection to
+  the wrong server as fine. `cs mcp status` now says when a connection points at another
+  address. Connections added earlier are recognised by their address. One server works
+  exactly as before.
+
 ## [0.17.1] - 2026-11-17
 
 ### Fixed
@@ -348,7 +364,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.18.0
 [0.17.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.1
 [0.17.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.17.0
 [0.16.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.16.2

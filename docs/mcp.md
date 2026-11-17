@@ -17,7 +17,7 @@ Scripts and agents on the server itself can call the same tools without a token 
 
 | Tool | What it does |
 | --- | --- |
-| `list_sessions` | Live Sessions with id, agent, `mode` (`terminal` or `acp`), state, folder, `prs` (PR links from the conversation, with GitHub state) and `pending_requests` (secrets/connectors it waits on), plus Host Pressure. Filters: `agent`, `state`, `query` (name or folder); `limit` (default 50, max 200) with `total` and `truncated`. `include_ended` adds the Archive (same filters and limit). |
+| `list_sessions` | Live Sessions with id, agent, `mode` (`terminal` or `acp`), state, folder, `prs` (PR links from the conversation, with GitHub state) and `pending_requests` (secrets/connectors it waits on), plus Host Pressure and `server.url` (which server answered, for an agent connected to several). Filters: `agent`, `state`, `query` (name or folder); `limit` (default 50, max 200) with `total` and `truncated`. `include_ended` adds the Archive (same filters and limit). |
 | `read_session` | The bottom of a Session's terminal as plain text (a Chat session's transcript, ending with a pending permission request and its options), its state, mode, PR links, pending requests and a `next` step. |
 | `handoff_session` | Hand your own local Claude Code conversation to the server; see [Handoff](#handoff). |
 | `send_message` | Types a message and presses Enter. Multi-line text goes in as one bracketed paste. |
