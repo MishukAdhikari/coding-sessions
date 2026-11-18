@@ -32,7 +32,7 @@ function refreshHarness() {
   const context = {
     refreshVersion: 0, appliedRefreshVersion: 0, sessionSyncLost: false, sessions: [], archived: [], lastListJson: "", openSheetEl: null,
     api: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
-    renderHost() {}, checkAskingTransitions() {},
+    renderHost() {}, refreshBoard() {}, checkAskingTransitions() {},
     renderList() { renders.push({ lost: context.sessionSyncLost, sessions: context.sessions }); },
   };
   const start = source.indexOf("  async function refresh(");

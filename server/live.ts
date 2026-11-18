@@ -279,6 +279,14 @@ export function createLiveHub(deps: LiveHubDependencies) {
       const session = list.find((s) => s.id === id) ?? null;
       return feed.step(session, deps.read, secrets, await startupOf(session));
     },
+    /** Every live session's first batch from one session listing: what the app's Board reads. */
+    async all(): Promise<Array<{ session: LiveSessionView; frames: LiveFrame[] }>> {
+      const [list, secrets] = await Promise.all([deps.sessions(), deps.secrets()]);
+      return Promise.all(list.map(async (session) => ({
+        session,
+        frames: new LiveFeed(session.id, null).step(session, deps.read, secrets, await startupOf(session)).frames,
+      })));
+    },
   };
 }
 

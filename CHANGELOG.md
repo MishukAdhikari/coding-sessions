@@ -7,6 +7,15 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-18
+
+### Added
+- **Board** tab in the app: the live sessions grouped into Needs you, Cooking and Idle, each
+  card with its question, or the first sentence or two of its last reply (or its last tool
+  call). It is the same view as `cs live --all`, for this server. It refreshes every 8 s
+  while open and costs nothing while closed. `GET /api/board` returns each session's group
+  and summary.
+
 ## [0.20.1] - 2026-11-18
 
 ### Fixed
@@ -404,7 +413,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.0
 [0.20.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.1
 [0.20.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.0
 [0.19.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.2
