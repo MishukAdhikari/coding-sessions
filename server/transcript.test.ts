@@ -303,3 +303,19 @@ test("a prompt that starts with a tag is the user's own words, not injected cont
     expect(parseTranscriptLine("claude", line, 0)).toEqual([]);
   }
 });
+
+test("a prompt typed while Claude was working shows as the user's message", () => {
+  const queued = JSON.stringify({
+    type: "attachment", userType: "external", timestamp: "2026-11-18T11:09:52.300Z",
+    attachment: { type: "queued_command", prompt: "whats the update?", commandMode: "prompt", origin: { kind: "human" }, timestamp: "2026-11-18T11:09:52.268Z", humanTurn: true },
+  });
+  expect(parseTranscriptLine("claude", queued, 40)).toEqual([{ id: "40:0", role: "user", text: "whats the update?", at: "2026-11-18T11:09:52.300Z" }]);
+  // The queue's own bookkeeping and the request copy are not prompts.
+  expect(parseTranscriptLine("claude", JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "whats the update?" }), 1)).toEqual([]);
+  expect(parseTranscriptLine("claude", JSON.stringify({ type: "api-request-blob", message: { role: "user", content: [{ type: "text", text: "The user sent a new message while you were working:\nwhats the update?" }] } }), 2)).toEqual([]);
+  // Something the agent queued itself, or another mode, is not the user's prompt.
+  const notHuman = JSON.parse(queued); notHuman.attachment.origin = { kind: "task-notification" };
+  expect(parseTranscriptLine("claude", JSON.stringify(notHuman), 3)).toEqual([]);
+  const bash = JSON.parse(queued); bash.attachment.commandMode = "bash";
+  expect(parseTranscriptLine("claude", JSON.stringify(bash), 4)).toEqual([]);
+});

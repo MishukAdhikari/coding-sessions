@@ -7,6 +7,14 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-11-18
+
+### Fixed
+- Chat view and `cs live`: a message sent to Claude Code while it was still answering the
+  previous one disappeared from the chat, although Claude got it and answered. Claude Code
+  records such a message as a queued command, which the transcript reader skipped. It now
+  shows as your message, at the time you sent it.
+
 ## [0.20.0] - 2026-11-17
 
 ### Added
@@ -396,7 +404,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.1
 [0.20.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.0
 [0.19.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.2
 [0.19.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.19.1

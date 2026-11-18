@@ -117,7 +117,21 @@ function codexEntries(o: any): Entry[] {
   return [];
 }
 
+/**
+ * A prompt typed while Claude was still working. Claude Code queues it and hands it to the running
+ * turn, so it is written as a `queued_command` attachment, never as a user message: without this,
+ * the second of two quick messages vanished from the chat although Claude answered it.
+ */
+function queuedPrompt(o: any): string | null {
+  const a = o?.type === "attachment" && !o.isSidechain ? o.attachment : null;
+  if (a?.type !== "queued_command" || typeof a.prompt !== "string") return null;
+  if ((a.commandMode ?? "prompt") !== "prompt" || (a.origin && a.origin.kind !== "human")) return null;
+  return a.prompt.trim() || null;
+}
+
 function claudeEntries(o: any): Entry[] {
+  const queued = queuedPrompt(o);
+  if (queued) return [{ role: "user", text: clip(slashCommand(queued) ?? queued, MAX_TEXT) }];
   if ((o?.type !== "user" && o?.type !== "assistant") || o.isMeta || o.isSidechain) return [];
   const content = o.message?.content;
   if (o.type === "user") {
@@ -148,7 +162,8 @@ export function parseTranscriptLine(format: TranscriptFormat, line: string, offs
   let o: any;
   try { o = JSON.parse(line); } catch { return []; }
   const entries = format === "codex" ? codexEntries(o) : claudeEntries(o);
-  const at = typeof o?.timestamp === "string" ? o.timestamp : null;
+  const at = typeof o?.timestamp === "string" ? o.timestamp
+    : typeof o?.attachment?.timestamp === "string" ? o.attachment.timestamp : null;
   return entries.map((e, i) => ({ id: `${offset}:${i}`, role: e.role, text: e.text, at }));
 }
 
