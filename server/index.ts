@@ -49,7 +49,6 @@ import packageJson from "../package.json";
 
 const APP_VERSION: string = packageJson.version;
 import { createPrLinkTracker, type PrLink } from "./pr-links";
-import { boardGroup, boardSummary } from "./board";
 import { createBudgets, createUsageReader, type SessionUsage } from "./session-usage";
 import { createPrStatusCache, type PrStatus } from "./pr-status";
 import { handleTranscriptRoute } from "./transcript-route";
@@ -891,15 +890,6 @@ const server = Bun.serve<TermSocketData>({
       }
       const r = await launchSynced(String(body.name ?? ""), body.prompt ? String(body.prompt) : null, body.resumeId ? String(body.resumeId) : null, { autoMode: body.autoMode === true });
       return r.ok ? json({ ok: true }) : json({ error: r.error }, 422);
-    }
-
-    // The Board: each live session's group and a sentence or two on where it stands (server/board.ts).
-    if (path === "/api/board" && method === "GET") {
-      const rows = await liveHub.all();
-      return json({ sessions: rows.map(({ session, frames }) => {
-        const summary = boardSummary(frames, session.activity, Boolean(session.asking));
-        return { id: session.id, group: boardGroup(session.activity, summary.kind === "ask"), summary };
-      }) });
     }
 
     if (path === "/api/sessions" && method === "GET") {

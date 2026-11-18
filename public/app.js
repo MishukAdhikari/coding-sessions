@@ -24,7 +24,7 @@
   let refreshVersion = 0;
   let appliedRefreshVersion = 0;
   let sessionSyncLost = false;
-  let tab = localStorage.getItem("xs_tab") || "active";
+  let tab = "all"; // the app opens on All: live and ended sessions together
   let capabilities = null;
   let capabilitiesResolved = false;
   let agentAuth = null;
@@ -336,25 +336,6 @@
   }
 
 
-  /* ---------- the Board: live sessions grouped by what they need, each with a sentence or two ---------- */
-  let board = new Map(); // session id → { group, summary } from /api/board
-  let boardAt = 0;
-  let boardLoading = false;
-  async function refreshBoard() {
-    if (tab !== "board" || boardLoading || Date.now() - boardAt < 8000) return;
-    boardLoading = true;
-    try {
-      const { sessions: rows } = await api("/api/board");
-      board = new Map((rows || []).map((r) => [r.id, r]));
-      boardAt = Date.now();
-      if (tab === "board") renderList();
-    } catch { /* the list still shows; the next poll tries again */ } finally { boardLoading = false; }
-  }
-  /** A session the board hasn't read yet goes by its card's own state. */
-  const boardGroupOf = (s) => board.get(s.id)?.group
-    ?? (sessionIsAsking(s) || pendingRequests(s).length ? "needs" : sessionIsBusy(s) || s.status === "starting" ? "cooking" : "idle");
-  const BOARD_GROUPS = [["needs", "Needs you"], ["cooking", "Cooking"], ["idle", "Idle"]];
-
   async function refresh(force = false) {
     const version = ++refreshVersion;
     let data;
@@ -379,7 +360,6 @@
       if (current) syncSessionActions(current);
     }
     renderHost(data.host);
-    void refreshBoard(); // only while the Board is open, at most every 8 s
     checkAskingTransitions(sessions); // before the early-return, so a flip never gets swallowed
     const json = JSON.stringify([sessions, archived]);
     if (!force && json === lastListJson) return;
@@ -474,9 +454,7 @@
 
   function setTab(t) {
     tab = t;
-    localStorage.setItem("xs_tab", t);
     renderList();
-    if (t === "board") { boardAt = 0; void refreshBoard(); }
   }
   document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
@@ -570,8 +548,7 @@
     $("tabn-ended").textContent = archived.length || "";
 
     const showLive = tab !== "ended";
-    const showArchived = tab === "ended" || tab === "all";
-    const liveCards = [];
+    const showArchived = tab !== "active";
 
     const matches = item => window.sessionMatches(item, sessionQuery, providerName(providerOf(item)));
     const liveMatches = showLive ? sessions.filter(matches) : [];
@@ -622,30 +599,7 @@
         const pr = event.target.closest?.(".pr-link");
         if (pr && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); openPrLink(pr.dataset.href); }
       });
-      if (tab === "board") {
-        const note = board.get(s.id)?.summary;
-        if (note) {
-          const line = document.createElement("span");
-          line.className = `card-summary${note.kind === "none" ? " is-empty" : ""}`;
-          line.textContent = note.text;
-          card.querySelector(".card-main").appendChild(line);
-        }
-      }
-      liveCards.push({ s, card });
-    }
-
-    if (tab === "board") {
-      for (const [group, title] of BOARD_GROUPS) {
-        const inGroup = liveCards.filter(({ s }) => boardGroupOf(s) === group);
-        if (!inGroup.length) continue;
-        const heading = document.createElement("h2");
-        heading.className = "board-heading";
-        heading.textContent = `${title} · ${inGroup.length}`;
-        list.appendChild(heading);
-        for (const { card } of inGroup) list.appendChild(card);
-      }
-    } else {
-      for (const { card } of liveCards) list.appendChild(card);
+      list.appendChild(card);
     }
 
     for (const a of archivedMatches) {
@@ -668,12 +622,12 @@
       list.appendChild(card);
     }
 
-    if (focusedId) Array.from(list.children).find(card => card.dataset?.sessionId === focusedId)?.focus({ preventScroll: true });
+    if (focusedId) Array.from(list.children).find(card => card.dataset.sessionId === focusedId)?.focus({ preventScroll: true });
 
     const visible = liveMatches.length + archivedMatches.length;
     const total = (showLive ? sessions.length : 0) + (showArchived ? archived.length : 0);
     const searching = !!sessionQuery.trim();
-    const searchStatus = searching ? `${visible} of ${total} sessions in ${tab === "all" ? "All" : tab === "ended" ? "Ended" : tab === "board" ? "Board" : "Active"}` : "";
+    const searchStatus = searching ? `${visible} of ${total} sessions in ${tab === "all" ? "All" : tab === "ended" ? "Ended" : "Active"}` : "";
     if ($("search-status").textContent !== searchStatus) $("search-status").textContent = searchStatus;
     list.hidden = visible === 0;
     $("empty").hidden = visible > 0;

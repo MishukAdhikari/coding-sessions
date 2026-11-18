@@ -214,8 +214,6 @@ Follows what a session is doing, from your terminal, without attaching to it:
 
 ### Every session at once
 
-In the app, the **Board** tab shows the same groups and summaries for that server.
-
 `cs live --all` (also `cs live -A` or `cs --live --all`) prints one board of every running
 session on every saved server, then exits:
 

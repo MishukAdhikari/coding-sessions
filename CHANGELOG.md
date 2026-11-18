@@ -7,6 +7,15 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-11-19
+
+### Changed
+- The app opens on the **All** tab: live and ended sessions together. The tab you pick is
+  kept until you reload.
+
+### Removed
+- The **Board** tab and `GET /api/board` from 0.21.0. `cs live --all` is unchanged.
+
 ## [0.21.0] - 2026-11-18
 
 ### Added
@@ -413,7 +422,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.1
 [0.21.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.0
 [0.20.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.1
 [0.20.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.0
