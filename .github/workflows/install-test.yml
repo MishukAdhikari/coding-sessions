@@ -135,7 +135,8 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq nginx
           printf 'server {\n  listen 80;\n  server_name other.example.invalid;\n  return 200 "other site";\n}\n' | sudo tee /etc/nginx/sites-enabled/other.conf
-          sudo nginx -t && sudo systemctl reload nginx
+          # The runner image ships nginx stopped; a panel-built server has it running.
+          sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
           test "$(curl -fsS -H 'Host: other.example.invalid' http://127.0.0.1/)" = "other site"
       - name: The plan uses the nginx that is there, and installs no Caddy
         run: |
