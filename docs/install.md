@@ -62,7 +62,7 @@ Add `--dry-run` to see the plan without changing anything.
 |---|---|
 | System packages | git, screen, rsync, build tools, ripgrep, jq, Python; the GitHub CLI from GitHub's own signed repository (some distribution packages no longer work) |
 | Web terminal | ttyd 1.7+: the distribution's package where it's new enough, otherwise the pinned upstream build checked against its SHA-256 |
-| HTTPS | Caddy from its own signed repository, with an automatic Let's Encrypt certificate. The app itself listens only on 127.0.0.1 |
+| HTTPS | Caddy from its own signed repository, with an automatic Let's Encrypt certificate. If nginx already serves ports 80/443 (as on servers a hosting panel built), setup uses that nginx instead and gets the certificate with certbot. The app itself listens only on 127.0.0.1 |
 | Runtime | Bun, a pinned version checked against its SHA-256 |
 | Node.js 22 | Only if you pick an agent that needs it, from NodeSource's signed repository |
 | The app | A dedicated `cs-<instance>` account with no sudo, and a systemd service |
@@ -71,7 +71,7 @@ Add `--dry-run` to see the plan without changing anything.
 | Tuning | Higher file-watch and open-file limits; 2 GB swap if you agree; ports 80/443 opened in ufw if ufw is already on |
 | Updates | Daily app and agent updates, if you choose them. A new app version is kept only if it starts cleanly |
 
-Setup never changes SSH settings or existing firewall rules. An existing Caddy configuration with other sites is kept; setup only adds one import line, checks the result, and puts everything back if Caddy rejects it. Kernel limits are only ever raised. To check that the domain points at the server, it asks `api.ipify.org` for the server's public IP.
+Setup never changes SSH settings or existing firewall rules. An existing Caddy configuration with other sites is kept; setup only adds one import line, checks the result, and puts everything back if Caddy rejects it. With nginx, setup adds one file, `coding-sessions-<instance>.conf`, in the folder `nginx.conf` already includes (`sites-enabled/` or `conf.d/`), checks it with `nginx -t`, removes it again if nginx rejects it, and lets certbot add HTTPS to that file only. Other sites are not touched. `--proxy caddy` or `--proxy nginx` picks one yourself; the default, `auto`, uses whichever already holds ports 80/443, else installs Caddy. Kernel limits are only ever raised. To check that the domain points at the server, it asks `api.ipify.org` for the server's public IP.
 
 ## herdr session backend (optional)
 
@@ -159,8 +159,8 @@ Two things it reports but won't change, each with the one command to run:
 
 - **Docker:** see [Files and permissions](docker.md#files-and-permissions).
 - **"doesn't resolve" or "points at … but this server is …":** fix the domain's A record, wait a few minutes, and run setup again. If a proxy such as Cloudflare sits in front of the domain, add `--skip-dns-check`.
-- **"port 80/443 is used by …":** another web server is running. Stop it, or put Coding Sessions behind it yourself; [deploy/README.md](../deploy/README.md) covers the manual install.
-- **The HTTPS site doesn't come up:** run `sudo coding-sessions doctor`. Then `journalctl -u caddy -n 50` shows why the certificate wasn't issued.
+- **"port 80/443 is used by …":** a web server other than Caddy or nginx is running (Apache, OpenLiteSpeed). Stop it, or put Coding Sessions behind it yourself; [deploy/README.md](../deploy/README.md) covers the manual install.
+- **The HTTPS site doesn't come up:** run `sudo coding-sessions doctor`. Then `journalctl -u caddy -n 50` shows why the certificate wasn't issued. Behind nginx, run `sudo certbot --nginx -d <domain>` to see certbot's own message.
 - **Lost sign-in:** run `sudo coding-sessions setup-link`.
 - **Forgotten admin password:** run `sudo coding-sessions reset-password`. It prints a new random password once (`--json` prints `{"password": "..."}`; `--stdin` reads your own from standard input instead) and signs out every browser. Passkeys and CLI tokens keep working.
 - **"systemd on this host cannot pass credentials":** some container-based VPSes (LXC) can't hand services their secrets the usual way. The service then reads owner-only copies in its own home, as the Docker image does. Setup checks this every run and switches back when systemd can.
