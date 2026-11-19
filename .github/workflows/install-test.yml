@@ -124,6 +124,57 @@ jobs:
         if: failure()
         run: docker logs app || true
 
+  # A server a hosting panel built: nginx already serves another site on 80/443. Setup adds
+  # Coding Sessions to that nginx as one more site and leaves the other site alone.
+  nginx:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: nginx already serves another site
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nginx
+          printf 'server {\n  listen 80;\n  server_name other.example.invalid;\n  return 200 "other site";\n}\n' | sudo tee /etc/nginx/sites-enabled/other.conf
+          # The runner image ships nginx stopped; a panel-built server has it running.
+          sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
+          test "$(curl -fsS -H 'Host: other.example.invalid' http://127.0.0.1/)" = "other site"
+      - name: The plan uses the nginx that is there, and installs no Caddy
+        run: |
+          sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents none --no-browser --no-updates --no-swap --skip-dns-check --dry-run | tee plan.log
+          grep -q 'nginx already serves ports 80/443' plan.log
+          grep -q 'certbot for nginx' plan.log
+      - name: Install behind nginx
+        run: sudo deploy/coding-sessions setup --domain ci.coding-sessions.invalid --email ci@example.com --agents none --no-browser --no-updates --no-swap --skip-dns-check --no-link --yes | tee install.log
+      - name: The app answers through nginx; the other site still does; no Caddy
+        run: |
+          set -x
+          test -f /etc/nginx/sites-enabled/coding-sessions-personal.conf
+          sudo nginx -t
+          grep -qx 'PROXY=nginx' /etc/coding-sessions/setup.conf
+          curl -fsS -o /dev/null -H 'Host: ci.coding-sessions.invalid' http://127.0.0.1/
+          test "$(curl -fsS -H 'Host: other.example.invalid' http://127.0.0.1/)" = "other site"
+          if command -v caddy; then echo 'Caddy was installed'; exit 1; fi
+          sudo coding-sessions status | tee status.txt
+          grep -q 'nginx active' status.txt
+          sudo coding-sessions doctor | tee doctor.txt || true
+          grep -q '✓ nginx configuration valid' doctor.txt
+      - name: Re-running setup keeps nginx
+        run: |
+          sudo deploy/coding-sessions setup --skip-dns-check --no-link --yes | tee rerun.log
+          grep -q 'nginx already serves ports 80/443' rerun.log
+          sudo nginx -t
+      - name: Uninstall removes only its own site
+        run: |
+          sudo coding-sessions uninstall --purge --confirm personal
+          test ! -e /etc/nginx/sites-enabled/coding-sessions-personal.conf
+          systemctl is-active --quiet nginx
+          test "$(curl -fsS -H 'Host: other.example.invalid' http://127.0.0.1/)" = "other site"
+      - name: Logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u coding-sessions@personal -n 100 --no-pager || true
+          sudo journalctl -u nginx -n 50 --no-pager || true
+
   # The other supported systems, each booted with systemd in a privileged container.
   distros:
     runs-on: ubuntu-24.04

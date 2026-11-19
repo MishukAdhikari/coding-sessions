@@ -7,6 +7,16 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-19
+
+### Added
+- `coding-sessions setup` installs on servers where nginx already serves ports 80/443, as on
+  servers a hosting panel built. It adds Coding Sessions to that nginx as one more site,
+  checks it with `nginx -t`, and gets the certificate with certbot. Before, setup stopped
+  with "port 80 is used by nginx". `--proxy auto|caddy|nginx` picks one; `auto`, the
+  default, uses the Caddy or nginx already there, else installs Caddy as before. `status`,
+  `doctor` and `uninstall` follow the choice, which re-runs remember.
+
 ## [0.21.1] - 2026-11-19
 
 ### Changed
@@ -422,7 +432,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.22.0
 [0.21.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.1
 [0.21.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.0
 [0.20.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.20.1

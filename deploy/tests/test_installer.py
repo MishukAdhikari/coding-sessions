@@ -264,6 +264,62 @@ class InstallerContractTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(calls.read_text(), "installer codex\n")
 
+    def proxy_functions(self):
+        script = (ROOT / "deploy/coding-sessions").read_text()
+        return script[script.index("pick_proxy() {"):script.index("install_nginx() {")]
+
+    def test_setup_picks_the_web_server_already_on_80_and_443(self):
+        functions = self.proxy_functions()
+        def pick(owners, want="auto"):
+            harness = (f'set -euo pipefail\ndie() {{ printf "%s" "$*" >&2; exit 1; }}\n'
+                       f'port_owner() {{ case $1 in 80) printf %s "{owners[0]}";; 443) printf %s "{owners[1]}";; esac; }}\n'
+                       f'{functions}\nPROXY=$(pick_proxy {want})\nprintf %s "$PROXY"\n')
+            r = subprocess.run(["bash", "-c", harness], capture_output=True, text=True)
+            return (r.returncode, r.stdout, r.stderr)
+        self.assertEqual(pick(("", "")), (0, "caddy", ""))                 # a clean server gets Caddy
+        self.assertEqual(pick(("nginx", "nginx")), (0, "nginx", ""))       # a panel-built server keeps its nginx
+        self.assertEqual(pick(("caddy", "")), (0, "caddy", ""))
+        self.assertEqual(pick(("", ""), "nginx"), (0, "nginx", ""))        # asked for on a clean server
+        code, _, err = pick(("nginx", "nginx"), "caddy")
+        self.assertEqual(code, 1); self.assertIn("use --proxy nginx", err)
+        code, _, err = pick(("lshttpd", "lshttpd"))
+        self.assertEqual(code, 1); self.assertIn("port 80 is used by lshttpd", err)
+        code, _, err = pick(("caddy", "nginx"))
+        self.assertEqual(code, 1); self.assertIn("different servers", err)
+        code, _, err = pick(("", ""), "apache")
+        self.assertEqual(code, 1); self.assertIn("auto, caddy or nginx", err)
+
+    def test_the_nginx_site_goes_where_nginx_conf_includes_sites(self):
+        functions = self.proxy_functions()
+        # Only the files on disk move to the temporary folder; the include lines still name /etc/nginx.
+        for path in ["main=/etc/nginx/nginx.conf", "-d /etc/nginx/sites-enabled"]:
+            self.assertIn(path, functions)
+            functions = functions.replace(path, path.replace("/etc/nginx", "$NGX"))
+        with tempfile.TemporaryDirectory() as ngx:
+            def site(conf, sites_enabled=True):
+                Path(ngx, "nginx.conf").write_text(conf)
+                d = Path(ngx, "sites-enabled")
+                if sites_enabled: d.mkdir(exist_ok=True)
+                elif d.exists(): d.rmdir()
+                harness = f'set -euo pipefail\nNGX={ngx} INSTANCE=demo\n{functions}\nnginx_site_path\n'
+                r = subprocess.run(["bash", "-c", harness], capture_output=True, text=True)
+                return r.stdout if r.returncode == 0 else None
+            debian = "http {\n    include /etc/nginx/conf.d/*.conf;\n    include /etc/nginx/sites-enabled/*;\n}\n"
+            self.assertEqual(site(debian), "/etc/nginx/sites-enabled/coding-sessions-demo.conf")
+            self.assertEqual(site("http {\n  include /etc/nginx/conf.d/*.conf;\n}\n", False), "/etc/nginx/conf.d/coding-sessions-demo.conf")
+            self.assertEqual(site("http {\n  # include /etc/nginx/sites-enabled/*;\n  include /etc/nginx/conf.d/*.conf;\n}\n"), "/etc/nginx/conf.d/coding-sessions-demo.conf")
+            self.assertIsNone(site("http {\n  include /opt/panel/sites/*.conf;\n}\n"))
+
+    def test_setup_routes_install_status_doctor_and_uninstall_through_the_chosen_proxy(self):
+        script = (ROOT / "deploy/coding-sessions").read_text()
+        for needle in ["  install_proxy\n", "  configure_proxy\n", 'PROXY=$(conf_get PROXY); PROXY=${PROXY:-caddy}',
+                       'check "nginx configuration valid"', 'coding-sessions-$INSTANCE.conf', "--proxy) want_proxy="]:
+            self.assertIn(needle, script)
+        self.assertNotIn("  install_caddy\n  [[", script)
+        template = (ROOT / "deploy/templates/nginx.conf").read_text()
+        for needle in ["proxy_set_header Upgrade $http_upgrade;", "proxy_set_header X-Real-IP $remote_addr;", "proxy_read_timeout 3600s;"]:
+            self.assertIn(needle, template)
+
 
 @unittest.skipUnless(platform.system() == "Linux", "the permission pass uses GNU find and stat, as on Ubuntu")
 class PermissionPassTests(unittest.TestCase):
