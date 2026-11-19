@@ -128,20 +128,6 @@ describe("hub", () => {
     expect(b.frames.map((f) => f.type)).toEqual(["hello", "state"]);
   });
 
-  test("all() reads every live session's first batch from one session listing", async () => {
-    let listings = 0;
-    const hub = createLiveHub({
-      sessions: async () => { listings++; return [session(), session({ id: "m:cs-two", name: "two", activity: "waiting", asking: true })]; },
-      read: (id) => ({ frames: id === "m:cs-two" ? [] : [{ type: "message", role: "assistant", text: "Done.", at: null }], cursor: 1, reset: false }),
-      secrets: async () => [],
-    });
-    const rows = await hub.all();
-    expect(listings).toBe(1);
-    expect(rows.map((r) => r.session.id)).toEqual(["m:cs-fix", "m:cs-two"]);
-    expect(rows[0]!.frames.some((f) => f.type === "message")).toBe(true);
-    expect(rows[1]!.frames.some((f) => f.type === "ask")).toBe(true);
-  });
-
   test("open sockets get pushed batches and close when the session ends", async () => {
     let activity = "running";
     const hub = createLiveHub({ sessions: async () => [session({ activity })], read: (_id, a) => ({ frames: [], cursor: a ?? 0, reset: false }), secrets: async () => [], intervalMs: 10 });

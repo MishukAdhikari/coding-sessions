@@ -493,8 +493,7 @@ export function liveSocketUrl(api: string, id: string, after: number | null): st
 
 /* ---------- cs live --all: one board of every session on every saved server ---------- */
 
-export { boardGroup, boardSummary, firstSentences, plainText, type BoardGroup, type BoardSummary } from "../server/board";
-import { boardGroup, type BoardGroup, type BoardSummary } from "../server/board";
+export type BoardGroup = "needs" | "cooking" | "idle";
 
 export interface BoardItem {
   server: string;
@@ -502,7 +501,58 @@ export interface BoardItem {
   activity: string;          // the server's own activity word (running, waiting, finished, …)
   uptimeSec: number | null;
   prs: string[];             // "#42", or "owner/repo#42" when the board spans several repos
-  summary: BoardSummary;
+  summary: { kind: "ask" | "message" | "tool" | "none"; text: string };
+}
+
+/** Which group a session belongs to: it needs you, it is working, or it is idle. Pure. */
+export function boardGroup(activity: string, asking = false): BoardGroup {
+  if (asking || activity === "waiting") return "needs";
+  if (activity === "running" || activity === "starting") return "cooking";
+  return "idle";
+}
+
+/** Agent text as one plain line: no code blocks, emphasis, headings, bullets or link targets. Pure. */
+export function plainText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/^\s*\|.*$/gm, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The first `n` sentences, cut at about `max` characters on a word with a real ellipsis. Pure. */
+export function firstSentences(text: string, n = 2, max = 200): string {
+  // A sentence ends at . ! or ? followed by a space; a dot inside a URL or a version is not an end.
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  let out = sentences.slice(0, n).join(" ").replace(/\s+/g, " ").trim();
+  if (out.length > max) {
+    const cut = out.slice(0, max - 1);
+    const space = cut.lastIndexOf(" ");
+    out = `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.]+$/, "")}…`;
+  }
+  return out;
+}
+
+/** What a session is about, from its newest live frames: its question, else its last reply, else its last tool call. Pure. */
+export function boardSummary(frames: LiveFrame[], activity: string, asking = false): BoardItem["summary"] {
+  const last = (type: string, role?: string) => [...frames].reverse().find((f) => f.type === type && (!role || f.role === role));
+  if (boardGroup(activity, asking) === "needs") {
+    const ask = last("ask");
+    return { kind: "ask", text: firstSentences(plainText(String(ask?.text ?? "the agent is waiting for your answer")), 2, 200) };
+  }
+  const message = last("message", "assistant");
+  const text = message ? plainText(String(message.text ?? "")) : "";
+  if (text) return { kind: "message", text: firstSentences(text, 2, 200) };
+  const tool = last("tool");
+  if (tool) return { kind: "tool", text: `working: ${firstSentences(plainText(String(tool.text ?? "")), 1, 180)}` };
+  return { kind: "none", text: "no messages yet" };
 }
 
 /** Words wrapped to `width` columns, every line indented. Pure. */
