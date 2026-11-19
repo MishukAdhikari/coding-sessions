@@ -24,7 +24,7 @@
   let refreshVersion = 0;
   let appliedRefreshVersion = 0;
   let sessionSyncLost = false;
-  let tab = "all"; // the app opens on All: live and ended sessions together
+  let tab = "active"; // the app opens on Active, the running sessions
   let capabilities = null;
   let capabilitiesResolved = false;
   let agentAuth = null;
