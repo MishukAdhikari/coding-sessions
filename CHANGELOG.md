@@ -7,6 +7,12 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-11-19
+
+### Changed
+- The app opens on the **Active** tab again (0.21.1 made it All). The tab you pick is kept
+  until you reload.
+
 ## [0.22.0] - 2026-11-19
 
 ### Added
@@ -432,7 +438,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.22.1
 [0.22.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.22.0
 [0.21.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.1
 [0.21.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.0
