@@ -235,6 +235,7 @@
     view.setComposer({
       working: live,
       canStop: live,
+      canQueue: state === "working",
       canSend: state === "idle" || state === "working",
       ended: state === "exited" || state === "failed",
       reason: state === "starting" ? `${agentName} is starting…`
@@ -315,6 +316,7 @@
     const requests = new Map(); // requestId -> permission event, while unanswered
     const options = new Map(); // requestId -> permission event, for naming the answer
     const echoes = [];
+    const queued = new Map(); // queueId -> item: sent while a turn ran, waiting its turn in the bridge
     let rev = 0;
     let last = null;
     let turn = 0;
@@ -391,10 +393,19 @@
         case "user": {
           turn++;
           add({ key: `u:${event.seq}`, kind: "user", text: String(event.text ?? ""), at: event.at });
-          // The logged prompt replaces the oldest copy shown while it was on its way.
+          // A queued prompt's turn has come: it leaves the queue. Otherwise the logged prompt
+          // replaces the oldest copy shown while it was on its way.
+          if (event.queueId && queued.has(event.queueId)) queued.delete(event.queueId);
+          else if (echoes.length) echoes.shift();
+          break;
+        }
+        case "queued": {
+          if (!event.queueId || queued.has(event.queueId)) break;
+          queued.set(event.queueId, { key: `q:${event.queueId}`, rev: ++rev, kind: "user", text: String(event.text ?? ""), at: event.at, pending: true, queued: true });
           if (echoes.length) echoes.shift();
           break;
         }
+        case "unqueued": queued.delete(event.queueId); break;
         case "update": {
           const u = event.update || {};
           switch (u.sessionUpdate) {
@@ -472,7 +483,7 @@
         const live = working && item === tail;
         if (!!item.live !== live) { item.live = live; touch(item); }
       }
-      return echoes.length ? [...list, ...echoes] : list;
+      return echoes.length || queued.size ? [...list, ...queued.values(), ...echoes] : list;
     };
     return model;
   }

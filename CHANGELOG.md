@@ -7,6 +7,14 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-11-21
+
+### Fixed
+- In a Chat (ACP) session, a message sent while the agent is working is queued and shown in
+  the chat marked **Queued**. It is sent when the current turn ends. Before, Enter did nothing
+  while the agent worked and the message never appeared. With text in the composer the button
+  is Send; with the composer empty it is Stop. Stop also drops anything still queued.
+
 ## [0.22.1] - 2026-11-19
 
 ### Changed
@@ -438,7 +446,8 @@ release also lists how it was validated.
 - Agents can message each other through scoped MCP inboxes.
 - claude.ai browser sign-in.
 
-[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/MishukAdhikari/coding-sessions/compare/v0.22.2...HEAD
+[0.22.2]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.22.2
 [0.22.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.22.1
 [0.22.0]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.22.0
 [0.21.1]: https://github.com/MishukAdhikari/coding-sessions/releases/tag/v0.21.1

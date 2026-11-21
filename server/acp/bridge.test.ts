@@ -126,14 +126,33 @@ describe("ACP bridge against the fake agent", () => {
     expect(events(h.paths).find((e) => e.kind === "turn_end")).toMatchObject({ stopReason: "cancelled" });
   });
 
-  test("a prompt while a turn runs is refused", async () => {
+  test("a prompt while a turn runs is queued; Stop drops the queue", async () => {
     const h = start();
     await until(h.paths, (s) => s.state === "idle");
     await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "slow" });
     await until(h.paths, (s) => s.state === "working");
-    const second = await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "again" });
-    expect(second.ok).toBe(false);
+    expect(await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "again" })).toMatchObject({ ok: true, queued: true });
+    expect(events(h.paths).find((e) => e.kind === "queued")).toMatchObject({ queueId: "q-1", text: "again" });
     expect(await sendBridgeCommand(h.paths.socket, { op: "cancel" })).toMatchObject({ ok: true });
+    await until(h.paths, (s) => s.state === "idle");
+    expect(events(h.paths).find((e) => e.kind === "unqueued")).toMatchObject({ queueId: "q-1" });
+    expect(events(h.paths).filter((e) => e.kind === "user").map((e) => e.text)).toEqual(["slow"]);
+  });
+
+  test("a queued prompt is sent when the running turn ends", async () => {
+    const h = start();
+    await until(h.paths, (s) => s.state === "idle");
+    await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "permission" });
+    await until(h.paths, (s) => s.state === "waiting");
+    expect(await sendBridgeCommand(h.paths.socket, { op: "prompt", text: "hi" })).toMatchObject({ ok: true, queued: true });
+    const request = events(h.paths).find((e) => e.kind === "permission")!;
+    const option = (request.options as Array<{ optionId: string; kind: string }>).find((o) => o.kind === "allow_once")!;
+    await sendBridgeCommand(h.paths.socket, { op: "permission", requestId: String(request.requestId), optionId: option.optionId });
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && events(h.paths).filter((e) => e.kind === "turn_end").length < 2) await Bun.sleep(20);
+    const users = events(h.paths).filter((e) => e.kind === "user");
+    expect(users.map((e) => e.text)).toEqual(["permission", "hi"]);
+    expect(users[1]).toMatchObject({ queueId: "q-1" });
     await until(h.paths, (s) => s.state === "idle");
   });
 
