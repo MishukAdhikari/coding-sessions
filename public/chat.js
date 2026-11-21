@@ -316,7 +316,7 @@
     const requests = new Map(); // requestId -> permission event, while unanswered
     const options = new Map(); // requestId -> permission event, for naming the answer
     const echoes = [];
-    const queued = new Map(); // queueId -> item: sent while a turn ran, waiting its turn in the bridge
+    const queued = new Map();
     let rev = 0;
     let last = null;
     let turn = 0;
@@ -393,8 +393,6 @@
         case "user": {
           turn++;
           add({ key: `u:${event.seq}`, kind: "user", text: String(event.text ?? ""), at: event.at });
-          // A queued prompt's turn has come: it leaves the queue. Otherwise the logged prompt
-          // replaces the oldest copy shown while it was on its way.
           if (event.queueId && queued.has(event.queueId)) queued.delete(event.queueId);
           else if (echoes.length) echoes.shift();
           break;

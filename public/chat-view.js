@@ -428,11 +428,10 @@
 
     /* ---------- composer ---------- */
 
-    // While the agent works, a typed message can be queued: Send shows while there is text, Stop otherwise.
-    const queueing = () => composer.working && composer.canStop && composer.canQueue && !!input.value.trim();
+    const stopShown = () => composer.working && composer.canStop && !(composer.canQueue && input.value.trim());
 
     function syncComposer() {
-      const showStop = composer.working && composer.canStop && !queueing();
+      const showStop = stopShown();
       stop.hidden = !showStop;
       send.hidden = showStop;
       stop.disabled = stopping;
@@ -464,7 +463,7 @@
 
     async function submit() {
       const text = input.value;
-      if (!text.trim() || sending || !composer.canSend || (composer.working && composer.canStop && !queueing())) return;
+      if (!text.trim() || sending || !composer.canSend || stopShown()) return;
       sending = true;
       showError(null);
       syncComposer();

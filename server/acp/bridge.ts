@@ -8,8 +8,6 @@
  *   - appends what the conversation shows to events.jsonl (event-log.ts),
  *   - publishes its state in state.json (starting/working/waiting/idle/exited/failed),
  *   - takes commands — prompt, cancel, permission — on bridge.sock, a 0600 Unix socket.
- * A prompt sent while a turn runs is queued here and sent when the turn ends, as a
- * terminal agent queues what is typed while it works; Stop drops the queue.
  * A permission request waits here, in the bridge, so it outlives a server restart.
  *
  * Configuration comes from the environment, never argv:
@@ -35,8 +33,7 @@ const PROTOCOL_VERSION = 1;
 const SETUP_TIMEOUT_MS = 120_000;
 const MAX_COMMAND_BYTES = 64 * 1024;
 const MAX_AGENT_LINE_BYTES = 32 * 1024 * 1024;
-/** Most prompts held while a turn runs. */
-export const MAX_QUEUED_PROMPTS = 20;
+const MAX_QUEUED_PROMPTS = 20;
 
 interface PermissionOption { optionId: string; name: string; kind: string }
 interface PendingPermission { options: PermissionOption[]; resolve: (outcome: object) => void }
@@ -255,7 +252,6 @@ async function main() {
     }
   }
 
-  /** Stop means stop: what was queued behind the turn is not sent either. */
   function dropQueue() {
     if (!queue.length) return;
     for (const q of queue.splice(0)) log.append("unqueued", { queueId: q.queueId });
@@ -263,7 +259,7 @@ async function main() {
 
   function startTurn(text: string, queueId?: string) {
     turnRunning = true;
-    log.append("user", queueId ? { text, queueId } : { text });
+    log.append("user", { text, queueId });
     say(`\n› ${text}\n`);
     setState({ state: "working" });
     peer.request("session/prompt", { sessionId: state.acpSessionId, prompt: [{ type: "text", text }] })
