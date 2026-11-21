@@ -271,9 +271,9 @@
   }
 
   async function sendPrompt(text) {
-    const turnAtSend = model.turn();
+    const settledAtSend = model.settled();
     await command({ op: "prompt", text });
-    model.echo(text, turnAtSend);
+    model.echo(text, settledAtSend);
     view.setItems(model.items(true), { working: true });
     schedule(150);
   }
@@ -320,6 +320,8 @@
     let rev = 0;
     let last = null;
     let turn = 0;
+    // Prompts the log has accounted for: a queued event, or a user event no queued entry announced.
+    let settled = 0;
     let errorShown = null;
     const model = { agent: null };
 
@@ -394,12 +396,13 @@
           turn++;
           add({ key: `u:${event.seq}`, kind: "user", text: String(event.text ?? ""), at: event.at });
           if (event.queueId && queued.has(event.queueId)) queued.delete(event.queueId);
-          else if (echoes.length) echoes.shift();
+          else { settled++; if (echoes.length) echoes.shift(); }
           break;
         }
         case "queued": {
           if (!event.queueId || queued.has(event.queueId)) break;
           queued.set(event.queueId, { key: `q:${event.queueId}`, rev: ++rev, kind: "user", text: String(event.text ?? ""), at: event.at, pending: true, queued: true });
+          settled++;
           if (echoes.length) echoes.shift();
           break;
         }
@@ -467,9 +470,9 @@
       errorShown = text;
       if (![...byKey.values()].some((i) => i.kind === "notice" && i.text === text)) notice(`err:${text}`, text, "error");
     };
-    // Shown at once after a send; a poll that already carried the prompt (turn moved on) needs no copy.
-    model.echo = (text, turnAtSend) => { if (turn === turnAtSend) echoes.push({ key: `echo:${++rev}`, rev, kind: "user", text, pending: true }); };
-    model.turn = () => turn;
+    // Shown at once after a send; a poll that already carried the prompt (as a user or queued event) needs no copy.
+    model.echo = (text, settledAtSend) => { if (settled === settledAtSend) echoes.push({ key: `echo:${++rev}`, rev, kind: "user", text, pending: true }); };
+    model.settled = () => settled;
     model.pending = () => [...requests.values()];
     model.hasTurns = () => turn > 0 || list.some((i) => i.kind === "user");
     // True when the agent is working but nothing of this turn is streaming yet.

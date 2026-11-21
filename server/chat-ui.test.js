@@ -8,14 +8,16 @@ const page = read("chat.html");
 const scripts = ["native.js", "chat-markdown.js", "chat-view.js", "chat.js"].map((name) => [name, read(name)]);
 
 /** The real chat page (its markup and its three scripts) against scripted server replies. */
-function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, keyboard = false, postFail = false } = {}) {
+function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, holdPost = false, keyboard = false, postFail = false } = {}) {
   const document = loadBody(createDocument(), page);
   document.documentElement.style.setProperty = (name, value) => { document.documentElement.style[name] = value; };
   const timers = [];
   const requests = [];
   const held = []; // with hold, each GET waits until release() answers it
+  const heldPosts = []; // with holdPost, each POST waits until releasePost() answers it
   const fetch = async (url, options = {}) => {
     requests.push({ url, method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
+    if (options.method === "POST" && holdPost) await new Promise((resolve) => heldPosts.push(resolve));
     if (options.method === "POST") return postFail
       ? { ok: false, status: 502, json: async () => ({ error: "The session didn't take it." }) }
       : { ok: true, status: 200, json: async () => ({ ok: true }) };
@@ -45,7 +47,8 @@ function harness({ responses = [], id = "m:cs-demo", query = "", hold = false, k
     await settle();
   };
   const release = async () => { held.shift()?.(); await settle(); await settle(); };
-  return { document, $, rows, timers, requests, tick, release, held };
+  const releasePost = async () => { heldPosts.shift()?.(); await settle(); await settle(); };
+  return { document, $, rows, timers, requests, tick, release, held, releasePost };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -291,6 +294,23 @@ test("a message typed while the agent works is queued, shown as queued, then sen
   expect(sent.length).toBe(1);
   expect(sent[0].className).not.toContain("is-queued");
   expect(sent[0].className).not.toContain("is-pending");
+});
+
+test("a queued message a poll shows before its send returns is shown once", async () => {
+  const h = harness({ query: "&mode=acp", holdPost: true, responses: [
+    acp("working", [ev(1, "user", { text: "go" })]),
+    acp("working", [ev(2, "queued", { queueId: "q-1", text: "and add tests" })]),
+  ] });
+  await settle();
+  h.$("chat-input").value = "and add tests";
+  h.$("chat-input").dispatch("input");
+  h.$("chat-input").dispatch("keydown", { key: "Enter", shiftKey: false });
+  await settle();
+  await h.tick(); // the poll carries the queued event while the send is still in flight
+  await h.releasePost();
+  const shown = [...h.rows()].filter((r) => text(r).includes("and add tests"));
+  expect(shown.length).toBe(1);
+  expect(shown[0].className).toContain("is-queued");
 });
 
 test("Stop drops what was queued behind the turn", async () => {
