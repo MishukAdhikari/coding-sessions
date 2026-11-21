@@ -235,6 +235,7 @@
     view.setComposer({
       working: live,
       canStop: live,
+      canQueue: state === "working",
       canSend: state === "idle" || state === "working",
       ended: state === "exited" || state === "failed",
       reason: state === "starting" ? `${agentName} is starting…`
@@ -270,9 +271,9 @@
   }
 
   async function sendPrompt(text) {
-    const turnAtSend = model.turn();
+    const settledAtSend = model.settled();
     await command({ op: "prompt", text });
-    model.echo(text, turnAtSend);
+    model.echo(text, settledAtSend);
     view.setItems(model.items(true), { working: true });
     schedule(150);
   }
@@ -315,9 +316,12 @@
     const requests = new Map(); // requestId -> permission event, while unanswered
     const options = new Map(); // requestId -> permission event, for naming the answer
     const echoes = [];
+    const queued = new Map();
     let rev = 0;
     let last = null;
     let turn = 0;
+    // Prompts the log has accounted for: a queued event, or a user event no queued entry announced.
+    let settled = 0;
     let errorShown = null;
     const model = { agent: null };
 
@@ -391,10 +395,18 @@
         case "user": {
           turn++;
           add({ key: `u:${event.seq}`, kind: "user", text: String(event.text ?? ""), at: event.at });
-          // The logged prompt replaces the oldest copy shown while it was on its way.
+          if (event.queueId && queued.has(event.queueId)) queued.delete(event.queueId);
+          else { settled++; if (echoes.length) echoes.shift(); }
+          break;
+        }
+        case "queued": {
+          if (!event.queueId || queued.has(event.queueId)) break;
+          queued.set(event.queueId, { key: `q:${event.queueId}`, rev: ++rev, kind: "user", text: String(event.text ?? ""), at: event.at, pending: true, queued: true });
+          settled++;
           if (echoes.length) echoes.shift();
           break;
         }
+        case "unqueued": queued.delete(event.queueId); break;
         case "update": {
           const u = event.update || {};
           switch (u.sessionUpdate) {
@@ -458,9 +470,9 @@
       errorShown = text;
       if (![...byKey.values()].some((i) => i.kind === "notice" && i.text === text)) notice(`err:${text}`, text, "error");
     };
-    // Shown at once after a send; a poll that already carried the prompt (turn moved on) needs no copy.
-    model.echo = (text, turnAtSend) => { if (turn === turnAtSend) echoes.push({ key: `echo:${++rev}`, rev, kind: "user", text, pending: true }); };
-    model.turn = () => turn;
+    // Shown at once after a send; a poll that already carried the prompt (as a user or queued event) needs no copy.
+    model.echo = (text, settledAtSend) => { if (settled === settledAtSend) echoes.push({ key: `echo:${++rev}`, rev, kind: "user", text, pending: true }); };
+    model.settled = () => settled;
     model.pending = () => [...requests.values()];
     model.hasTurns = () => turn > 0 || list.some((i) => i.kind === "user");
     // True when the agent is working but nothing of this turn is streaming yet.
@@ -472,7 +484,7 @@
         const live = working && item === tail;
         if (!!item.live !== live) { item.live = live; touch(item); }
       }
-      return echoes.length ? [...list, ...echoes] : list;
+      return echoes.length || queued.size ? [...list, ...queued.values(), ...echoes] : list;
     };
     return model;
   }

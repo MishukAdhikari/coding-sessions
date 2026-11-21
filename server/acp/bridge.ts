@@ -33,6 +33,7 @@ const PROTOCOL_VERSION = 1;
 const SETUP_TIMEOUT_MS = 120_000;
 const MAX_COMMAND_BYTES = 64 * 1024;
 const MAX_AGENT_LINE_BYTES = 32 * 1024 * 1024;
+const MAX_QUEUED_PROMPTS = 20;
 
 interface PermissionOption { optionId: string; name: string; kind: string }
 interface PendingPermission { options: PermissionOption[]; resolve: (outcome: object) => void }
@@ -89,6 +90,8 @@ async function main() {
   let permissionCounter = 0;
   let turnRunning = false;
   let exiting = false;
+  const queue: Array<{ queueId: string; text: string }> = [];
+  let queueCounter = 0;
 
   const setState = (next: Partial<typeof state>) => {
     Object.assign(state, next);
@@ -216,12 +219,20 @@ async function main() {
         if (state.state === "starting") return { ok: false, error: "The agent is still starting." };
         if (state.state === "failed") return { ok: false, error: state.error ?? "The agent failed to start." };
         if (state.state === "exited") return { ok: false, error: "The agent has exited." };
-        if (turnRunning) return { ok: false, error: "The agent is still working on the last message. Stop it first, or wait." };
+        if (turnRunning) {
+          if (queue.length >= MAX_QUEUED_PROMPTS) return { ok: false, error: `${MAX_QUEUED_PROMPTS} messages are already queued. Wait for the agent, or press Stop.` };
+          const queueId = `q-${++queueCounter}`;
+          queue.push({ queueId, text });
+          log.append("queued", { queueId, text });
+          say(`\n(queued) › ${text}`);
+          return { ok: true, queued: true };
+        }
         startTurn(text);
         return { ok: true };
       }
       case "cancel": {
         if (!turnRunning) return { ok: false, error: "Nothing is running." };
+        dropQueue();
         for (const id of [...pending.keys()]) resolvePermission(id, null);
         peer.notify("session/cancel", { sessionId: state.acpSessionId });
         setState({ state: turnState() });
@@ -241,9 +252,14 @@ async function main() {
     }
   }
 
-  function startTurn(text: string) {
+  function dropQueue() {
+    if (!queue.length) return;
+    for (const q of queue.splice(0)) log.append("unqueued", { queueId: q.queueId });
+  }
+
+  function startTurn(text: string, queueId?: string) {
     turnRunning = true;
-    log.append("user", { text });
+    log.append("user", { text, queueId });
     say(`\n› ${text}\n`);
     setState({ state: "working" });
     peer.request("session/prompt", { sessionId: state.acpSessionId, prompt: [{ type: "text", text }] })
@@ -259,7 +275,10 @@ async function main() {
       .finally(() => {
         turnRunning = false;
         for (const id of [...pending.keys()]) resolvePermission(id, null);
-        if (!exiting && state.state !== "failed") setState({ state: turnState() });
+        if (exiting || state.state === "failed") return dropQueue();
+        const next = queue.shift();
+        if (next) startTurn(next.text, next.queueId);
+        else setState({ state: turnState() });
       });
   }
 

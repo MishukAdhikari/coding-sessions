@@ -16,7 +16,7 @@ import { sanitizeCommands, type AcpCommand } from "./commands";
 /** Bumped when an event or state shape changes incompatibly. */
 export const ACP_LOG_VERSION = 1;
 
-export type AcpEventKind = "status" | "user" | "update" | "permission" | "permission_resolved" | "turn_end" | "notice";
+export type AcpEventKind = "status" | "user" | "queued" | "unqueued" | "update" | "permission" | "permission_resolved" | "turn_end" | "notice";
 
 export interface AcpEvent { seq: number; at: string; kind: AcpEventKind; [key: string]: unknown }
 
