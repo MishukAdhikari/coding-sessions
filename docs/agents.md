@@ -65,7 +65,7 @@ The session list, the MCP tools and the activity signal show whether an agent is
 Every session starts in one of two modes, chosen per session in **Start a session** (or with `mode` on the MCP `launch_session` tool):
 
 - **Terminal** (the default): the agent's own terminal UI, exactly as before.
-- **Chat (ACP)**: the agent speaks the [Agent Client Protocol](https://agentclientprotocol.com) and the session opens as a chat. Replies stream in as formatted text, tool calls show as rows with their status and diffs, the agent's plan shows as a checklist, and a permission request shows as a card with the agent's own options (Allow once, Always allow, Reject…). **Stop** cancels the current turn.
+- **Chat (ACP)**: the agent speaks the [Agent Client Protocol](https://agentclientprotocol.com) and the session opens as a chat. Replies stream in as formatted text, tool calls show as rows with their status and diffs, the agent's plan shows as a checklist, and a permission request shows as a card with the agent's own options (Allow once, Always allow, Reject…). **Stop** cancels the current turn. A message sent while the agent works is queued, shown marked **Queued**, and sent when the current turn ends (up to 20 at a time); Stop also drops what is still queued. While the agent works, the composer's button is Send when there is text and Stop when it is empty.
 
 A chat session survives app restarts and updates like a terminal session. Its holder (`cs-<name>`, under zmx, screen or herdr) runs a small bridge, `server/acp/bridge.ts`, which starts the agent, keeps the conversation in an event log on disk, and takes the chat's messages and answers on a private socket. A permission request waits in the bridge, so it is still there after a restart.
 

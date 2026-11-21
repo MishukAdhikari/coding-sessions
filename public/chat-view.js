@@ -111,9 +111,9 @@
     /* ---------- items ---------- */
 
     function renderUser(item, node) {
-      node.className = `cv-turn cv-user${item.pending ? " is-pending" : ""}`;
+      node.className = `cv-turn cv-user${item.pending ? " is-pending" : ""}${item.queued ? " is-queued" : ""}`;
       const body = el("div", "cv-user-text", item.text);
-      const stamp = time(item.at);
+      const stamp = item.queued ? el("span", "cv-queued", "Queued") : time(item.at);
       node.replaceChildren(...(stamp ? [stamp, body] : [body]));
     }
 
@@ -428,8 +428,10 @@
 
     /* ---------- composer ---------- */
 
+    const stopShown = () => composer.working && composer.canStop && !(composer.canQueue && input.value.trim());
+
     function syncComposer() {
-      const showStop = composer.working && composer.canStop;
+      const showStop = stopShown();
       stop.hidden = !showStop;
       send.hidden = showStop;
       stop.disabled = stopping;
@@ -461,7 +463,7 @@
 
     async function submit() {
       const text = input.value;
-      if (!text.trim() || sending || !composer.canSend || (composer.working && composer.canStop)) return;
+      if (!text.trim() || sending || !composer.canSend || stopShown()) return;
       sending = true;
       showError(null);
       syncComposer();

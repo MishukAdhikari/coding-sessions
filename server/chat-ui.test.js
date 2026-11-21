@@ -262,6 +262,49 @@ test("Stop cancels the running turn, and the turn's end is shown", async () => {
   expect(text(h.$("chat-status-text"))).toBe("Finished");
 });
 
+test("a message typed while the agent works is queued, shown as queued, then sent in its turn", async () => {
+  const h = harness({ query: "&mode=acp", responses: [
+    acp("working", [ev(1, "user", { text: "go" })]),
+    acp("working", [ev(2, "queued", { queueId: "q-1", text: "and add tests" })]),
+    acp("working", [ev(3, "turn_end", { stopReason: "end_turn" }), ev(4, "user", { text: "and add tests", queueId: "q-1" })]),
+  ] });
+  await settle();
+  // Empty composer: Stop. With text: Send, and Enter queues it.
+  expect(h.$("chat-stop").hidden).toBe(false);
+  h.$("chat-input").value = "and add tests";
+  h.$("chat-input").dispatch("input");
+  expect(h.$("chat-send").hidden).toBe(false);
+  expect(h.$("chat-stop").hidden).toBe(true);
+  h.$("chat-input").dispatch("keydown", { key: "Enter", shiftKey: false });
+  await settle();
+  expect(h.requests.at(-1).body).toEqual({ op: "prompt", text: "and add tests" });
+  expect(h.$("chat-input").value).toBe("");
+  expect(h.$("chat-stop").hidden).toBe(false);
+  expect(text(h.rows().at(-1))).toBe("and add tests");
+  await h.tick();
+  const queued = [...h.rows()].filter((r) => text(r).includes("and add tests"));
+  expect(queued.length).toBe(1);
+  expect(queued[0].className).toContain("is-queued");
+  expect(text(queued[0])).toBe("Queuedand add tests");
+  await h.tick();
+  const sent = [...h.rows()].filter((r) => text(r).includes("and add tests"));
+  expect(sent.length).toBe(1);
+  expect(sent[0].className).not.toContain("is-queued");
+  expect(sent[0].className).not.toContain("is-pending");
+});
+
+test("Stop drops what was queued behind the turn", async () => {
+  const h = harness({ query: "&mode=acp", responses: [
+    acp("working", [ev(1, "user", { text: "go" }), ev(2, "queued", { queueId: "q-1", text: "later" })]),
+    acp("idle", [ev(3, "unqueued", { queueId: "q-1" }), ev(4, "turn_end", { stopReason: "cancelled" })]),
+  ] });
+  await settle();
+  expect([...h.rows()].some((r) => text(r).includes("later"))).toBe(true);
+  await h.tick();
+  expect([...h.rows()].some((r) => text(r).includes("later"))).toBe(false);
+  expect(text(h.rows().at(-1))).toBe("Stopped");
+});
+
 test("a prompt is sent through the bridge and shown at once", async () => {
   const h = harness({ query: "&mode=acp", responses: [acp("idle", [])] });
   await settle();
