@@ -398,13 +398,25 @@ test("client details accept only explicit, well-typed actions and never silently
   expect(f.connectors.view(id).oauth_client).toBeNull();
 });
 
-test("RFC 9207 is required: no advertised iss support refuses sign-in; a callback without the matching iss never reaches the token endpoint", async () => {
+test("RFC 9207: without advertised iss support only a registered confidential client signs in; a callback without the matching iss never reaches the token endpoint", async () => {
   const legacy = provider({ noIssParam: true });
   const a = fixture(legacy);
   const aid = await oauthConnector(a, legacy);
-  await expect(a.oauth.start(aid, SESSION)).rejects.toThrow(/RFC 9207.*bearer token/);
+  await expect(a.oauth.start(aid, SESSION)).rejects.toThrow(/RFC 9207.*Registered client/);
   expect(a.database.query("SELECT COUNT(*) AS n FROM connector_oauth_pending").get()).toEqual({ n: 0 });
   expect(legacy.hits.some(hit => hit.path.endsWith("/register"))).toBe(false);
+  // A public preregistered client (no secret) is not enough.
+  a.connectors.setOAuthClient(aid, { client_id: "public-client" });
+  await expect(a.oauth.start(aid, SESSION)).rejects.toThrow(/RFC 9207/);
+  // With a confidential client the sign-in works and a response without iss is accepted...
+  a.connectors.setOAuthClient(aid, { client_id: "prereg-client", client_secret: "prereg-secret-0001" });
+  const first = legacy.approve((await a.oauth.start(aid, SESSION)).authorizationUrl);
+  await expect(a.oauth.complete({ code: first.code, state: first.state }, SESSION)).resolves.toMatchObject({ auth: { oauth: { state: "connected" } } });
+  // ...but an iss that names another server is still refused, before any token request.
+  const before = legacy.hits.filter(hit => hit.path === "/as/token").length;
+  const second = legacy.approve((await a.oauth.start(aid, SESSION)).authorizationUrl);
+  await expect(a.oauth.complete({ code: second.code, state: second.state, iss: `${legacy.base}/as2` }, SESSION)).rejects.toThrow(/expected issuer/);
+  expect(legacy.hits.filter(hit => hit.path === "/as/token").length).toBe(before);
 
   // Malicious endpoint pairing: the trusted resource lists the issuer, whose metadata pairs another
   // party's authorization endpoint with its own token endpoint. Everything else is valid; the other
