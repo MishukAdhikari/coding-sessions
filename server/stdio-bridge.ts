@@ -1,4 +1,5 @@
 /** Shared stdio ⇄ loopback HTTP adapter for app-owned MCP entries. No application/database imports: installed source may be read-only. */
+import { discoverResult, isModernMessage, modernHeaders } from "./mcp-2026";
 export interface BridgeOptions {
   tokenEnv: string;
   urlEnv: string;
@@ -31,7 +32,14 @@ async function runOffline(message: string): Promise<void> {
       let msg: { id?: unknown; method?: unknown; params?: { protocolVersion?: unknown } };
       try { msg = JSON.parse(line); } catch { continue; }
       if (msg.id === undefined || msg.id === null) continue;
-      if (msg.method === "initialize") {
+      if (isModernMessage(msg)) {
+        // 2026-07-28: no initialize; discover answers what initialize would, every result is complete.
+        const serverInfo = { name: "coding-sessions", version: "offline" };
+        if (msg.method === "server/discover") reply(msg.id, { result: discoverResult({ capabilities: { tools: {} }, serverInfo, instructions: message }) });
+        else if (msg.method === "tools/list") reply(msg.id, { result: { resultType: "complete", tools: [] } });
+        else if (msg.method === "ping") reply(msg.id, { result: { resultType: "complete" } });
+        else reply(msg.id, { error: { code: -32601, message } });
+      } else if (msg.method === "initialize") {
         reply(msg.id, { result: {
           protocolVersion: typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "2025-06-18",
           capabilities: { tools: {} }, serverInfo: { name: "coding-sessions", version: "offline" }, instructions: message,
@@ -65,10 +73,10 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
   const error = (id: unknown, code: number, message: string) => write({ jsonrpc: "2.0", id, error: { code, message } });
   const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-  async function post(line: string, signal: AbortSignal): Promise<Response> {
+  async function post(line: string, signal: AbortSignal, extra: Record<string, string> = {}): Promise<Response> {
     return fetch(endpoint, {
       method: "POST", redirect: "error", signal,
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: line,
+      headers: { ...extra, authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: line,
     });
   }
   async function bounded(response: Response): Promise<unknown> {
@@ -98,13 +106,17 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; abort.abort(); }, options.timeoutMs);
     try {
-      const response = await post(line, abort.signal);
+      // A 2026-07-28 request repeats its version, method and name in headers; derive them from the message.
+      const modern = isModernMessage(msg);
+      const response = await post(line, abort.signal, modern ? modernHeaders(msg) : {});
       if (response.status === 202 && key === null) return;
-      if (!response.ok) throw new Error();
+      // A modern request's protocol errors come with 400 or 404 and a JSON-RPC body: pass that on.
+      if (!response.ok && !(modern && (response.status === 400 || response.status === 404))) throw new Error();
       const value = await bounded(response);
       if (!object(value) || value.jsonrpc !== "2.0" || value.id !== id || (!Object.hasOwn(value, "result") && !Object.hasOwn(value, "error"))) throw new Error();
+      if (!response.ok && !Object.hasOwn(value, "error")) throw new Error();
       if (key !== null) write(value);
-      if (msg.method === "initialize" && Object.hasOwn(value, "result")) initialized = true;
+      if ((msg.method === "initialize" || modern) && Object.hasOwn(value, "result")) initialized = true;
     } catch {
       if (key !== null) error(id, abort.signal.aborted && !timedOut ? -32800 : -32000,
         abort.signal.aborted && !timedOut ? "Request cancelled." : timedOut ? options.messages.timeout : options.messages.failed);

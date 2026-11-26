@@ -1,6 +1,7 @@
 import { Communicator, CommunicatorError, type CommunicatorIdentity } from "./communicator";
 import { SecretRequestError, type SecretRequests } from "./secret-requests";
 import { SECRET_NAME_RE } from "./secret-store";
+import { checkModernRequest, discoverResult, isModernMessage, modernResponse, rejectionResponse } from "./mcp-2026";
 
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const MAILBOX_INSTRUCTIONS = `This communicator exchanges messages between managed Claude, Codex and Command Code sessions on this instance.
@@ -129,43 +130,60 @@ export async function handleCommunicatorRequest(communicator: Communicator, req:
   const id = msg.id;
   const params = msg.params ?? {};
   if (!object(params)) return response(error(id, -32602, "Invalid params"));
-  if (msg.method === "initialize") return response(result(id, {
-    protocolVersion: VERSIONS.includes(String(params.protocolVersion)) ? params.protocolVersion : VERSIONS[0],
-    capabilities: { tools: { listChanged: false } }, serverInfo: { name: "coding-sessions-communicator", version: "1.0.0" }, instructions: secrets ? INSTRUCTIONS : MAILBOX_INSTRUCTIONS,
-  }));
-  if (msg.method === "ping") return response(result(id, {}));
-  if (msg.method === "tools/list") return response(result(id, { tools }));
-  if (msg.method !== "tools/call") return response(error(id, -32601, "Method not found"));
-  if (typeof params.name !== "string" || !tools.some(tool => tool.name === params.name)) return response(error(id, -32602, "Unknown communicator tool"));
-  const args = params.arguments ?? {};
-  if (!object(args)) return response(error(id, -32602, "Invalid tool arguments"));
-  try {
-    let data: unknown;
-    if (secrets && SECRET_TOOLS.some(tool => tool.name === params.name)) {
-      // Identity comes only from the credential; a live session is required, as for sending.
-      data = await callSecretTool(params.name, args, await communicator.identity(token), secrets);
-      return response(result(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data }));
+  const capabilities = { tools: { listChanged: false } };
+  const serverInfo = { name: "coding-sessions-communicator", version: "1.0.0" };
+  const instructions = secrets ? INSTRUCTIONS : MAILBOX_INSTRUCTIONS;
+  const modern = isModernMessage(msg);
+  if (modern) {
+    const rejected = checkModernRequest(msg, req.headers, VERSIONS);
+    if (rejected) return rejectionResponse(rejected);
+    if (msg.method === "server/discover") return modernResponse(result(id, discoverResult({ capabilities, serverInfo, instructions })));
+  }
+  const method: string = msg.method;
+  const call: Record<string, any> = params;
+  const reply = await answer();
+  return modern ? modernResponse(reply) : response(reply);
+
+  /** The JSON-RPC reply to one request, the same for both protocol eras. */
+  async function answer(): Promise<Record<string, any>> {
+    if (method === "initialize") return result(id, {
+      protocolVersion: VERSIONS.includes(String(call.protocolVersion)) ? call.protocolVersion : VERSIONS[0],
+      capabilities, serverInfo, instructions,
+    });
+    if (method === "ping") return result(id, {});
+    if (method === "tools/list") return result(id, { tools });
+    if (method !== "tools/call") return error(id, -32601, "Method not found");
+    if (typeof call.name !== "string" || !tools.some(tool => tool.name === call.name)) return error(id, -32602, "Unknown communicator tool");
+    const args = call.arguments ?? {};
+    if (!object(args)) return error(id, -32602, "Invalid tool arguments");
+    try {
+      let data: unknown;
+      if (secrets && SECRET_TOOLS.some(tool => tool.name === call.name)) {
+        // Identity comes only from the credential; a live session is required, as for sending.
+        data = await callSecretTool(call.name, args, await communicator.identity(token), secrets);
+        return result(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
+      }
+      if (handoff && call.name === "search_transcript") {
+        if (Object.keys(args).some(key => key !== "query" && key !== "limit")) throw new CommunicatorError("invalid_request", "Unknown argument.");
+        const identity = await communicator.identity(token);
+        try { data = handoff.search(identity.session_id, args.query, args.limit); }
+        catch (cause) { throw new CommunicatorError("invalid_request", cause instanceof Error ? cause.message : "Search failed."); }
+        return result(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
+      }
+      switch (call.name) {
+        case "session_identity":
+        case "list_peers":
+          if (Object.keys(args).length) throw new CommunicatorError("invalid_request", "This tool takes no arguments.");
+          data = call.name === "session_identity" ? { identity: await communicator.identity(token) } : { peers: await communicator.peers(token) };
+          break;
+        case "send_message": data = { message: await communicator.send(token, args) }; break;
+        case "read_messages": data = await communicator.read(token, args, req.signal); break;
+        case "wait_for_messages": data = await communicator.wait(token, args, req.signal); break;
+      }
+      return result(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
+    } catch (cause) {
+      const message = cause instanceof CommunicatorError || cause instanceof SecretRequestError ? cause.message : "Communicator operation failed.";
+      return result(id, { isError: true, content: [{ type: "text", text: message }] });
     }
-    if (handoff && params.name === "search_transcript") {
-      if (Object.keys(args).some(key => key !== "query" && key !== "limit")) throw new CommunicatorError("invalid_request", "Unknown argument.");
-      const identity = await communicator.identity(token);
-      try { data = handoff.search(identity.session_id, args.query, args.limit); }
-      catch (cause) { throw new CommunicatorError("invalid_request", cause instanceof Error ? cause.message : "Search failed."); }
-      return response(result(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data }));
-    }
-    switch (params.name) {
-      case "session_identity":
-      case "list_peers":
-        if (Object.keys(args).length) throw new CommunicatorError("invalid_request", "This tool takes no arguments.");
-        data = params.name === "session_identity" ? { identity: await communicator.identity(token) } : { peers: await communicator.peers(token) };
-        break;
-      case "send_message": data = { message: await communicator.send(token, args) }; break;
-      case "read_messages": data = await communicator.read(token, args, req.signal); break;
-      case "wait_for_messages": data = await communicator.wait(token, args, req.signal); break;
-    }
-    return response(result(id, { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data }));
-  } catch (cause) {
-    const message = cause instanceof CommunicatorError || cause instanceof SecretRequestError ? cause.message : "Communicator operation failed.";
-    return response(result(id, { isError: true, content: [{ type: "text", text: message }] }));
   }
 }
