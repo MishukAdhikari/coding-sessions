@@ -56,9 +56,10 @@ export function addressAllowed(address: string, policy: NetworkPolicy): boolean 
 /**
  * Syntax and literal-address checks. "server" is an operator-entered MCP server URL, which may
  * not carry a query (credentials go in the token field). "oauth" is an authorization-server
- * endpoint from validated metadata, which legitimately may.
+ * endpoint from validated metadata, and "endpoint" a legacy HTTP+SSE message endpoint the
+ * server named on the operator's own origin (e.g. /messages?sessionId=…); both legitimately may.
  */
-export type UrlRole = "server" | "oauth";
+export type UrlRole = "server" | "oauth" | "endpoint";
 export function validateServerUrl(value: unknown, policy: NetworkPolicy, role: UrlRole = "server"): URL {
   if (typeof value !== "string" || value.length > 2048) throw new DestinationError("Enter the server's URL.");
   let url: URL;

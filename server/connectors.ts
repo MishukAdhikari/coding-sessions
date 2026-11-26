@@ -211,6 +211,7 @@ export class Connectors {
       client = new UpstreamClient({
         url, now: this.now,
         fetch: this.deps.fetch ?? safeFetch({ policy: this.policy, resolver: this.deps.resolver, env: this.env }),
+        endpointFetch: this.transport("endpoint"),
         credential: signal => this.credential(id, bound, signal),
         secrets: () => this.knownSecrets(id),
         onAuthRejected: token => this.authRejected(id, bound.epoch, token),
