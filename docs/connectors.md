@@ -41,11 +41,11 @@ In the connector's details, under **Authentication**, choose **Sign in with OAut
 
 **What the provider must support.** Coding Sessions discovers everything from the server: its protected-resource metadata (RFC 9728, from the `WWW-Authenticate` challenge or the well-known path), then the authorization server's metadata (RFC 8414 or OpenID Connect discovery). It requires:
 
-- the metadata to name exactly this connector's URL as the resource, and the exact issuer;
+- the metadata to name this connector's URL as the resource, or an ancestor of it on the same origin (Slack names `https://mcp.slack.com` for `https://mcp.slack.com/mcp`), and the exact issuer;
 - S256 PKCE;
 - issuer identification in sign-in responses (RFC 9207: `authorization_response_iss_parameter_supported`). With one callback shared by every provider, this is what stops a malicious provider from mixing up sign-ins. Providers without it are refused; use a bearer token for them instead.
 
-Sign-in requests the scopes the server asks for, adds `openid` when the provider supports it, and binds the request to this connector with a resource indicator (RFC 8707).
+Sign-in requests the scopes the server asks for, adds `openid` when the provider supports it, and binds the request to this connector with a resource indicator (RFC 8707), sent exactly as the server's metadata names it.
 
 **How this app is registered with the provider**, in this order:
 

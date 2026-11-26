@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { applyDatabaseSchema } from "./db-schema";
 import { createSecretCodec } from "./secrets";
 import { ConnectorError, Connectors } from "./connectors";
-import { ConnectorOAuth, type MetadataProbe } from "./connector-oauth";
+import { ConnectorOAuth, coversResource, type MetadataProbe } from "./connector-oauth";
 import { sessionHash } from "./connector-oauth-store";
 
 const ORIGIN = "https://sessions.example.com";
@@ -38,7 +38,7 @@ function provider(mode: Mode = {}) {
     }
     if (url.pathname === "/.well-known/oauth-protected-resource/mcp") {
       const servers = mode.servers ? (mode.servers as (b: string) => string[])(base) : [(mode.issuerRef as string) ?? `${base}/as`];
-      return json({ resource: (mode.resource as string) ?? `${base}/mcp${mode.resourceSlash ? "/" : ""}`, authorization_servers: servers, scopes_supported: ["files:read"] });
+      return json({ resource: mode.resourceOrigin ? base : (mode.resource as string) ?? `${base}/mcp${mode.resourceSlash ? "/" : ""}`, authorization_servers: servers, scopes_supported: ["files:read"] });
     }
     const asMatch = /^\/\.well-known\/oauth-authorization-server\/(as|as2|asbad)$/.exec(url.pathname);
     if (asMatch) {
@@ -134,6 +134,32 @@ test("challenge discovery, DCR and a browser-bound PKCE authorization URL with f
   expect(p.hits.every(hit => hit.auth === null)).toBe(true);
   // DCR registered exactly our callback.
   expect(JSON.parse(p.hits.find(hit => hit.path === "/as/register")!.body).redirect_uris).toEqual([CALLBACK]);
+});
+
+test("a server that publishes its origin as the resource (as Slack does) signs in, with that exact value as resource", async () => {
+  const p = provider({ resourceOrigin: true });
+  const f = fixture(p);
+  const id = await oauthConnector(f, p);
+  const { authorizationUrl } = await f.oauth.start(id, SESSION);
+  expect(new URL(authorizationUrl).searchParams.get("resource")).toBe(p.base);
+  const view = await f.oauth.complete(p.approve(authorizationUrl), SESSION);
+  expect(view.auth).toMatchObject({ mode: "oauth", oauth: { state: "connected" } });
+  expect(new URLSearchParams(p.hits.find(hit => hit.path === "/as/token")!.body).get("resource")).toBe(p.base);
+});
+
+test("coversResource: the URL itself or a same-origin ancestor at a path boundary, nothing else", () => {
+  const covers = (named: string, url: string) => coversResource(new URL(named), new URL(url));
+  expect(covers("https://mcp.slack.com", "https://mcp.slack.com/mcp")).toBe(true);
+  expect(covers("https://a.example/mcp", "https://a.example/mcp")).toBe(true);
+  expect(covers("https://a.example/v1", "https://a.example/v1/mcp")).toBe(true);
+  expect(covers("https://a.example/mcp/", "https://a.example/mcp")).toBe(false);
+  expect(covers("https://a.example/mc", "https://a.example/mcp")).toBe(false);
+  expect(covers("https://a.example/mcp/x", "https://a.example/mcp")).toBe(false);
+  expect(covers("https://b.example", "https://a.example/mcp")).toBe(false);
+  expect(covers("https://a.example:8443", "https://a.example/mcp")).toBe(false);
+  expect(covers("http://a.example", "https://a.example/mcp")).toBe(false);
+  expect(covers("https://a.example/?x=1", "https://a.example/mcp")).toBe(false);
+  expect(covers("https://a.example/#f", "https://a.example/mcp")).toBe(false);
 });
 
 test("completion in the initiating browser exchanges the code once and connects; the connector then works with its grant", async () => {

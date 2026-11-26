@@ -10,7 +10,8 @@ import { requestTokens, revokeTokens, verifyIdToken, type OidcContext } from "./
  *
  * Discovery: RFC 9728 protected-resource metadata (from the 401 challenge, else the well-known
  * paths), then RFC 8414 / OIDC authorization-server metadata with an exact issuer match. The
- * resource it names must be this connector's URL; S256 PKCE must be advertised. Every request
+ * resource it names must be this connector's URL or an ancestor of it on the same origin, and
+ * that named resource is what goes out as `resource`; S256 PKCE must be advertised. Every request
  * goes through the vetted transport and never carries the resource's bearer token.
  *
  * Client: a preregistered client first, then CIMD (our public metadata document), then dynamic
@@ -22,6 +23,18 @@ const TIMEOUT_MS = 20_000;
 const fail = (message: string): never => { throw new ConnectorError("invalid_request", message); };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const trimSlash = (value: string) => value.replace(/\/+$/, "");
+
+/**
+ * Whether the resource a server publishes covers this connector's URL: the URL itself, or an
+ * ancestor on the same origin at a path boundary (Slack publishes https://mcp.slack.com for
+ * /mcp). No query or fragment. /mcp/ still does not cover /mcp, nor /mc cover /mcp.
+ */
+export function coversResource(named: URL, url: URL): boolean {
+  if (named.origin !== url.origin || named.search || named.hash || named.username || named.password) return false;
+  if (named.href === url.href) return true;
+  const base = named.pathname.endsWith("/") ? named.pathname : `${named.pathname}/`;
+  return url.pathname.startsWith(base);
+}
 
 export interface ConnectorOAuthDependencies {
   connectors: Connectors; origin: string;
@@ -89,7 +102,7 @@ export class ConnectorOAuth {
   }
 
   /** RFC 9728: the challenge's resource_metadata, else the path-specific and root well-known documents. */
-  private async protectedResource(resource: URL, signal: AbortSignal): Promise<{ authorizationServers: string[]; scope: string | null }> {
+  private async protectedResource(resource: URL, signal: AbortSignal): Promise<{ resource: string; authorizationServers: string[]; scope: string | null }> {
     const probe = await this.deps.connectors.transport("server")(resource.href, {
       method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, signal,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "coding-sessions", version: "1.0.0" } } }),
@@ -102,14 +115,14 @@ export class ConnectorOAuth {
     for (const candidate of candidates) {
       const metadata = await this.getJson(candidate, signal);
       if (!metadata) continue;
-      // Exact match on the canonical URL: /mcp and /mcp/ are different resources.
-      let named: string | null = null;
-      try { named = typeof metadata.resource === "string" ? new URL(metadata.resource).href : null; } catch { named = null; }
-      if (named !== resource.href) return fail("The server's protected-resource metadata names a different resource.");
+      let named: URL | null = null;
+      try { named = typeof metadata.resource === "string" ? new URL(metadata.resource) : null; } catch { named = null; }
+      if (!named || !coversResource(named, resource)) return fail("The server's protected-resource metadata names a different resource.");
       const servers = Array.isArray(metadata.authorization_servers) ? metadata.authorization_servers.filter((s): s is string => typeof s === "string") : [];
       if (!servers.length) return fail("The server does not name an authorization server.");
       const scopes = Array.isArray(metadata.scopes_supported) ? metadata.scopes_supported.filter((s): s is string => typeof s === "string") : [];
-      return { authorizationServers: servers, scope: challenge.scope ?? (scopes.length ? scopes.join(" ") : null) };
+      // Sent back exactly as published: https://mcp.slack.com, not the normalized https://mcp.slack.com/.
+      return { resource: metadata.resource as string, authorizationServers: servers, scope: challenge.scope ?? (scopes.length ? scopes.join(" ") : null) };
     }
     return fail("The server does not publish OAuth protected-resource metadata, so browser sign-in is not available for it.");
   }
@@ -257,7 +270,7 @@ export class ConnectorOAuth {
     const verifier = randomBytes(32).toString("base64url");
     const nonce = scopes.includes("openid") ? randomBytes(16).toString("base64url") : null;
     const state = connectors.oauth.createPending({
-      connectorId, epoch, attempt, sessionHash: session, issuer: server.issuer, resource: target.url.href, clientId: client.id, clientSecret: client.secret,
+      connectorId, epoch, attempt, sessionHash: session, issuer: server.issuer, resource: resource.resource, clientId: client.id, clientSecret: client.secret,
       redirectUri: this.callbackUrl(), verifier, nonce, registration: client.registration, tokenEndpoint: server.tokenEndpoint,
       revocationEndpoint: server.revocationEndpoint, tokenAuthMethod: client.method, scope, issParameter: server.issParameter,
       jwksUri: server.jwksUri, userinfoEndpoint: server.userinfoEndpoint,
@@ -269,7 +282,7 @@ export class ConnectorOAuth {
     url.searchParams.set("state", state);
     url.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
     url.searchParams.set("code_challenge_method", "S256");
-    url.searchParams.set("resource", target.url.href);
+    url.searchParams.set("resource", resource.resource);
     if (scope) url.searchParams.set("scope", scope);
     if (nonce) url.searchParams.set("nonce", nonce);
     return { authorizationUrl: url.href, ...(client.notice ? { notice: client.notice } : {}) };

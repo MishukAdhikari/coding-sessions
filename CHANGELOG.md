@@ -7,6 +7,17 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.22.3] - 2026-11-26
+
+### Fixed
+- OAuth sign-in for an MCP connector works with servers that name their origin as the protected
+  resource, such as Slack (`https://mcp.slack.com` for `https://mcp.slack.com/mcp`). Before, sign-in
+  stopped with "The server's protected-resource metadata names a different resource." The resource
+  must still be the connector's URL or an ancestor of it on the same origin, and it is sent back as
+  the resource indicator exactly as the server names it. Slack also needs a registered client (its
+  app's client ID and secret) under **Registered client**, because it offers no automatic
+  registration.
+
 ## [0.22.2] - 2026-11-21
 
 ### Fixed
