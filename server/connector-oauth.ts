@@ -149,11 +149,6 @@ export class ConnectorOAuth {
       if (!(list("code_challenge_methods_supported") ?? []).includes("S256")) return fail("The authorization server does not advertise S256 PKCE, so sign-in is refused.");
       const responseTypes = list("response_types_supported");
       if (responseTypes && !responseTypes.includes("code")) return fail("The authorization server does not support the authorization code flow.");
-      // Mix-up defense (RFC 9700 §4.4.2): with one callback and a shared client across servers,
-      // only an issuer-identified response (RFC 9207) proves which server answered. Required.
-      if (m.authorization_response_iss_parameter_supported !== true) {
-        return fail("This authorization server does not identify itself in sign-in responses (RFC 9207), so browser sign-in is refused. Use a bearer token for this server instead.");
-      }
       const optional = (key: string, what: string) => m[key] === undefined ? null : this.endpoint(m[key], what);
       return {
         issuer, authorizationEndpoint: this.endpoint(m.authorization_endpoint, "authorization endpoint"), tokenEndpoint: this.endpoint(m.token_endpoint, "token endpoint"),
@@ -262,6 +257,13 @@ export class ConnectorOAuth {
       if (server) break;
     }
     if (!server) return fail("The authorization server's metadata could not be found.");
+    // Mix-up defense (RFC 9700 §4.4.2): with one callback, an issuer-identified response (RFC 9207)
+    // proves which server answered. A server without it is accepted only with a preregistered
+    // confidential client pinned to that issuer: a code another server's flow captures is useless
+    // without that client's secret, which only ever goes to its own issuer (Slack works this way).
+    if (!server.issParameter && !target.client?.secret) {
+      return fail("This authorization server does not identify itself in sign-in responses (RFC 9207). Sign in with a registered client instead: add its client ID and secret under Registered client. Or use a bearer token for this server.");
+    }
     const client = await this.client(server, target.client, signal);
     if (client.registration === "preregistered") this.deps.connectors.pinOAuthClientIssuer(connectorId, epoch, client.id, server.issuer);
     const scopes = (resource.scope ?? "").split(/\s+/).filter(Boolean);
@@ -296,9 +298,9 @@ export class ConnectorOAuth {
   async complete(input: { state?: unknown; code?: unknown; iss?: unknown; error?: unknown }, session: string): Promise<ConnectorView> {
     const flow = this.deps.connectors.oauth.consumePending(input.state, session);
     if (!flow) return fail("This sign-in link is no longer valid. Start the sign-in again.");
-    // Mix-up defense applies to error responses too: the issuer must be present and match
-    // before anything else, and before any code is sent anywhere.
-    if (input.iss !== flow.issuer) return fail("The sign-in response did not come from the expected issuer, so it was refused.");
+    // Mix-up defense applies to error responses too: the issuer must match before anything else,
+    // and before any code is sent anywhere. It must be present when the server advertises it.
+    if (flow.issParameter ? input.iss !== flow.issuer : input.iss !== undefined && input.iss !== flow.issuer) return fail("The sign-in response did not come from the expected issuer, so it was refused.");
     if (input.error !== undefined) return fail("The provider declined the sign-in.");
     if (typeof input.code !== "string" || !/^[\x21-\x7e]{1,4096}$/.test(input.code)) return fail("The sign-in response is missing its code.");
     const tokens = await this.exchange(flow, input.code);

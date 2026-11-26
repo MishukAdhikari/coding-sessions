@@ -43,7 +43,7 @@ In the connector's details, under **Authentication**, choose **Sign in with OAut
 
 - the metadata to name this connector's URL as the resource, or an ancestor of it on the same origin (Slack names `https://mcp.slack.com` for `https://mcp.slack.com/mcp`), and the exact issuer;
 - S256 PKCE;
-- issuer identification in sign-in responses (RFC 9207: `authorization_response_iss_parameter_supported`). With one callback shared by every provider, this is what stops a malicious provider from mixing up sign-ins. Providers without it are refused; use a bearer token for them instead.
+- issuer identification in sign-in responses (RFC 9207: `authorization_response_iss_parameter_supported`), or a registered client with a secret. With one callback shared by every provider, `iss` is what stops a malicious provider from mixing up sign-ins. A provider without it (Slack, for example) works only with a client you registered with it (client ID and secret under **Registered client**): a code captured by another provider's sign-in is useless without that secret, which only ever goes to its own provider. A response that does carry `iss` must name the expected issuer.
 
 Sign-in requests the scopes the server asks for, adds `openid` when the provider supports it, and binds the request to this connector with a resource indicator (RFC 8707), sent exactly as the server's metadata names it.
 

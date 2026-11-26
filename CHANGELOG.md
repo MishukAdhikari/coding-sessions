@@ -7,6 +7,15 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.22.4] - 2026-11-27
+
+### Fixed
+- OAuth sign-in for an MCP connector works with authorization servers that do not identify
+  themselves in sign-in responses (RFC 9207), such as Slack's, when the connector has a registered
+  client with a secret. Before, sign-in stopped with "This authorization server does not identify
+  itself in sign-in responses". Without a registered confidential client such servers are still
+  refused, and a response that carries `iss` must still name the expected issuer.
+
 ## [0.22.3] - 2026-11-26
 
 ### Fixed
