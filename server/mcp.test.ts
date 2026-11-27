@@ -573,3 +573,109 @@ test("list_sessions says which server answered, when the app knows its address",
   expect((await call(withOrigin, "list_sessions", {})).structuredContent.server).toEqual({ url: "https://lab.example.com" });
   expect((await call(harness().deps, "list_sessions", {})).structuredContent).not.toHaveProperty("server");
 });
+
+/* ---------- MCP 2026-07-28: stateless requests beside the initialize era ---------- */
+
+const META = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientCapabilities": {},
+  "io.modelcontextprotocol/clientInfo": { name: "test-client", version: "1.0.0" },
+};
+
+/** A 2026-style request with the headers it must carry; `headers` overrides them (null drops one). */
+async function modern(deps: McpDeps, method: string, params: Record<string, unknown> = {}, headers: Record<string, string | null> = {}, meta: Record<string, unknown> = META) {
+  const name = method === "tools/call" ? params.name : undefined;
+  const base: Record<string, string | null> = {
+    "MCP-Protocol-Version": String(meta["io.modelcontextprotocol/protocolVersion"]), "Mcp-Method": method,
+    ...(typeof name === "string" ? { "Mcp-Name": name } : {}), ...headers,
+  };
+  const sent = Object.fromEntries(Object.entries(base).filter(([, v]) => v !== null)) as Record<string, string>;
+  const body = { jsonrpc: "2.0", id: 7, method, params: { ...params, _meta: meta } };
+  const res = await handleMcpPost(deps, new Request("https://x/mcp", { method: "POST", headers: sent, body: JSON.stringify(body) }));
+  return { status: res.status, json: res.status === 202 ? null : await res.json() as any };
+}
+
+test("2026: tools/list and tools/call answer as the legacy era does, marked complete", async () => {
+  const { deps } = harness();
+  const legacyList = (await rpc(deps, "tools/list")).json.result;
+  const list = await modern(deps, "tools/list");
+  expect(list.status).toBe(200);
+  expect(list.json.result).toEqual({ resultType: "complete", ...legacyList });
+  const legacyCall = await call(deps, "list_projects");
+  const called = await modern(deps, "tools/call", { name: "list_projects", arguments: {} });
+  expect(called.status).toBe(200);
+  expect(called.json.id).toBe(7);
+  expect(called.json.result).toEqual({ resultType: "complete", ...legacyCall });
+  expect((await modern(deps, "ping")).json.result).toEqual({ resultType: "complete" });
+});
+
+test("2026: server/discover returns versions, capabilities, server info, instructions and a private cache scope", async () => {
+  const { deps } = harness();
+  const init = (await rpc(deps, "initialize", { protocolVersion: "2025-11-25" })).json.result;
+  const { status, json } = await modern(deps, "server/discover");
+  expect(status).toBe(200);
+  expect(json.result).toEqual({
+    resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: init.capabilities,
+    _meta: { "io.modelcontextprotocol/serverInfo": init.serverInfo }, instructions: init.instructions,
+    ttlMs: 300000, cacheScope: "private",
+  });
+  // Legacy: discover without _meta is an unknown method, as before; initialize never offers 2026.
+  expect((await rpc(deps, "server/discover")).json.error.code).toBe(-32601);
+  expect((await rpc(deps, "initialize", { protocolVersion: "2026-07-28" })).json.result.protocolVersion).toBe("2025-11-25");
+});
+
+test("2026: missing or mismatched headers are refused with 400 and -32020", async () => {
+  const { deps, sent } = harness();
+  for (const headers of <Array<Record<string, string | null>>>[
+    { "MCP-Protocol-Version": null }, { "MCP-Protocol-Version": "2025-11-25" },
+    { "Mcp-Method": null }, { "Mcp-Method": "tools/list" },
+    { "Mcp-Name": null }, { "Mcp-Name": "end_session" },
+  ]) {
+    const r = await modern(deps, "tools/call", { name: "send_message", arguments: { session_id: "m:cs-demo", text: "hi" } }, headers);
+    expect(r.status).toBe(400);
+    expect(r.json.error.code).toBe(-32020);
+    expect(r.json.error.message).toStartWith("Header mismatch");
+  }
+  expect(sent).toEqual([]);
+  // Names are case-insensitive and a value may come base64-encoded.
+  const encoded = `=?base64?${Buffer.from("list_projects").toString("base64")}?=`;
+  const ok = await modern(deps, "tools/call", { name: "list_projects", arguments: {} }, { "Mcp-Name": null, "mcp-name": encoded, "Mcp-Method": null, "MCP-METHOD": "tools/call" });
+  expect(ok.status).toBe(200);
+  expect(ok.json.result.resultType).toBe("complete");
+});
+
+test("2026: missing client capabilities is 400 -32602; an unsupported version is 400 -32022 with the supported list", async () => {
+  const { deps } = harness();
+  const noCaps = await modern(deps, "tools/list", {}, {}, { "io.modelcontextprotocol/protocolVersion": "2026-07-28" });
+  expect(noCaps.status).toBe(400);
+  expect(noCaps.json.error.code).toBe(-32602);
+  const badVersion = await modern(deps, "tools/list", {}, {}, { ...META, "io.modelcontextprotocol/protocolVersion": "2099-01-01" });
+  expect(badVersion.status).toBe(400);
+  expect(badVersion.json.error).toEqual({
+    code: -32022, message: "Unsupported protocol version",
+    data: { supported: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"], requested: "2099-01-01" },
+  });
+});
+
+test("2026: an unknown method is 404 -32601; a notification is 202; a batch holding a modern request is 400", async () => {
+  const { deps } = harness();
+  const unknown = await modern(deps, "resources/list");
+  expect(unknown.status).toBe(404);
+  expect(unknown.json.error.code).toBe(-32601);
+  const note = await handleMcpPost(deps, new Request("https://x/mcp", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 1, _meta: META } }) }));
+  expect(note.status).toBe(202);
+  const batch = await handleMcpPost(deps, new Request("https://x/mcp", { method: "POST", body: JSON.stringify([
+    { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: META } },
+  ]) }));
+  expect(batch.status).toBe(400);
+  expect(((await batch.json()) as any).error.code).toBe(-32600);
+  // Legacy batches still work, unchanged.
+  const legacy = await handleMcpPost(deps, new Request("https://x/mcp", { method: "POST", body: JSON.stringify([
+    { jsonrpc: "2.0", id: 1, method: "ping" }, { jsonrpc: "2.0", id: 2, method: "tools/list" },
+  ]) }));
+  expect(legacy.status).toBe(200);
+  const replies = await legacy.json() as any[];
+  expect(replies[0]).toEqual({ jsonrpc: "2.0", id: 1, result: {} });
+  expect(replies[1].result.resultType).toBeUndefined();
+});

@@ -20,6 +20,7 @@ import { COMPACT_FROM_TOKENS, LEAN_ABOVE_TOKENS, isHandoffMode, type RequestedHa
 import type { InstallJob } from "./agent-installs";
 import type { Finding } from "./server-setup";
 import { addProject, removeProject, type ProjectToolDeps } from "./project-tools";
+import { checkModernRequest, discoverResult, isModernMessage, modernBatchRejection, modernResponse, rejectionResponse } from "./mcp-2026";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "coding-sessions", title: "Coding Sessions", version: "1.0.0" };
@@ -985,6 +986,8 @@ type JsonRpcId = string | number | null;
 const rpcResult = (id: JsonRpcId, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id: JsonRpcId, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
+const CAPABILITIES = { tools: { listChanged: false } };
+
 async function dispatch(deps: McpDeps, msg: any): Promise<object | null> {
   if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
     return rpcError(msg?.id ?? null, -32600, "Invalid request");
@@ -998,7 +1001,7 @@ async function dispatch(deps: McpDeps, msg: any): Promise<object | null> {
       const asked = String(params.protocolVersion ?? "");
       return rpcResult(id, {
         protocolVersion: SUPPORTED_PROTOCOL_VERSIONS.includes(asked) ? asked : SUPPORTED_PROTOCOL_VERSIONS[0],
-        capabilities: { tools: { listChanged: false } },
+        capabilities: CAPABILITIES,
         serverInfo: SERVER_INFO,
         instructions: INSTRUCTIONS,
       });
@@ -1030,7 +1033,26 @@ export async function handleMcpPost(deps: McpDeps, req: Request): Promise<Respon
     return Response.json(rpcError(null, -32700, "Parse error"), { status: 400 });
   }
   const batch = Array.isArray(body);
+  if (batch) {
+    const rejected = modernBatchRejection(body as unknown[]);
+    if (rejected) return rejectionResponse(rejected);
+  } else if (isModernMessage(body)) {
+    // A modern notification needs no answer (cancelling is closing the stream); run nothing for it.
+    if (!("id" in (body as object))) return new Response(null, { status: 202 });
+    return handleModern(deps, body as Record<string, any>, req.headers);
+  }
   const replies = (await Promise.all((batch ? body as unknown[] : [body]).map((m) => dispatch(deps, m)))).filter(Boolean);
   if (!replies.length) return new Response(null, { status: 202 });
   return Response.json(batch ? replies : replies[0], { headers: { "cache-control": "no-store" } });
+}
+
+/** A 2026-07-28 request: stateless, validated against its headers, every result marked complete. */
+async function handleModern(deps: McpDeps, msg: Record<string, any>, headers: Headers): Promise<Response> {
+  if (msg.jsonrpc !== "2.0" || typeof msg.method !== "string") return rejectionResponse({ status: 400, body: rpcError(msg.id ?? null, -32600, "Invalid request") });
+  const rejected = checkModernRequest(msg, headers, SUPPORTED_PROTOCOL_VERSIONS);
+  if (rejected) return rejectionResponse(rejected);
+  if (msg.method === "server/discover") {
+    return modernResponse(rpcResult(msg.id ?? null, discoverResult({ capabilities: CAPABILITIES, serverInfo: SERVER_INFO, instructions: INSTRUCTIONS })));
+  }
+  return modernResponse((await dispatch(deps, msg)) as Record<string, any>);
 }

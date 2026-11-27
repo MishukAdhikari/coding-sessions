@@ -7,6 +7,27 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-27
+
+### Added
+- The app's MCP endpoints (`/mcp`, and the per-session communicator and connector gateway)
+  speak MCP **2026-07-28**: stateless requests with the version and client capabilities in
+  `_meta`, `server/discover`, the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers
+  (a mismatch is refused with -32020), `resultType` on every result, and -32022 with the
+  supported versions for one it does not speak. Clients that use `initialize` (2024-11-05 to
+  2025-11-25) are answered exactly as before. The agents' stdio bridges forward 2026 requests
+  with the headers they need.
+
+### Fixed
+- After the Claude, Codex or Command Code account on the server changes, running sessions of
+  that agent reconnect their MCP servers: each one started before the change is restarted onto
+  the same conversation, idle sessions at once and busy ones when their turn ends. Signing in
+  again to the same account changes nothing. A replaced Command Code API key counts as a change.
+- An agent's Coding Sessions MCP server no longer stays failed when the app was restarting as
+  the session started. The bridge retries a request that never reached the app, and after the
+  app is back it tells the agent to read its tools again. A tool call is retried only when the
+  connection was refused, so it never runs twice.
+
 ## [0.22.4] - 2026-11-27
 
 ### Fixed

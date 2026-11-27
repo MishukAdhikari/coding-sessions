@@ -154,3 +154,37 @@ test("search_transcript is listed only with handoff support, searches the caller
     expect(none.result.content[0].text).toContain("no handed-off conversation");
   } finally { f.db.close(); }
 });
+
+const META = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+const modernHeaders = (method: string, name?: string): Record<string, string> =>
+  ({ "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method, ...(name ? { "Mcp-Name": name } : {}) });
+
+test("2026-07-28 requests: same auth, discover, complete results, and header checks", async () => {
+  const f = fixture();
+  const run = async (token: string, method: string, params: Record<string, unknown> = {}, headers = modernHeaders(method, params.name as string | undefined)) =>
+    handleCommunicatorRequest(f.communicator, request(rpc(method, { ...params, _meta: META }), token, headers));
+  try {
+    for (const token of ["", "cs_operator_token"]) expect((await run(token, "server/discover")).status).toBe(401);
+    const discover = await (await run(f.a, "server/discover")).json() as any;
+    expect(discover.result).toMatchObject({ resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: { listChanged: false } },
+      _meta: { "io.modelcontextprotocol/serverInfo": { name: "coding-sessions-communicator" } }, ttlMs: 300000, cacheScope: "private" });
+    expect(discover.result.instructions).toContain("untrusted");
+    const list = await (await run(f.a, "tools/list")).json() as any;
+    expect(list.result.resultType).toBe("complete");
+    expect(list.result.tools).toHaveLength(5);
+    const identity = await (await run(f.a, "tools/call", { name: "session_identity" })).json() as any;
+    expect(identity.result).toMatchObject({ resultType: "complete", structuredContent: { identity: { launch_id: "a" } } });
+    const mismatch = await run(f.a, "tools/call", { name: "send_message", arguments: { recipient_id: "b", text: "x", idempotency_key: "k" } }, modernHeaders("tools/call", "list_peers"));
+    expect(mismatch.status).toBe(400);
+    expect(((await mismatch.json()) as any).error.code).toBe(-32020);
+    expect((await f.communicator.read(f.b)).messages).toHaveLength(0);
+    const unknown = await run(f.a, "prompts/list");
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as any).error.code).toBe(-32601);
+    const old = await handleCommunicatorRequest(f.communicator, request(rpc("tools/list", { _meta: { ...META, "io.modelcontextprotocol/protocolVersion": "2024-01-01" } }), f.a, modernHeaders("tools/list")));
+    expect(old.status).toBe(400);
+    expect(((await old.json()) as any).error).toMatchObject({ code: -32022, data: { requested: "2024-01-01", supported: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] } });
+    // Legacy requests are answered as before: no resultType.
+    expect(((await (await handleCommunicatorRequest(f.communicator, request(rpc("tools/list"), f.a))).json()) as any).result.resultType).toBeUndefined();
+  } finally { f.db.close(); }
+});

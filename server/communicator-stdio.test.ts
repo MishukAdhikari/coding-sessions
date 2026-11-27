@@ -109,6 +109,48 @@ test("outside a managed launch the bridge is an MCP server with no tools, not a 
   }
 });
 
+test("a 2026-07-28 client over stdio: the bridge derives the required headers from each message", async () => {
+  const f = fixture();
+  const seen: Array<Record<string, string | null>> = [];
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: req => {
+    seen.push({ version: req.headers.get("mcp-protocol-version"), method: req.headers.get("mcp-method"), name: req.headers.get("mcp-name") });
+    return handleCommunicatorRequest(f.communicator, req);
+  } });
+  const a = client(`http://127.0.0.1:${server.port}/mcp/communicator`, f.communicator.prepare("a").token);
+  const _meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+  try {
+    const discover = (await a.request("server/discover", { _meta }).promise).result;
+    expect(discover).toMatchObject({ resultType: "complete", supportedVersions: ["2026-07-28"], cacheScope: "private" });
+    expect(discover._meta["io.modelcontextprotocol/serverInfo"].name).toBe("coding-sessions-communicator");
+    expect((await a.request("tools/list", { _meta }).promise).result.tools).toHaveLength(5);
+    const called = (await a.request("tools/call", { name: "session_identity", arguments: {}, _meta }).promise).result;
+    expect(called).toMatchObject({ resultType: "complete", structuredContent: { identity: { launch_id: "a" } } });
+    expect(seen).toEqual([
+      { version: "2026-07-28", method: "server/discover", name: null },
+      { version: "2026-07-28", method: "tools/list", name: null },
+      { version: "2026-07-28", method: "tools/call", name: "session_identity" },
+    ]);
+    // The endpoint's protocol errors reach the agent as they are, not as a connection failure.
+    const old = (await a.request("tools/list", { _meta: { ..._meta, "io.modelcontextprotocol/protocolVersion": "2030-01-01" } }).promise).error;
+    expect(old).toMatchObject({ code: -32022, data: { requested: "2030-01-01" } });
+    expect((await a.request("prompts/list", { _meta }).promise).error.code).toBe(-32601);
+    const noCaps = (await a.request("tools/list", { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }).promise).error;
+    expect(noCaps.code).toBe(-32602);
+  } finally { await a.close(); server.stop(true); f.server.stop(true); f.db.close(); }
+});
+
+test("outside a managed launch a 2026-07-28 client discovers an MCP server with no tools", async () => {
+  const child = Bun.spawn([process.execPath, script], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "" } });
+  const _meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta } }) + "\n");
+  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta } }) + "\n");
+  child.stdin.end();
+  const lines = (await new Response(child.stdout).text()).trim().split("\n").map(line => JSON.parse(line));
+  expect(await child.exited).toBe(0);
+  expect(lines[0].result).toMatchObject({ resultType: "complete", supportedVersions: ["2026-07-28"], _meta: { "io.modelcontextprotocol/serverInfo": { version: "offline" } } });
+  expect(lines[1].result).toEqual({ resultType: "complete", tools: [] });
+});
+
 test("redirects cannot forward a launch credential to another endpoint", async () => {
   let targetHits = 0;
   const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => { targetHits++; return new Response("unexpected"); } });
@@ -128,4 +170,24 @@ test("a full page of escaped text survives bridge response bounds", async () => 
     const received = await b.request("tools/call", { name: "read_messages", arguments: { limit: 100 } }).promise;
     expect(received.result.structuredContent.messages).toHaveLength(100);
   } finally { await b.close(); f.server.stop(true); f.db.close(); }
+});
+
+test("a bridge started while the app is down retries until it is back, instead of failing the server", async () => {
+  const db = new Database(":memory:"); applyDatabaseSchema(db);
+  db.query("INSERT INTO launches(screen,name,project_path,created_at,provider,launch_id) VALUES('cs-a','a','/tmp/project',1,'claude','a')").run();
+  const communicator = new Communicator(db, { isLive: async () => true });
+  const token = communicator.prepare("a").token;
+  // Reserve a port, then close it: the app is "restarting".
+  const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null) });
+  const port = probe.port;
+  probe.stop(true);
+  const a = client(`http://127.0.0.1:${port}/mcp/communicator`, token);
+  let server: ReturnType<typeof Bun.serve> | null = null;
+  try {
+    const pending = a.request("initialize", { protocolVersion: "2025-11-25" }).promise;
+    await Bun.sleep(700);
+    server = Bun.serve({ port, hostname: "127.0.0.1", fetch: req => handleCommunicatorRequest(communicator, req) });
+    expect((await pending).result.serverInfo.name).toBe("coding-sessions-communicator");
+    expect((await a.request("tools/list").promise).result.tools.length).toBeGreaterThan(0);
+  } finally { server?.stop(true); await a.close(); }
 });

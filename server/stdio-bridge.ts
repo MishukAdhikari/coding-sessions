@@ -1,4 +1,5 @@
 /** Shared stdio ⇄ loopback HTTP adapter for app-owned MCP entries. No application/database imports: installed source may be read-only. */
+import { discoverResult, isModernMessage, modernHeaders } from "./mcp-2026";
 export interface BridgeOptions {
   tokenEnv: string;
   urlEnv: string;
@@ -31,7 +32,14 @@ async function runOffline(message: string): Promise<void> {
       let msg: { id?: unknown; method?: unknown; params?: { protocolVersion?: unknown } };
       try { msg = JSON.parse(line); } catch { continue; }
       if (msg.id === undefined || msg.id === null) continue;
-      if (msg.method === "initialize") {
+      if (isModernMessage(msg)) {
+        // 2026-07-28: no initialize; discover answers what initialize would, every result is complete.
+        const serverInfo = { name: "coding-sessions", version: "offline" };
+        if (msg.method === "server/discover") reply(msg.id, { result: discoverResult({ capabilities: { tools: {} }, serverInfo, instructions: message }) });
+        else if (msg.method === "tools/list") reply(msg.id, { result: { resultType: "complete", tools: [] } });
+        else if (msg.method === "ping") reply(msg.id, { result: { resultType: "complete" } });
+        else reply(msg.id, { error: { code: -32601, message } });
+      } else if (msg.method === "initialize") {
         reply(msg.id, { result: {
           protocolVersion: typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "2025-06-18",
           capabilities: { tools: {} }, serverInfo: { name: "coding-sessions", version: "offline" }, instructions: message,
@@ -65,11 +73,39 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
   const error = (id: unknown, code: number, message: string) => write({ jsonrpc: "2.0", id, error: { code, message } });
   const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
-  async function post(line: string, signal: AbortSignal): Promise<Response> {
+  async function post(line: string, signal: AbortSignal, extra: Record<string, string> = {}): Promise<Response> {
     return fetch(endpoint, {
       method: "POST", redirect: "error", signal,
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: line,
+      headers: { ...extra, authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" }, body: line,
     });
+  }
+  /**
+   * The app may be restarting (an update, a deploy): a request that never reached it is retried
+   * with backoff inside the request's own time budget, so a session's MCP server does not stay
+   * failed after one bad moment. A tool call is retried only when the connection was refused,
+   * since anything else may have reached the app and run it.
+   */
+  const RETRY_STATUS = new Set([502, 503, 504]);
+  const SAFE_TO_RETRY = new Set(["initialize", "server/discover", "tools/list", "ping", "prompts/list", "resources/list"]);
+  async function postWithRetry(msg: Record<string, unknown>, line: string, signal: AbortSignal, extra: Record<string, string>): Promise<Response> {
+    const safe = SAFE_TO_RETRY.has(String(msg.method));
+    for (let attempt = 0; ; attempt++) {
+      let response: Response | null = null;
+      try { response = await post(line, signal, extra); }
+      catch (failure) {
+        // Only "the app is not there": a refused redirect or a bad response is never retried.
+        const code = String((failure as { code?: unknown })?.code ?? "");
+        const refused = /refused/i.test(code);
+        const dropped = /reset|closed|FailedToOpenSocket/i.test(code);
+        if (signal.aborted || !(refused || (safe && dropped))) throw failure;
+      }
+      if (response && !(safe && RETRY_STATUS.has(response.status))) return response;
+      await response?.body?.cancel().catch(() => {});
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, Math.min(4000, 250 * 2 ** attempt));
+        signal.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true });
+      });
+    }
   }
   async function bounded(response: Response): Promise<unknown> {
     const reader = response.body?.getReader();
@@ -98,13 +134,17 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; abort.abort(); }, options.timeoutMs);
     try {
-      const response = await post(line, abort.signal);
+      // A 2026-07-28 request repeats its version, method and name in headers; derive them from the message.
+      const modern = isModernMessage(msg);
+      const response = await postWithRetry(msg, line, abort.signal, modern ? modernHeaders(msg) : {});
       if (response.status === 202 && key === null) return;
-      if (!response.ok) throw new Error();
+      // A modern request's protocol errors come with 400 or 404 and a JSON-RPC body: pass that on.
+      if (!response.ok && !(modern && (response.status === 400 || response.status === 404))) throw new Error();
       const value = await bounded(response);
       if (!object(value) || value.jsonrpc !== "2.0" || value.id !== id || (!Object.hasOwn(value, "result") && !Object.hasOwn(value, "error"))) throw new Error();
+      if (!response.ok && !Object.hasOwn(value, "error")) throw new Error();
       if (key !== null) write(value);
-      if (msg.method === "initialize" && Object.hasOwn(value, "result")) initialized = true;
+      if ((msg.method === "initialize" || modern) && Object.hasOwn(value, "result")) initialized = true;
     } catch {
       if (key !== null) error(id, abort.signal.aborted && !timedOut ? -32800 : -32000,
         abort.signal.aborted && !timedOut ? "Request cancelled." : timedOut ? options.messages.timeout : options.messages.failed);
@@ -118,6 +158,7 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
   let revision: string | null = null;
   let poller: ReturnType<typeof setInterval> | undefined;
   let polling: AbortController | null = null;
+  let unreachable = false;
   if (options.revisionMethod) {
     poller = setInterval(async () => {
       if (!initialized || polling || closed) return;
@@ -125,15 +166,18 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
       const timer = setTimeout(() => abort.abort(), 15000);
       try {
         const response = await post(JSON.stringify({ jsonrpc: "2.0", id: "revision", method: options.revisionMethod }), abort.signal);
+        // This launch's token is revoked: the session is ending or was replaced; nothing to recover.
         if (response.status === 401) { clearInterval(poller); return; }
-        if (!response.ok) return;
+        if (!response.ok) { unreachable = true; return; }
         const value = await bounded(response);
         const next = object(value) && object(value.result) && typeof value.result.revision === "string" ? value.result.revision : null;
         if (next === null) return;
         // Also on the first value: grants may have changed between the client's tools/list and this poll.
-        if (next !== revision) write({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+        // And after the app was unreachable: a tools/list the client sent meanwhile may have failed.
+        if (next !== revision || unreachable) write({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         revision = next;
-      } catch { /* The next tick retries; the server re-checks grants on every call anyway. */ }
+        unreachable = false;
+      } catch { unreachable = true; /* The next tick retries; the server re-checks grants on every call anyway. */ }
       finally { clearTimeout(timer); if (polling === abort) polling = null; }
     }, options.revisionIntervalMs ?? 10000);
     poller.unref?.();

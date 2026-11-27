@@ -63,6 +63,7 @@ import { handleServerSettingsRoute } from "./server-settings-route";
 import { createStepUpGrants } from "./step-up";
 import { createCliLogins, handleCliLoginRoute } from "./cli-login";
 import { agentAccounts } from "./agent-accounts";
+import { accountIdentity, createAccountReconnect, type AccountAgent } from "./account-reconnect";
 import { handleAgentAccountsRoute } from "./agent-accounts-route";
 import { handleSecretsRoute } from "./secrets-route";
 import { secretStore } from "./secret-store";
@@ -223,6 +224,47 @@ const restart = async (id: string) => {
   return result;
 };
 
+/** After an agent's account changes, its running sessions reconnect their MCP servers by restarting. */
+const accountReconnect = createAccountReconnect({
+  identity: async (agent) => accountIdentity(await agentAccounts.account(agent)),
+  sessions: async () => {
+    const now = Date.now();
+    return (await listSessions()).filter((s) => s.status !== "ended").map((s) => ({
+      id: s.id, provider: s.provider,
+      startedAt: s.uptimeSec === null ? now : now - s.uptimeSec * 1000,
+      busy: s.busy || s.asking || s.status === "starting",
+    }));
+  },
+  restart: (id) => restart(id),
+  log: (line) => console.log(line),
+  now: () => Date.now(),
+});
+// Soon after start for a baseline (a switch made in a terminal is caught by the next check), then every 5 minutes.
+setTimeout(() => { void accountReconnect.tick().catch(() => {}); }, 30_000).unref();
+setInterval(() => { void accountReconnect.tick().catch(() => {}); }, 5 * 60_000).unref();
+/** Right after an account action the new sign-in finishes in the background: watch that agent closely for a while. */
+const accountBursts = new Map<AccountAgent, ReturnType<typeof setInterval>>();
+function watchAccount(agent: AccountAgent): void {
+  clearInterval(accountBursts.get(agent));
+  const until = Date.now() + 15 * 60_000;
+  const timer = setInterval(() => {
+    if (Date.now() > until) { clearInterval(timer); accountBursts.delete(agent); return; }
+    void accountReconnect.tick([agent]).catch(() => {});
+  }, 15_000);
+  timer.unref();
+  accountBursts.set(agent, timer);
+}
+const accountsWithReconnect: typeof agentAccounts = {
+  ...agentAccounts,
+  async action(provider, action, code) {
+    // Baseline before the change, so a sign-out/sign-in pair is compared with the old account.
+    if (provider === "claude" || provider === "codex" || provider === "command-code") await accountReconnect.tick([provider]).catch(() => {});
+    const result = await agentAccounts.action(provider, action, code);
+    if (provider === "claude" || provider === "codex" || provider === "command-code") watchAccount(provider);
+    return result;
+  },
+};
+
 const bootstrapPath = await auth.ensureAdminPassword();
 if (bootstrapPath) console.log(`Initial admin credential is in the protected file: ${bootstrapPath}`);
 
@@ -328,7 +370,7 @@ const mcpDeps: McpDeps = {
     insert: (path, label) => { db.query("INSERT OR IGNORE INTO projects (path, label) VALUES (?, ?)").run(path, label); },
     remove: (id) => db.query("DELETE FROM projects WHERE id = ?").run(id).changes > 0,
   },
-  accounts: agentAccounts,
+  accounts: accountsWithReconnect,
   sessionExtras(sessions) {
     const waiting = secretRequests.pendingByScreen();
     return new Map(withPrLinks(sessions).map((s) => [s.id, {
@@ -597,7 +639,7 @@ const server = Bun.serve<TermSocketData>({
 
     const accountResponse = await handleAgentAccountsRoute(req, {
       cookieName: COOKIE_NAME, origin: auth.ORIGIN,
-      checkBrowserSession: auth.checkAuthSession, accounts: agentAccounts,
+      checkBrowserSession: auth.checkAuthSession, accounts: accountsWithReconnect,
     });
     if (accountResponse) return accountResponse;
 
@@ -1096,7 +1138,7 @@ const server = Bun.serve<TermSocketData>({
       if (!saved.ok) return json({ error: saved.error }, 422);
       // Report what the CLI makes of the key just stored, rather than "saved" alone.
       const preflight = await preflightCommandCode();
-      if (preflight.ok) recordAccountLogin("command-code", null);
+      if (preflight.ok) { recordAccountLogin("command-code", null); void accountReconnect.changed("command-code").catch(() => {}); }
       return json({
         ok: true,
         verified: preflight.ok,

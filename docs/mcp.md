@@ -9,6 +9,27 @@ Transport is Streamable HTTP, stateless, JSON responses only (no server-sent
 stream; `GET /mcp` is 405). Auth is OAuth 2.1 with dynamic client registration and
 PKCE; an `cs_` CLI token also works as a fixed bearer header.
 
+**Protocol versions.** `/mcp` and the per-launch loopback endpoints agents reach
+through their stdio bridges (`/mcp/communicator`, `/mcp/connectors`) speak MCP
+**2026-07-28** as well as the `initialize`-era versions 2025-11-25, 2025-06-18,
+2025-03-26 and 2024-11-05:
+
+- A request whose `params._meta` has `io.modelcontextprotocol/protocolVersion` is a
+  2026-07-28 request: no `initialize` and no session. It carries
+  `io.modelcontextprotocol/clientCapabilities` in `_meta` (missing: 400, `-32602`) and
+  the headers `MCP-Protocol-Version`, `Mcp-Method` and, for `tools/call`, `Mcp-Name`
+  (plain or `=?base64?…?=`), which must match the body (else 400, `-32020`). Another
+  version is 400 with `-32022` and `data.supported`. `server/discover` returns the
+  capabilities, server info and instructions `initialize` gives, with
+  `ttlMs: 300000` and `cacheScope: "private"`. Every result has
+  `resultType: "complete"`; an unknown method is 404 with `-32601`; a JSON-RPC batch
+  holding such a request is 400.
+- `initialize` and every request without that `_meta` key are answered exactly as
+  before. `initialize` negotiates among the older versions only, so clients that use
+  it (Claude Code, Codex and the Claude app today) see no change.
+- Auth is the same for both: the same tokens per endpoint and the same 401. The stdio
+  bridges forward a 2026-07-28 request with those headers derived from the message.
+
 The quickest setup from a terminal is the [`cs` CLI](cli.md): `cs mcp add claude` or `cs mcp add codex`.
 
 Scripts and agents on the server itself can call the same tools without a token over the opt-in [local control socket](socket.md).
