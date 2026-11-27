@@ -614,6 +614,8 @@ async function secretTool(deps: McpDeps, name: string, args: Record<string, unkn
         const created = await requests.create({
           kind: name === "request_connector" ? "connector" : "secret",
           name: args.name, reason: args.reason, url: args.url, auth: args.auth,
+          // Passed through only so an attempt at a local command is refused explicitly, never silently dropped.
+          transport: args.transport, command: args.command, args: args.args, env_secrets: args.env_secrets, cwd: args.cwd,
         }, { by: "operator", launchId: session?.launchId ?? null, screen: session?.screen ?? null, sessionName: session?.sessionName ?? null, agent: session?.agent ?? null });
         return ok({ ...created, next: "Give the member this link. Do not ask for the value in chat. Then poll " + (name === "request_connector" ? "connector_status." : "secret_status.") });
       }

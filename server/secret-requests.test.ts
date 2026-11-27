@@ -179,7 +179,7 @@ test("audit lines carry ids, names and outcomes, never values, tokens or reasons
 
 function connectorView(over: Partial<ConnectorView> = {}): ConnectorView {
   return {
-    id: "11111111-1111-4111-8111-111111111111", name: "KazTrack", namespace: "kaztrack", url: "https://mcp.kaztrack.example/mcp", host: "mcp.kaztrack.example",
+    id: "11111111-1111-4111-8111-111111111111", name: "KazTrack", namespace: "kaztrack", url: "https://mcp.kaztrack.example/mcp", host: "mcp.kaztrack.example", transport: "http", protocol: null, headers: [], local: null,
     auth: { mode: "bearer", oauth: null }, oauth_client: null, enabled: true, state: "not_checked", credential: { set: false, set_at: null },
     server: null, checked_at: null, last_ok_at: null, check_detail: null, tools: [], discovered_count: 0, granted_tools: [], default_providers: [], launches: [],
     ...over,

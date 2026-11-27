@@ -175,6 +175,11 @@ export class SecretRequests {
       name = secretName(input.name);
     } else {
       name = connectorName(input.name);
+      // Agents and operator connections may ask only for a remote server. A local command would run
+      // on this machine, so it is never requestable, not even pending the member's approval.
+      if ((input.transport !== undefined && input.transport !== "http") || ["command", "args", "env_secrets", "cwd"].some(key => input[key] !== undefined)) {
+        throw new SecretRequestError("Only remote https:// MCP servers can be requested. A local command connector can be added only by the owner in Settings.");
+      }
       try { url = validateServerUrl(input.url, networkPolicy()).href; }
       catch (error) { throw new SecretRequestError(error instanceof DestinationError ? error.message : "That URL cannot be used."); }
       if (input.auth !== undefined && input.auth !== "bearer" && input.auth !== "oauth") throw new SecretRequestError('auth must be "bearer" or "oauth".');
@@ -320,6 +325,8 @@ export class SecretRequests {
   private async connectorFor(row: Row, token?: string): Promise<{ view: ConnectorView; created: boolean }> {
     const found = this.findConnector(row.name);
     if (found) {
+      // A local command is the owner's alone to set up or change; a request never touches one.
+      if (found.transport === "stdio") throw new SecretRequestError(`${found.name} is a local command connector. Only the owner can change it, in Settings › Connectors.`, 409, "conflict");
       if (found.url !== row.url) throw new SecretRequestError(`A connector named ${found.name} already points to ${found.host ?? "another server"}. Change it in Settings › Connectors instead.`, 409, "conflict");
       return { view: found, created: false };
     }
