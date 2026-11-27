@@ -308,7 +308,16 @@ function track(child: Subprocess): void {
   void child.exited.then(() => children.delete(child), () => children.delete(child));
   if (!exitHook) {
     exitHook = true;
-    process.once("exit", () => { for (const entry of children) { try { entry.kill("SIGKILL"); } catch {} } });
+    const killAll = () => { for (const entry of children) { try { entry.kill("SIGKILL"); } catch {} } };
+    process.once("exit", killAll);
+    // A signal that ends the service ends its local connectors too, then terminates as it would have.
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+      const handler = () => {
+        killAll();
+        if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+      };
+      process.once(signal, handler);
+    }
   }
 }
 
