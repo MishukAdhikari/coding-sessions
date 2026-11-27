@@ -131,6 +131,17 @@ Like `zmx send`, `screen -X` and herdr's socket, the bridge socket is usable by 
 
 Settings › Secrets stores named values (API tokens, keys) and delivers them to **every** new managed session, Claude, Codex, Command Code and registered Commands alike, as environment variables. Precedence, lowest first: secret-manager values in the order the managers were added, values stored in the app, the provider's own credential (a Command's token, the Command Code key, a preset's launch settings), then session plumbing (`CS_COMMUNICATOR_*`, `CS_CONNECTOR_*`). A running session's environment keeps the values it started with.
 
+### Importing secrets
+
+Settings › Secrets › **Import** stores many values at once from a pasted `.env` file or flat JSON object, or a chosen file of up to 512 KB. The browser parses the text and keeps the values in memory; a chosen file's text is never copied into the page.
+
+- **`.env`**: one `KEY=VALUE` per line; blank lines and `#` comments are skipped; `export ` is allowed; an unquoted value ends at ` #`; single quotes are literal; double quotes take `\n`, `\r`, `\t`, `\"` and `\\` and may span lines. A line without `=` is reported by its number. A name such as `api-key` is not changed silently: it is invalid, with the suggested `API_KEY` one click away.
+- **JSON**: an object of strings; numbers and `true`/`false` are stored as text; `null`, arrays and objects are invalid for that key.
+
+Before anything is saved, the server checks each entry (`POST /api/secrets/import/preview`) and the sheet lists its name, length and status: **New**, **Replace** (a value is stored; unticked by default), **Unchanged** (the stored value is the same, compared on the server in constant time) or **Invalid** with the reason: a bad or reserved name, an empty, whitespace-only, NUL-containing or over-32 KB value, or a name given more than once (every copy is invalid; the last one does not win). Saving (`POST /api/secrets/import`) checks everything again on the server and writes in one transaction: any invalid entry, or more than 200 secrets in all, refuses the whole import with nothing saved. A stored name is replaced only when listed in `replace`. Running sessions' secrets files are refreshed once per import.
+
+Both routes have the same gate as the rest of Secrets: a signed-in browser and the same Origin; CLI and MCP tokens get `403 browser_only`. A request is at most 1 MB and 200 entries. No response, error or log line carries a value. Secret managers are not affected.
+
 ### Secrets file for running sessions
 
 Each managed launch also gets `CS_SECRETS_FILE`, a file of `export NAME='value'` lines holding the same stored secrets. The app rewrites it atomically (temporary file, then rename) whenever a secret or a secret manager changes and whenever a secret request is fulfilled, so a secret saved after a session started still reaches it; deleting a secret removes it from every file. Agents read one name from it in a subshell rather than printing it. The communicator's `secret_status` reports whether the session's own environment has the current value (`current`, `outdated`, `missing`) by comparing keyed hashes recorded at launch; the hashes use a random per-process key and live only in memory, so after a server restart the answer is `unknown`.

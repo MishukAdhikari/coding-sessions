@@ -16,6 +16,7 @@
  * is used and the error is kept for the Secrets sheet to show.
  */
 import type { Database } from "bun:sqlite";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "./db";
 import { childEnvironment } from "./child-env";
 import { DestinationError, networkPolicy, readBounded, safeFetch, validateServerUrl } from "./connector-net";
@@ -41,12 +42,22 @@ export class SecretStoreError extends Error {
   constructor(message: string, readonly status = 422) { super(message); this.name = "SecretStoreError"; }
 }
 
+export type ImportStatus = "new" | "replace" | "unchanged" | "invalid";
+/** One row of an import preview, in the order the entries were sent. Never a value. */
+export interface ImportPreviewEntry { name: string; status: ImportStatus; reason?: string }
+/** An import refused because of entries that cannot be stored; nothing was saved. */
+export class SecretImportError extends SecretStoreError {
+  constructor(message: string, readonly entries: ImportPreviewEntry[]) { super(message, 422); this.name = "SecretImportError"; }
+}
+
 /** What a CLI would actually read; same rule as a Command's token env var. */
 export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const VALUE_MAX = 32 * 1024;
 const LABEL_MAX = 40;
 const SOURCES_MAX = 10;
 const SECRETS_MAX = 200;
+/** Entries one import may carry; the same as the store's own limit. */
+export const IMPORT_MAX = SECRETS_MAX;
 const RESPONSE_MAX = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 10_000;
 export const SNAPSHOT_FRESH_MS = 5 * 60_000;
@@ -76,6 +87,27 @@ export function checkName(raw: unknown): string {
 
 const usableValue = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= VALUE_MAX && !value.includes("\u0000");
+
+/**
+ * Why an imported entry cannot be stored, or null. Fixed wording only: a reason never
+ * quotes the value, and names are checked exactly as sent (no silent upper-casing).
+ */
+function importIssue(name: unknown, value: unknown): string | null {
+  if (typeof name !== "string" || !SECRET_NAME_RE.test(name)) return "Not a valid name: use capitals, digits and underscores, starting with a letter.";
+  if (reservedName(name)) return "Reserved: the server or the session itself uses this name.";
+  if (typeof value !== "string") return "The value must be text.";
+  if (!value.length) return "The value is empty.";
+  if (value.includes("\u0000")) return "The value contains a NUL character.";
+  if (value.length > VALUE_MAX) return "The value is larger than 32 KB.";
+  if (!value.trim()) return "The value is only whitespace.";
+  return null;
+}
+
+/** Constant-time comparison of two values of any length. */
+function sameValue(a: string, b: string): boolean {
+  const digest = (text: string) => createHash("sha256").update(text, "utf8").digest();
+  return timingSafeEqual(digest(a), digest(b));
+}
 
 /** Keep only entries a session can receive; external managers may hold anything. */
 function usableEntries(entries: Iterable<[unknown, unknown]>): Record<string, string> {
@@ -276,6 +308,36 @@ export function createSecretStore(deps: SecretStoreDependencies) {
     catch { return {}; }
   }
 
+  /**
+   * What an import would do to each entry, in the order sent: new, replace (a value is
+   * stored under that name), unchanged (the stored value is the same, compared in
+   * constant time on the server) or invalid with a reason. Every duplicate of a name
+   * is invalid; the last one does not silently win. Values never come back.
+   */
+  function previewImport(rawEntries: unknown): ImportPreviewEntry[] {
+    if (!Array.isArray(rawEntries)) throw new SecretStoreError("Send entries as a list of {name, value}.", 400);
+    if (rawEntries.length > IMPORT_MAX) throw new SecretStoreError(`Import up to ${IMPORT_MAX} secrets at a time.`);
+    const entries = rawEntries.map(entry => {
+      const item = record(entry);
+      return { name: typeof item.name === "string" ? item.name.trim() : item.name, value: item.value };
+    });
+    const counts = new Map<unknown, number>();
+    for (const { name } of entries) counts.set(name, (counts.get(name) ?? 0) + 1);
+    const stored = database.query("SELECT value FROM secrets WHERE name = ?");
+    return entries.map(({ name, value }) => {
+      // An invalid name may be anything a client sent; echo only a short, plain form of it.
+      const shown = typeof name === "string" ? name.slice(0, 64) : "";
+      const issue = importIssue(name, value);
+      if (issue) return { name: shown, status: "invalid", reason: issue };
+      if ((counts.get(name) ?? 0) > 1) return { name: shown, status: "invalid", reason: "This name appears more than once in the import." };
+      const row = stored.get(name as string) as { value: string } | null;
+      if (!row) return { name: shown, status: "new" };
+      let current: string | null = null;
+      try { current = codec.openSecret(row.value, secretContext(name as string)); } catch {}
+      return { name: shown, status: current !== null && sameValue(current, value as string) ? "unchanged" : "replace" };
+    });
+  }
+
   return {
     list(): { secrets: SecretView[]; sources: SourceView[] } {
       const secrets = (database.query("SELECT name, updated_at FROM secrets ORDER BY name").all() as Array<{ name: string; updated_at: number }>)
@@ -296,6 +358,40 @@ export function createSecretStore(deps: SecretStoreDependencies) {
       database.query("INSERT INTO secrets (name, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
         .run(name, seal(value, secretContext(name)), updatedAt);
       return { name, updatedAt };
+    },
+
+    previewImport,
+
+    /**
+     * Save an import in one transaction, all or nothing. Any invalid entry refuses the
+     * whole import (SecretImportError, with the per-name reasons). New names are saved;
+     * a name that already has a value is replaced only when listed in `replace`, and is
+     * skipped otherwise, as is one whose value is unchanged. Refused as a whole when the
+     * new names would take the store past its limit. Everything is checked again here:
+     * the client's parse and preview are never trusted.
+     */
+    importSecrets(rawEntries: unknown, rawReplace: unknown): { saved: string[]; skipped: string[] } {
+      if (rawReplace !== undefined && !Array.isArray(rawReplace)) throw new SecretStoreError("Send replace as a list of names.", 400);
+      const replace = new Set((rawReplace ?? []).filter((name: unknown): name is string => typeof name === "string"));
+      return database.transaction(() => {
+        const preview = previewImport(rawEntries);
+        const invalid = preview.filter(entry => entry.status === "invalid");
+        if (invalid.length) {
+          throw new SecretImportError(`${invalid.length} ${invalid.length === 1 ? "entry" : "entries"} cannot be stored. Nothing was saved.`, preview);
+        }
+        const values = new Map((rawEntries as unknown[]).map(entry => [String(record(entry).name).trim(), record(entry).value as string]));
+        const write = preview.filter(entry => entry.status === "new" || (entry.status === "replace" && replace.has(entry.name)));
+        const skipped = preview.filter(entry => !write.includes(entry)).map(entry => entry.name);
+        const added = write.filter(entry => entry.status === "new").length;
+        const count = (database.query("SELECT COUNT(*) AS n FROM secrets").get() as { n: number }).n;
+        if (count + added > SECRETS_MAX) {
+          throw new SecretStoreError(`This import adds ${added} new ${added === 1 ? "secret" : "secrets"} to the ${count} stored; the limit is ${SECRETS_MAX}. Nothing was saved.`);
+        }
+        const updatedAt = deps.now();
+        const upsert = database.query("INSERT INTO secrets (name, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at");
+        for (const entry of write) upsert.run(entry.name, seal(values.get(entry.name)!, secretContext(entry.name)), updatedAt);
+        return { saved: write.map(entry => entry.name), skipped };
+      })();
     },
 
     /**

@@ -9,7 +9,7 @@
     });
     const data = await res.json().catch(() => ({}));
     // status and the server's code (e.g. "gone", "exists", "step_up") let a caller tell refusals apart.
-    if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, code: data.code });
+    if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status, code: data.code, entries: Array.isArray(data.entries) ? data.entries : undefined });
     return data;
   };
 

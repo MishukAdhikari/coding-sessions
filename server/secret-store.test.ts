@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { applyDatabaseSchema } from "./db-schema";
 import { createSecretCodec } from "./secrets";
-import { createSecretStore, fetchSource, reservedName, SecretStoreError, SNAPSHOT_FRESH_MS, validateSourceConfig, type SourceDependencies } from "./secret-store";
+import { createSecretStore, fetchSource, reservedName, SecretImportError, SecretStoreError, SNAPSHOT_FRESH_MS, validateSourceConfig, type SourceDependencies } from "./secret-store";
 import { handleSecretsRoute } from "./secrets-route";
 import { safeFetch } from "./connector-net";
 
@@ -299,4 +299,140 @@ test("source routes need the same browser session and origin, and never echo the
   expect(listed).not.toContain("\"a\"");
   expect((await handleSecretsRoute(req("DELETE", `/api/secret-sources/${source.id}`), routeDeps(true)))!.status).toBe(200);
   expect((await handleSecretsRoute(req("DELETE", `/api/secret-sources/${source.id}`), routeDeps(true)))!.status).toBe(404);
+});
+
+/* ---------- import ---------- */
+
+const count = (database: Database) => (database.query("SELECT COUNT(*) AS n FROM secrets").get() as { n: number }).n;
+
+test("import preview: new, replace, unchanged and invalid, in the order sent, with no values", () => {
+  const { s } = store();
+  s.set("SAME_KEY", "same-value-1");
+  s.set("OLD_KEY", "old-value-1");
+  const preview = s.previewImport([
+    { name: "NEW_KEY", value: "new-value-1" },
+    { name: "OLD_KEY", value: "changed-value-1" },
+    { name: "SAME_KEY", value: "same-value-1" },
+    { name: "PATH", value: "/usr/bin" },
+    { name: "CS_TOKEN", value: "x" },
+    { name: "lower_key", value: "v" },
+    { name: "EMPTY", value: "" },
+    { name: "BLANK", value: "   " },
+    { name: "NUL", value: "a\u0000b" },
+    { name: "BIG", value: "x".repeat(32 * 1024 + 1) },
+    { name: "TWICE", value: "first-value" },
+    { name: "TWICE", value: "second-value" },
+  ]);
+  expect(preview.map(entry => `${entry.name}:${entry.status}`)).toEqual([
+    "NEW_KEY:new", "OLD_KEY:replace", "SAME_KEY:unchanged", "PATH:invalid", "CS_TOKEN:invalid", "lower_key:invalid",
+    "EMPTY:invalid", "BLANK:invalid", "NUL:invalid", "BIG:invalid", "TWICE:invalid", "TWICE:invalid",
+  ]);
+  expect(preview[3]!.reason).toMatch(/Reserved/);
+  expect(preview[4]!.reason).toMatch(/Reserved/);
+  expect(preview[5]!.reason).toMatch(/Not a valid name/);
+  expect(preview[6]!.reason).toMatch(/empty/);
+  expect(preview[7]!.reason).toMatch(/whitespace/);
+  expect(preview[8]!.reason).toMatch(/NUL/);
+  expect(preview[9]!.reason).toMatch(/32 KB/);
+  expect(preview[10]!.reason).toMatch(/more than once/);
+  const text = JSON.stringify(preview);
+  for (const value of ["new-value-1", "changed-value-1", "same-value-1", "old-value-1", "first-value", "second-value", "/usr/bin"]) expect(text).not.toContain(value);
+  expect(() => s.previewImport("nope")).toThrow(SecretStoreError);
+  expect(() => s.previewImport(Array.from({ length: 201 }, (_, i) => ({ name: `K${i}`, value: "v" })))).toThrow(/up to 200/);
+});
+
+test("import is all or nothing: one invalid entry saves nothing and names every reason", async () => {
+  const { s, database } = store();
+  let error: unknown;
+  try { s.importSecrets([{ name: "GOOD_ONE", value: "v1" }, { name: "LD_PRELOAD", value: "x" }], []); } catch (e) { error = e; }
+  expect(error).toBeInstanceOf(SecretImportError);
+  expect((error as SecretImportError).entries.map(entry => entry.status)).toEqual(["new", "invalid"]);
+  expect(count(database)).toBe(0);
+  expect(await s.sessionEnv()).toEqual({});
+});
+
+test("import replaces an existing name only when listed, and skips unchanged ones", async () => {
+  const { s } = store();
+  s.set("KEEP_ME", "original");
+  s.set("SWAP_ME", "original");
+  s.set("SAME_ME", "same");
+  const result = s.importSecrets([
+    { name: "KEEP_ME", value: "changed" }, { name: "SWAP_ME", value: "changed" },
+    { name: "SAME_ME", value: "same" }, { name: "FRESH", value: "fresh" },
+  ], ["SWAP_ME", "SAME_ME"]);
+  expect(result).toEqual({ saved: ["SWAP_ME", "FRESH"], skipped: ["KEEP_ME", "SAME_ME"] });
+  expect(await s.sessionEnv()).toEqual({ KEEP_ME: "original", SWAP_ME: "changed", SAME_ME: "same", FRESH: "fresh" });
+});
+
+test("import refuses the whole batch when new names would pass the 200-secret limit", () => {
+  const { s, database } = store();
+  for (let i = 0; i < 195; i++) s.set(`EXISTING_${i}`, "v");
+  const entries = Array.from({ length: 6 }, (_, i) => ({ name: `ADDED_${i}`, value: "v" }));
+  expect(() => s.importSecrets(entries, [])).toThrow(/limit is 200\. Nothing was saved/);
+  expect(count(database)).toBe(195);
+  // Replacing existing names does not count against the limit.
+  expect(s.importSecrets([...entries.slice(0, 5), { name: "EXISTING_0", value: "new" }], ["EXISTING_0"]).saved).toHaveLength(6);
+  expect(count(database)).toBe(200);
+});
+
+test("without the encryption key an import writes nothing", () => {
+  const { s, database } = store({ codec: createSecretCodec(null) });
+  expect(() => s.importSecrets([{ name: "A_KEY", value: "a" }, { name: "B_KEY", value: "b" }], [])).toThrow(/encryption key/);
+  expect(count(database)).toBe(0);
+});
+
+test("import routes: browser session and same origin only, one refresh per import, no values in any response", async () => {
+  const { s, database } = store();
+  s.set("EXISTS", "stored-value");
+  let refreshes = 0;
+  const deps = (browser: boolean, bearer = false) => ({
+    cookieName: "cs", origin: "https://app.example", store: () => s,
+    checkBrowserSession: () => browser, isAuthenticated: () => browser || bearer, onChanged: () => { refreshes++; },
+  });
+  const req = (path: string, body: unknown, origin = "https://app.example", method = "POST") =>
+    new Request(`https://app.example${path}`, { method, headers: { cookie: "cs=abc", origin, "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) });
+  const entries = [{ name: "ALPHA_KEY", value: "alpha-secret" }, { name: "BETA_KEY", value: "beta-secret" }, { name: "EXISTS", value: "replacement-secret" }];
+  const values = ["alpha-secret", "beta-secret", "replacement-secret", "stored-value"];
+  const noValues = (text: string) => { for (const value of values) expect(text).not.toContain(value); };
+
+  for (const path of ["/api/secrets/import", "/api/secrets/import/preview"]) {
+    const cli = await handleSecretsRoute(req(path, { entries }), deps(false, true));
+    expect(cli!.status).toBe(403);
+    const cliText = await cli!.text();
+    expect(JSON.parse(cliText).code).toBe("browser_only");
+    noValues(cliText);
+    expect((await handleSecretsRoute(req(path, { entries }), deps(false)))!.status).toBe(401);
+    expect((await handleSecretsRoute(req(path, { entries }, "https://evil.example"), deps(true)))!.status).toBe(403);
+    expect((await handleSecretsRoute(req(path, "{not json"), deps(true)))!.status).toBe(400);
+    expect((await handleSecretsRoute(req(path, JSON.stringify({ entries: [{ name: "BIG", value: "x".repeat(1024 * 1024) }] })), deps(true)))!.status).toBe(413);
+  }
+  expect((await handleSecretsRoute(new Request("https://app.example/api/secrets/import", { headers: { cookie: "cs=abc" } }), deps(true)))!.status).toBe(405);
+  expect(count(database)).toBe(1);
+
+  const preview = await handleSecretsRoute(req("/api/secrets/import/preview", { entries }), deps(true));
+  const previewText = await preview!.text();
+  noValues(previewText);
+  expect(JSON.parse(previewText).entries.map((entry: { status: string }) => entry.status)).toEqual(["new", "new", "replace"]);
+  expect(refreshes).toBe(0);
+
+  const refused = await handleSecretsRoute(req("/api/secrets/import", { entries: [...entries, { name: "PATH", value: "alpha-secret" }] }), deps(true));
+  expect(refused!.status).toBe(422);
+  const refusedText = await refused!.text();
+  noValues(refusedText);
+  expect(JSON.parse(refusedText)).toMatchObject({ code: "invalid_entries", entries: [{ status: "new" }, { status: "new" }, { status: "replace" }, { name: "PATH", status: "invalid" }] });
+  expect(count(database)).toBe(1);
+  expect(refreshes).toBe(0);
+
+  const saved = await handleSecretsRoute(req("/api/secrets/import", { entries, replace: ["EXISTS"] }), deps(true));
+  expect(saved!.status).toBe(200);
+  const savedText = await saved!.text();
+  noValues(savedText);
+  expect(JSON.parse(savedText)).toEqual({ ok: true, saved: ["ALPHA_KEY", "BETA_KEY", "EXISTS"], skipped: [] });
+  expect(refreshes).toBe(1);
+  expect(await s.sessionEnv()).toEqual({ ALPHA_KEY: "alpha-secret", BETA_KEY: "beta-secret", EXISTS: "replacement-secret" });
+
+  // Nothing to write: no refresh.
+  const again = await handleSecretsRoute(req("/api/secrets/import", { entries }), deps(true));
+  expect(JSON.parse(await again!.text())).toEqual({ ok: true, saved: [], skipped: ["ALPHA_KEY", "BETA_KEY", "EXISTS"] });
+  expect(refreshes).toBe(1);
 });

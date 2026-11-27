@@ -128,6 +128,197 @@
       renderRequests($("secret-requests"), requests);
     }
 
+    /* ---------- import ---------- */
+    // Parsed entries (with values) live only in this closure, never in the DOM, and are
+    // dropped after a save, a cancel, or reopening the sheet.
+    const SI = window.SecretImport;
+    let importFile = null;   // { name, text } from the file picker
+    let parsed = null;       // SecretImport.parse result
+    let rows = [];
+    let importBusy = false;
+    const STATUS_LABEL = { new: "New", replace: "Replace", unchanged: "Unchanged", invalid: "Invalid" };
+
+    function resetImport({ keepInput = false } = {}) {
+      parsed = null;
+      rows = [];
+      const preview = $("secret-import-preview");
+      preview.hidden = true;
+      preview.innerHTML = "";
+      if (keepInput) return;
+      importFile = null;
+      $("input-secret-import").value = "";
+      $("input-secret-import-file").value = "";
+      $("secret-import-file").hidden = true;
+      $("select-secret-import-format").value = "auto";
+    }
+
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+    function renderPreview() {
+      const wrap = $("secret-import-preview");
+      const c = SI.counts(rows);
+      wrap.innerHTML = "";
+      wrap.hidden = false;
+      const summary = document.createElement("p");
+      summary.className = "hint secret-import-summary";
+      summary.setAttribute("role", "status");
+      summary.textContent = [c.new && `${c.new} new`, c.replace && `${c.replace} already stored`, c.unchanged && `${c.unchanged} unchanged`, c.invalid && `${c.invalid} invalid`]
+        .filter(Boolean).join(" · ") || "Nothing to import.";
+      wrap.appendChild(summary);
+
+      const table = document.createElement("table");
+      table.className = "secret-import-table";
+      table.innerHTML = '<thead><tr><th scope="col">Name</th><th scope="col">Value</th><th scope="col">Status</th></tr></thead>';
+      const body = document.createElement("tbody");
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        tr.className = `si-${row.status}`;
+        const name = document.createElement("td");
+        name.className = "si-name";
+        name.textContent = row.name || (row.line ? `Line ${row.line}` : "—");
+        const size = document.createElement("td");
+        size.className = "si-size";
+        size.textContent = row.index >= 0 ? plural(row.length, "character", "characters") : "";
+        const status = document.createElement("td");
+        status.className = "si-status";
+        if (row.status === "replace") {
+          const label = document.createElement("label");
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.className = "si-replace-box";
+          box.dataset.name = row.name;
+          box.addEventListener("change", updateSave);
+          label.append(box, " Replace stored value");
+          status.appendChild(label);
+        } else {
+          status.textContent = STATUS_LABEL[row.status];
+        }
+        if (row.reason) {
+          const reason = document.createElement("div");
+          reason.className = "si-reason";
+          reason.textContent = row.line && row.name ? `Line ${row.line}: ${row.reason}` : row.reason;
+          status.appendChild(reason);
+        }
+        if (row.suggestion) {
+          const use = document.createElement("button");
+          use.type = "button";
+          use.className = "proj-act si-use";
+          use.textContent = `Use ${row.suggestion}`;
+          use.addEventListener("click", () => {
+            parsed.entries[row.index].name = row.suggestion;
+            SI.annotate(parsed.entries);
+            preview();
+          });
+          status.appendChild(use);
+        }
+        tr.append(name, size, status);
+        body.appendChild(tr);
+      }
+      table.appendChild(body);
+      wrap.appendChild(table);
+
+      if (c.invalid) {
+        const label = document.createElement("label");
+        label.className = "si-leave-out";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.id = "check-secret-import-leave-out";
+        box.addEventListener("change", updateSave);
+        label.append(box, ` Leave out the ${plural(c.invalid, "invalid entry", "invalid entries")} and save the rest`);
+        wrap.appendChild(label);
+      }
+      const save = document.createElement("button");
+      save.id = "btn-secret-import-save";
+      save.type = "button";
+      save.className = "btn btn-primary btn-big";
+      save.addEventListener("click", saveImport);
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "btn btn-ghost btn-big";
+      cancel.textContent = "Cancel import";
+      cancel.addEventListener("click", () => resetImport());
+      wrap.append(save, cancel);
+      updateSave();
+    }
+
+    const tickedReplacements = () => [...$("secret-import-preview").querySelectorAll("input.si-replace-box")].filter(box => box.checked).map(box => box.dataset.name);
+
+    function updateSave() {
+      const save = $("btn-secret-import-save");
+      if (!save) return;
+      const c = SI.counts(rows);
+      const writes = c.new + tickedReplacements().length;
+      const leaveOut = $("check-secret-import-leave-out");
+      save.textContent = writes ? `Save ${plural(writes, "secret", "secrets")}` : "Nothing to save";
+      save.disabled = importBusy || !writes || (c.invalid > 0 && !(leaveOut && leaveOut.checked));
+    }
+
+    async function preview() {
+      if (!parsed) return;
+      const entries = parsed.entries.map(e => ({ name: e.name, value: e.value }));
+      try {
+        const server = entries.length ? (await api("/api/secrets/import/preview", { method: "POST", body: JSON.stringify({ entries }) })).entries : [];
+        rows = SI.previewRows(parsed, server);
+        renderPreview();
+      } catch (e) { showToast(e.message); }
+    }
+
+    async function saveImport() {
+      if (importBusy || !parsed) return;
+      const request = SI.importBody(parsed, rows, tickedReplacements());
+      importBusy = true;
+      updateSave();
+      try {
+        const result = await api("/api/secrets/import", { method: "POST", body: JSON.stringify({ entries: request.entries, replace: request.replace }) });
+        resetImport();
+        showToast(result.saved.length ? `${plural(result.saved.length, "secret", "secrets")} saved for every session` : "Nothing changed");
+        await load();
+      } catch (e) {
+        if (e.code === "invalid_entries" && e.entries) {
+          // Show the server's reasons on the rows that were sent; nothing was saved.
+          request.indices.forEach((index, i) => {
+            const server = e.entries[i];
+            const row = rows.find(r => r.index === index);
+            if (row && server) { row.status = server.status; row.reason = server.reason; }
+          });
+          renderPreview();
+        }
+        showToast(e.message);
+      } finally { importBusy = false; updateSave(); }
+    }
+
+    $("form-secret-import").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const typed = $("input-secret-import").value;
+      const text = typed.trim() ? typed : importFile ? importFile.text : "";
+      if (!text.trim()) { showToast("Paste a .env file or JSON, or choose a file."); return; }
+      parsed = SI.parse(text, $("select-secret-import-format").value);
+      if (!parsed.entries.length && !parsed.problems.length) { resetImport({ keepInput: true }); showToast("No secrets found in that text."); return; }
+      preview();
+    });
+    $("input-secret-import").addEventListener("input", () => {
+      resetImport({ keepInput: true });
+      if (importFile && $("input-secret-import").value) { importFile = null; $("input-secret-import-file").value = ""; $("secret-import-file").hidden = true; }
+    });
+    $("select-secret-import-format").addEventListener("change", () => resetImport({ keepInput: true }));
+    $("input-secret-import-file").addEventListener("change", () => {
+      const file = $("input-secret-import-file").files[0];
+      resetImport({ keepInput: true });
+      if (!file) return;
+      if (file.size > SI.MAX_FILE_BYTES) { $("input-secret-import-file").value = ""; showToast("That file is over 512 KB. Choose a .env or JSON file of secrets."); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        // The file's text stays in memory; it is not copied into the field, so its values are not shown.
+        importFile = { name: file.name, text: String(reader.result || "") };
+        $("input-secret-import").value = "";
+        const note = $("secret-import-file");
+        note.textContent = `${file.name} loaded (${Math.max(1, Math.round(file.size / 1024))} KB). Review it to see its names.`;
+        note.hidden = false;
+      };
+      reader.onerror = () => showToast("That file could not be read.");
+      reader.readAsText(file);
+    });
+
     $("select-secret-source").addEventListener("change", showKind);
 
     $("form-secret").addEventListener("submit", async (ev) => {
@@ -171,6 +362,7 @@
       open() {
         removeArmed = null;
         $("form-secret").reset();
+        resetImport();
         showKind();
         load();
         loadRequests();
