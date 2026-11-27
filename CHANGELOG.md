@@ -7,6 +7,24 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-27
+
+### Added
+- External MCP connectors work with every MCP transport. A remote server is tried with
+  **MCP 2026-07-28** first (`server/discover`, stateless requests with the version in `_meta`
+  and the `Mcp-Method`/`Mcp-Name` headers), then **Streamable HTTP** with `initialize`
+  (2025-03-26 to 2025-11-25, with sessions), then the deprecated **HTTP+SSE** transport
+  (2024-11-05), whose message endpoint must be on the server's own origin. The connector shows
+  which one it negotiated, and Test connection always tries the newest first.
+- **Local command (stdio) connectors**: run an MCP server as a program on this server. Choose
+  the command, its arguments, a working folder, and which stored secrets it receives as
+  environment variables; it gets nothing else from the service's environment. Only the owner's
+  browser can add or change one; agents cannot request a local command, and see only "local
+  command on this server". The process is stopped when idle for 10 minutes and when the app
+  stops. It runs as the service user and is not sandboxed.
+- **Extra headers** for a remote connector (for example `X-API-Key`), stored encrypted like
+  tokens; only their names are shown. Reserved and hop-by-hop headers are refused.
+
 ## [0.24.0] - 2026-11-27
 
 ### Added
