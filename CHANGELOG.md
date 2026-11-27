@@ -7,6 +7,17 @@ release also lists how it was validated.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-27
+
+### Added
+- **Import secrets** in Settings → Secrets: paste a `.env` / `KEY=VALUE` file or a flat JSON
+  object, or choose a file. The import is parsed in the browser and shown as a preview before
+  anything is saved: each key is New, Replace (unticked by default), Unchanged or Invalid with
+  the reason (bad or reserved name, empty, too large, a duplicate). A lowercase or hyphenated
+  name gets a suggested name you can use with one click. Values are never shown, logged or
+  returned. Saving is one all-or-nothing request, checked again on the server, from the browser
+  only, like entering a secret by hand. Running sessions' `$CS_SECRETS_FILE` update once.
+
 ## [0.23.0] - 2026-11-27
 
 ### Added
