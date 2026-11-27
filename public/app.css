@@ -423,6 +423,10 @@ a.btn { display: block; text-align: center; text-decoration: none; }
 .connector-advanced summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; font-size: 14px; }
 .connector-advanced code, .connector-notice { overflow-wrap: anywhere; }
 .connector-notice { color: var(--status-working); }
+/* Extra header rows: name, write-only value, remove. Wraps to two lines on narrow screens. */
+.connector-header-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-top: var(--space-2); }
+.connector-header-row > .field { flex: 1 1 140px; min-width: 0; margin: 0; }
+.connector-header-row > .btn { flex: none; }
 
 .server-settings-list { display: grid; gap: 4px; }
 .server-setting { padding-block: 16px; border-bottom: 1px solid var(--border-default); }

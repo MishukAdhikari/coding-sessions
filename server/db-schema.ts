@@ -397,6 +397,18 @@ export function applyDatabaseSchema(database: Database): void {
     addColumn(database, `ALTER TABLE ${table} ADD COLUMN jwks_uri TEXT`);
     addColumn(database, `ALTER TABLE ${table} ADD COLUMN userinfo_endpoint TEXT`);
   }
+  // Transports. 'http' connectors use url (and optional extra headers, sealed like tokens, with
+  // their names kept readable for views); 'stdio' connectors run a local command the owner set
+  // in the browser: command, args (JSON string array), env_secrets (JSON array of secret NAMES,
+  // never values) and an optional cwd. protocol records the era the last check negotiated.
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN transport TEXT NOT NULL DEFAULT 'http'");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN command TEXT");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN args TEXT NOT NULL DEFAULT '[]'");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN env_secrets TEXT NOT NULL DEFAULT '[]'");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN cwd TEXT");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN headers TEXT");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN header_names TEXT NOT NULL DEFAULT '[]'");
+  addColumn(database, "ALTER TABLE mcp_connectors ADD COLUMN protocol TEXT");
 }
 
 /**

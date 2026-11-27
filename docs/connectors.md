@@ -6,15 +6,54 @@ This is the reverse of [the MCP connector](mcp.md): that page covers apps connec
 
 ## What is supported
 
-- **Remote MCP servers over HTTPS** using the Streamable HTTP transport (JSON and server-sent-event responses), protocol revisions 2025-11-25, 2025-06-18 and 2025-03-26. Local (stdio) servers are not supported.
-- **Tools only.** Coding Sessions lists and calls tools. A server's resources and prompts are not bridged, and requests a server makes back to its client (sampling, elicitation, roots) are not supported.
-- **Three ways to authenticate:** none, a bearer token you paste (sent as `Authorization: Bearer <token>`), or [OAuth sign-in](#oauth-sign-in) in the browser with automatic refresh. A pasted bearer token must be 8–4096 printable characters; tokens issued through OAuth must be 8–8192.
-- **Any number of servers**, each with its own name, URL, optional token and permanent tool prefix.
+- **Remote MCP servers over HTTPS**, in every MCP transport and protocol era (see [Transports](#transports)): stateless Streamable HTTP (2026-07-28), Streamable HTTP with sessions (2025-11-25, 2025-06-18, 2025-03-26), and the deprecated HTTP+SSE transport (2024-11-05, often a URL ending in `/sse`).
+- **Local MCP servers (stdio):** a command Coding Sessions runs on this server, which only you can add, from Settings (see [Local commands](#local-commands-stdio)).
+- **Tools only.** Coding Sessions lists and calls tools. A server's resources and prompts are not bridged, and requests a server makes back to its client (sampling, elicitation, roots, or a 2026 `input_required` result) are not supported: such a call fails with a clear message.
+- **Ways to authenticate:** none, a bearer token you paste (sent as `Authorization: Bearer <token>`), [OAuth sign-in](#oauth-sign-in) in the browser with automatic refresh, and [extra headers](#extra-headers) such as `X-API-Key`. A pasted bearer token must be 8–4096 printable characters; tokens issued through OAuth must be 8–8192. A local command authenticates with secrets passed in its environment.
+- **Any number of servers**, each with its own name, URL or command, optional token and permanent tool prefix.
+
+## Transports
+
+For a remote server, Coding Sessions tries the newest protocol first and remembers what worked:
+
+1. **Streamable HTTP, 2026-07-28 (stateless).** It sends `server/discover`. Every request carries the protocol version and client details in `params._meta` and the headers `MCP-Protocol-Version`, `Mcp-Method` and, for `tools/call`, `Mcp-Name`. There is no `initialize` and no session. Cancelling a call closes its response.
+2. **Streamable HTTP, 2025 revisions.** A server that does not recognize `server/discover` (a 400 with an empty or unknown body, 404, 405, method not found, or any other answer) is sent `initialize`, then requests with its `Mcp-Session-Id`; a 404 for that session starts a new one once. A 2026 server that refuses our version but lists a 2025 one it speaks is initialized with that. A 2026 server that lists only versions this app does not speak fails with that message and is not probed further.
+3. **HTTP+SSE, 2024-11-05 (deprecated).** When `initialize` is refused with 400, 404 or 405, Coding Sessions opens a `GET` event stream. Its first event names the URL to post messages to, which must be on the **same origin** as the connector's URL (anything else is refused) and is checked by the same network rules. Replies arrive on the stream. If the stream ends, the next request starts a new session.
+
+What a test negotiated shows in the connector's details, for example **Streamable HTTP (2026-07-28)**, **Streamable HTTP (2025-11-25)**, **HTTP+SSE (2024-11-05, deprecated)** or **stdio (2026-07-28)**. Test connection always probes again from the newest era, so an upgraded server is noticed; between tests, a session that fails on the remembered era negotiates once more.
+
+A **local command** is probed the same way over stdio: `server/discover` first; a server that answers with a 2026 result is used statelessly; one that answers with an error, or not at all within 5 seconds, gets `initialize` and `notifications/initialized`.
+
+## Local commands (stdio)
+
+In **Add MCP connector**, choose **Local command (stdio)** and enter:
+
+- **Command**: an absolute path, or a program name found on the service's `PATH` (for example `npx`). It must exist and be executable when you save it.
+- **Arguments**, one per line. They are shown to you in the connector's details; do not put secrets in them.
+- **Secrets passed as environment variables**: tick secrets from Settings › Secrets. Each is passed by name, under the same name. The connector stores only the names.
+- **Working folder** (optional): an existing absolute path. Without one, the command runs in a private folder for this connector under the app's data folder.
+
+Coding Sessions talks MCP to the command over its stdin and stdout (one JSON-RPC message per line). Anything the command writes to stderr is read and discarded, never treated as an error. A line on stdout longer than 4 MiB stops the command and fails the call as too large.
+
+**Security model.**
+
+- Only you can add a local command or change its command, arguments, secrets or folder, from your browser session in Settings, and only on the app's own origin. MCP tools, CLI tokens and the operator connection cannot, and an agent's `request_connector` can never ask for one (not even pending your approval): it accepts only `https://` URLs, and refuses to touch a connector that is a local command.
+- The command runs as the service's own user, with only `PATH`, `HOME`, `LANG` and `TMPDIR` from the service environment plus the secrets you ticked. It never gets the server's own tokens or `CS_*` settings. Values of those secrets are scrubbed from everything it returns, like tokens.
+- Each session that uses it (a running agent session, or the Settings check) gets its own process. A process idle for 10 minutes is stopped, as are all of them when the connector changes, is disabled or removed, and when the service stops: stdin is closed, then `SIGTERM` after 2 seconds, then `SIGKILL`.
+- It is not a sandbox: the command can do whatever the service's user can. Add only programs you trust.
+
+Changing the command, arguments, secrets or folder clears discovered tools and every tool grant, like a new URL.
+
+## Extra headers
+
+A remote connector can send extra HTTP headers with every request, for servers that want a key such as `X-API-Key`. Add them under **Extra headers** when adding the connector, or in its details. Values are encrypted like tokens, never shown again, and scrubbed from responses; the details show only the names. To keep a saved value, leave its field empty. Changing the URL removes the headers with the token.
+
+Header names must be plain tokens (letters, digits and `-`), values one line of printable ASCII, at most 16 headers and 8 KB in all. Names Coding Sessions sets itself or that control the connection are refused: `Host`, `Content-Length`, `Content-Type`, `Accept`, `Accept-Encoding`, `Authorization` (use the bearer token or OAuth), `Connection`, `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Expect`, `Last-Event-ID`, and any `Mcp-*`, `Proxy-*` or `Sec-*` header. `Cookie` and other application headers are allowed.
 
 ## Add a server
 
 1. **Settings › Connections & access › External MCP connectors.**
-2. Enter a **name**, the server's **URL** (for example `https://mcp.example.com/mcp`) and, if the server needs one, a **bearer token**. Choose **Add and test**. For OAuth, add the server without a token, then choose **Sign in with OAuth** in its details.
+2. Keep **Remote (HTTPS)** and enter a **name**, the server's **URL** (for example `https://mcp.example.com/mcp`) and, if the server needs one, a **bearer token** or [extra headers](#extra-headers). Choose **Add and test**. For a [local command](#local-commands-stdio), choose **Local command (stdio)** instead. For OAuth, add the server without a token, then choose **Sign in with OAuth** in its details.
 3. The test lists the server's tools. The screen shows **Connected** only after that succeeds, and shows the server name and version only as the server reports them.
 
 Adding a server grants nothing.
@@ -97,6 +136,7 @@ To keep a connector from being pointed at this machine or its private network:
 - URLs must use `https://` and may not contain a user name, password, query or fragment.
 - The host must resolve only to public addresses. Loopback, private, link-local (including cloud metadata such as `169.254.169.254`), carrier-grade NAT, unique-local, multicast and reserved ranges are refused, as are the IPv6 ranges that tunnel to IPv4 (6to4, Teredo, NAT64). An IPv4-mapped IPv6 address is judged as the IPv4 address it carries. Every connection resolves the name again and connects only to a vetted address, while certificate verification still uses the name you entered.
 - Redirects are never followed.
+- An HTTP+SSE server's message endpoint must be on the connector URL's own origin, and is vetted like the URL itself (it may carry a query, such as a session ID).
 - Requests are refused while `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` (any case) is set for the service, because a proxy would choose the destination itself. Run the service with direct outbound HTTPS.
 - For local testing only, setting `CS_CONNECTOR_ALLOW_LOOPBACK=1` in the service environment allows `http://` and `https://` on loopback addresses. It cannot be enabled from the browser and never allows private networks.
 
@@ -113,4 +153,4 @@ Managed launches install an app-owned skill, `coding-sessions-collaboration`, in
 
 ## Trust boundary
 
-Tokens (bearer tokens, OAuth access and refresh tokens, client secrets) are encrypted at rest and are not passed to agents, but the service decrypts them to make requests, and its key is readable by the service account. Responses from the server are scrubbed of the token that was sent and of recently issued ones before anything is stored or forwarded; this stops a server from accidentally reflecting a token, not a server that deliberately encodes it. Agents run under that same Unix account and can, with effort, read its files and processes. Connectors keep tokens out of agent prompts and configuration and keep grants enforceable for cooperating agents; they are not a sandbox against a hostile agent. See [security boundaries](security.md#external-mcp-connectors).
+Tokens (bearer tokens, OAuth access and refresh tokens, client secrets, extra header values) are encrypted at rest and are not passed to agents, but the service decrypts them to make requests, and its key is readable by the service account. Responses from the server are scrubbed of the token that was sent and of recently issued ones before anything is stored or forwarded; this stops a server from accidentally reflecting a token, not a server that deliberately encodes it. Agents run under that same Unix account and can, with effort, read its files and processes. Connectors keep tokens out of agent prompts and configuration and keep grants enforceable for cooperating agents; they are not a sandbox against a hostile agent. See [security boundaries](security.md#external-mcp-connectors).

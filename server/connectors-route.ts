@@ -46,6 +46,11 @@ export async function handleConnectorsRoute(request: Request, deps: ConnectorsRo
     return { ...view, launches: view.launches.filter(launch => ids.has(launch.launch_id)) };
   };
   const connector = async (view: ConnectorView | Promise<ConnectorView>) => privateJson({ connector: await live(await view) });
+  /**
+   * A local command runs on this machine, so creating or changing one also requires the app's own
+   * exact Origin (browsers send it on every fetch POST); without a configured origin it is refused.
+   */
+  const ownerOrigin = () => !!deps.origin && request.headers.get("origin") === deps.origin;
   try {
     if (path === "/api/connectors" && method === "GET") {
       const connectors = await Promise.all(deps.connectors.list().map(live));
@@ -54,9 +59,15 @@ export async function handleConnectorsRoute(request: Request, deps: ConnectorsRo
         ...(deps.oauth ? { oauth: { callback_url: deps.oauth.callbackUrl(), client_metadata_url: deps.oauth.clientMetadataUrl() } } : {}) });
     }
     if (path === "/api/connectors" && method === "POST") {
-      // The token is write-only: accepted here, never echoed.
-      const { name, url, token } = await body();
-      return await connector(deps.connectors.add({ name, url, token }));
+      const input = await body();
+      if (input.transport === "stdio") {
+        if (!ownerOrigin()) return privateJson({ error: "Same-origin request required." }, 403);
+        const { name, command, args, env_secrets, cwd } = input;
+        return await connector(deps.connectors.addLocal({ name, command, args, env_secrets, cwd }, "owner-browser"));
+      }
+      // The token and header values are write-only: accepted here, never echoed.
+      const { name, url, token, headers } = input;
+      return await connector(deps.connectors.add({ name, url, token, headers }));
     }
     // Completing an outbound sign-in: only the browser session that started it, from this exact
     // origin. The callback page posts here with fetch, so the real Origin is sent despite its
@@ -84,6 +95,13 @@ export async function handleConnectorsRoute(request: Request, deps: ConnectorsRo
         if (!Object.hasOwn(input, "token")) throw new ConnectorError("invalid_request", "Send token (a string, or null to remove it).");
         return await connector(deps.connectors.setCredential(id, input.token));
       case "name": return await connector(deps.connectors.rename(id, input.name));
+      // Write-only values: an entry without a value keeps the saved one.
+      case "headers": return await connector(deps.connectors.setHeaders(id, input.headers));
+      case "local": {
+        if (!ownerOrigin()) return privateJson({ error: "Same-origin request required." }, 403);
+        const { command, args, env_secrets, cwd } = input;
+        return await connector(deps.connectors.setLocal(id, { command, args, env_secrets, cwd }, "owner-browser"));
+      }
       case "url": return await connector(deps.connectors.setUrl(id, input.url));
       case "auth": return await connector(deps.connectors.setAuthMode(id, input.mode));
       // Write-only: the secret is accepted here and never echoed.

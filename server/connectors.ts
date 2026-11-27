@@ -5,7 +5,10 @@ import { createSecretCodec, isSealedSecret, loadTokenKey, type SecretCodec } fro
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { addressAllowed, DestinationError, networkPolicy, safeFetch, validateServerUrl, type NetworkPolicy, type Resolver, type UrlRole } from "./connector-net";
-import { UpstreamClient, UpstreamError, UpstreamRpcError, type UpstreamTool } from "./connector-upstream";
+import { transportLabel, UPSTREAM_NOTICES, UpstreamClient, UpstreamError, UpstreamRpcError, type UpstreamTool, type UpstreamTransport } from "./connector-upstream";
+import { accessSync, constants as fsConstants, mkdirSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { reservedName, SECRET_NAME_RE } from "./secret-names";
 import { ConnectorOAuthStore, type OAuthStatus } from "./connector-oauth-store";
 import { requestTokens, revokeTokens, sameAuthentication, scopeWithin, verifyIdToken } from "./connector-oauth-tokens";
 
@@ -24,8 +27,17 @@ export type ConnectorState = "disabled" | "needs_url" | "not_checked" | "connect
 export interface ToolHints { readOnly?: boolean; destructive?: boolean; idempotent?: boolean; openWorld?: boolean }
 export type AuthMode = "none" | "bearer" | "oauth";
 const AUTH_MODES: readonly AuthMode[] = ["none", "bearer", "oauth"];
+/** http: a remote server (Streamable HTTP of any era, or legacy HTTP+SSE). stdio: a local command. */
+export type ConnectorTransport = "http" | "stdio";
 export interface ConnectorView {
   id: string; name: string; namespace: string; url: string | null; host: string | null;
+  transport: ConnectorTransport;
+  /** What the last successful check negotiated, e.g. "Streamable HTTP (2026-07-28)". */
+  protocol: { transport: UpstreamTransport; version: string; label: string } | null;
+  /** Names of the extra HTTP headers; values are write-only and never returned. */
+  headers: string[];
+  /** A local command's settings (stdio only). env_secrets are secret names, never values. */
+  local: { command: string; args: string[]; env_secrets: string[]; cwd: string | null } | null;
   /** How requests authenticate. OAuth status is safe metadata only (no tokens). */
   auth: { mode: AuthMode; oauth: OAuthStatus | null };
   /** A client registered with the provider by the operator; the secret is write-only. */
@@ -76,7 +88,74 @@ interface Row {
   server_info: string | null; check_status: string | null; check_detail: string | null;
   auth_mode: AuthMode; auth_epoch: number; token_version: number;
   oauth_client_id: string | null; oauth_client_secret: string | null; oauth_client_issuer: string | null; check_at: number | null; check_ok_at: number | null; created_at: number;
+  transport: ConnectorTransport; command: string | null; args: string; env_secrets: string; cwd: string | null;
+  headers: string | null; header_names: string; protocol: string | null;
 }
+
+/* ---------- extra HTTP headers ---------- */
+
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/;
+/** Set by the transport itself, hop-by-hop, or the credential: never operator-supplied. */
+const RESERVED_HEADERS = new Set(["host", "content-length", "content-type", "accept", "accept-encoding", "authorization", "connection", "keep-alive",
+  "te", "trailer", "transfer-encoding", "upgrade", "expect", "last-event-id"]);
+const MAX_HEADERS = 16;
+const MAX_HEADER_BYTES = 8192;
+/**
+ * Validates an operator's header list ([{name, value}]). An entry with no value keeps the saved
+ * value of the same name: values are write-only, so the editor cannot show them.
+ */
+export function parseHeaders(input: unknown, saved: Record<string, string> = {}): Record<string, string> {
+  if (input === null || input === undefined) return {};
+  if (!Array.isArray(input)) return invalid("headers must be a list of {name, value}.");
+  if (input.length > MAX_HEADERS) return invalid(`Use at most ${MAX_HEADERS} extra headers.`);
+  const out: Record<string, string> = {};
+  const seen = new Set<string>();
+  const kept = new Map(Object.entries(saved).map(([name, value]) => [name.toLowerCase(), value]));
+  let size = 0;
+  for (const entry of input as unknown[]) {
+    const item = entry && typeof entry === "object" ? entry as Record<string, unknown> : null;
+    if (!item || typeof item.name !== "string") return invalid("Each header needs a name.");
+    const name = item.name.trim();
+    if (!HEADER_NAME.test(name)) return invalid("A header name may use only letters, digits and - (no spaces), up to 64 characters.");
+    const lower = name.toLowerCase();
+    if (RESERVED_HEADERS.has(lower) || lower.startsWith("mcp-") || lower.startsWith("proxy-") || lower.startsWith("sec-")) {
+      return invalid(`${name} is set by Coding Sessions itself and cannot be added. Use the bearer token or OAuth for Authorization.`);
+    }
+    if (seen.has(lower)) return invalid(`${name} is listed twice.`);
+    seen.add(lower);
+    const raw = item.value;
+    let value: string;
+    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+      const previous = kept.get(lower);
+      if (previous === undefined) return invalid(`Enter a value for ${name}.`);
+      value = previous;
+    } else if (typeof raw !== "string" || !/^[\x20-\x7e]{1,4096}$/.test(raw.trim())) {
+      return invalid(`The value of ${name} must be one line of printable ASCII, up to 4096 characters.`);
+    } else value = raw.trim();
+    size += name.length + value.length + 4;
+    out[name] = value;
+  }
+  if (size > MAX_HEADER_BYTES) return invalid("The extra headers are too large (8 KB at most).");
+  return out;
+}
+
+/* ---------- local (stdio) commands ---------- */
+
+/** The only service variables a local command sees; everything else comes from named secrets. */
+const CHILD_BASE = ["PATH", "HOME", "LANG", "TMPDIR"] as const;
+const executable = (path: string): boolean => {
+  try { if (!statSync(path).isFile()) return false; accessSync(path, fsConstants.X_OK); return true; } catch { return false; }
+};
+const directory = (path: string): boolean => { try { return statSync(path).isDirectory(); } catch { return false; } };
+/** An absolute executable path, or a bare program name found on PATH; null when neither. */
+export function resolveCommand(command: string, path: string | undefined): string | null {
+  if (isAbsolute(command)) return executable(command) ? command : null;
+  if (!/^[A-Za-z0-9._+-]{1,128}$/.test(command) || command === "." || command === "..") return null;
+  const found = Bun.which(command, { PATH: path ?? "" });
+  return found && executable(found) ? found : null;
+}
+interface LocalSettings { command: string; args: string[]; env_secrets: string[]; cwd: string | null }
+type Bound = { url: string; credential: string | null; epoch: number };
 /** Exposed names must fit common client limits: letters, digits, _ and -, at most 64 characters. */
 const EXPOSED = /^[A-Za-z0-9_-]{1,64}$/;
 /**
@@ -112,6 +191,10 @@ export interface ConnectorDependencies {
   resolver?: Resolver;
   now?: () => number;
   env?: Environment;
+  /** Values of the named secrets from the app's secret store (absent names omitted), for stdio children. */
+  secrets?: (names: string[]) => Promise<Record<string, string>>;
+  /** Where a stdio connector without a working folder gets its own private one. */
+  dataDir?: string;
 }
 const json = <T>(text: string | null, fallback: T): T => { try { return text ? JSON.parse(text) as T : fallback; } catch { return fallback; } };
 
@@ -199,8 +282,23 @@ export class Connectors {
     try { return validateServerUrl(row.url, this.policy); } catch { return null; }
   }
 
+  /** Whether the connector has somewhere to connect: a vetted URL, or a local command. */
+  private configured(row: Row): boolean { return row.transport === "stdio" ? !!row.command : !!this.endpoint(row); }
+
   private client(row: Row): UpstreamClient {
     let client = this.clients.get(row.id);
+    if (!client && row.transport === "stdio") {
+      const id = row.id;
+      // Bound to the settings revision: a changed command, folder or secret list fails before spawning.
+      const bound: Bound = { url: row.url, credential: row.credential, epoch: row.auth_epoch };
+      client = new UpstreamClient({
+        now: this.now, credential: () => null,
+        stdio: { prepare: signal => this.prepareLocal(id, bound, signal) },
+        secrets: () => this.knownSecrets(id),
+        onToolsChanged: () => { this.db.query("UPDATE mcp_connectors SET catalog_stale=1 WHERE id=? AND auth_epoch=?").run(id, bound.epoch); },
+      });
+      this.clients.set(id, client);
+    }
     if (!client) {
       const url = this.endpoint(row);
       if (!url) throw new ConnectorError("unavailable", "This connector's URL is missing or no longer allowed.");
@@ -211,7 +309,9 @@ export class Connectors {
       client = new UpstreamClient({
         url, now: this.now,
         fetch: this.deps.fetch ?? safeFetch({ policy: this.policy, resolver: this.deps.resolver, env: this.env }),
+        endpointFetch: this.transport("endpoint"),
         credential: signal => this.credential(id, bound, signal),
+        headers: () => this.openHeaders(this.bound(id, bound)),
         secrets: () => this.knownSecrets(id),
         onAuthRejected: token => this.authRejected(id, bound.epoch, token),
         onToolsChanged: () => { this.db.query("UPDATE mcp_connectors SET catalog_stale=1 WHERE id=? AND url=?").run(id, bound.url); },
@@ -275,6 +375,80 @@ export class Connectors {
     if (!isSealedSecret(sealed)) throw new ConnectorError("storage", "Connector tokens must be encrypted. Nothing was saved.");
     return sealed;
   }
+  private headerContext(id: string, url: string): string { return `mcp-connector-headers:${id}:${new URL(url).origin}`; }
+  /** The saved extra headers, opened for one request. */
+  private openHeaders(row: Row): Record<string, string> {
+    if (!row.headers) return {};
+    if (!isSealedSecret(row.headers) || !row.url) throw new ConnectorError("unavailable", "This connector's extra headers cannot be used.");
+    try { return json<Record<string, string>>(this.codec().openSecret(row.headers, this.headerContext(row.id, row.url)), {}); }
+    catch (error) { throw error instanceof ConnectorError ? error : new ConnectorError("storage", "The connector's extra headers cannot be opened with this server's key."); }
+  }
+  private sealHeaders(id: string, url: string, headers: Record<string, string>): { sealed: string | null; names: string } {
+    const names = Object.keys(headers);
+    if (!names.length) return { sealed: null, names: "[]" };
+    const sealed = this.codec().sealSecret(JSON.stringify(headers), this.headerContext(id, url));
+    if (!isSealedSecret(sealed)) throw new ConnectorError("storage", "Connector headers must be encrypted. Nothing was saved.");
+    return { sealed, names: JSON.stringify(names) };
+  }
+
+  /** The minimal service environment a local command starts from: never tokens or CS_* settings. */
+  private childBase(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const name of CHILD_BASE) { const value = this.env[name]; if (typeof value === "string" && value) env[name] = value; }
+    env.LANG ??= "C.UTF-8";
+    return env;
+  }
+  private localSettings(input: Record<string, unknown>): LocalSettings {
+    const command = typeof input.command === "string" ? input.command.trim() : "";
+    if (!command || command.length > 1024 || /[\x00-\x1f\x7f]/.test(command)) return invalid("Enter the command: an absolute path, or a program name on the service's PATH.");
+    if (!isAbsolute(command) && command.includes("/")) return invalid("Use an absolute path (starting with /) or a bare program name.");
+    if (!resolveCommand(command, this.childBase().PATH)) return invalid(isAbsolute(command) ? "That file does not exist or is not executable." : `${command} was not found on the service's PATH.`);
+    const args = input.args ?? [];
+    if (!Array.isArray(args) || args.length > 64 || args.some(arg => typeof arg !== "string" || arg.length > 4096 || /[\0\r\n]/.test(arg))) {
+      return invalid("Arguments must be a list of up to 64 single-line strings.");
+    }
+    if (Buffer.byteLength(JSON.stringify(args)) > 32 * 1024) return invalid("The arguments are too long (32 KB at most).");
+    const names = input.env_secrets ?? [];
+    if (!Array.isArray(names) || names.length > 32 || names.some(name => typeof name !== "string")) return invalid("env_secrets must be a list of secret names.");
+    for (const name of names as string[]) {
+      if (!SECRET_NAME_RE.test(name) || reservedName(name) || name === "LANG") return invalid(`${name} is not a secret name that can be passed to a command.`);
+    }
+    let cwd: string | null = null;
+    if (typeof input.cwd === "string" && input.cwd.trim()) {
+      cwd = input.cwd.trim();
+      if (!isAbsolute(cwd) || cwd.length > 1024 || /[\x00-\x1f]/.test(cwd)) return invalid("The working folder must be an absolute path.");
+      if (!directory(cwd)) return invalid("That working folder does not exist.");
+    } else if (input.cwd !== undefined && input.cwd !== null && input.cwd !== "") return invalid("The working folder must be an absolute path.");
+    return { command, args: args as string[], env_secrets: [...new Set(names as string[])].sort(), cwd };
+  }
+  /** Resolved just before each spawn: the command on PATH, the named secrets, a private working folder. */
+  private async prepareLocal(id: string, bound: Bound, signal: AbortSignal) {
+    let row = this.bound(id, bound);
+    if (row.transport !== "stdio" || !row.command) throw new ConnectorError("unavailable", "This connector has no command.");
+    const base = this.childBase();
+    const command = resolveCommand(row.command, base.PATH);
+    if (!command) throw new ConnectorError("unavailable", "This connector's command was not found or is not executable.");
+    const names = json<string[]>(row.env_secrets, []);
+    const values = names.length && this.deps.secrets ? await this.deps.secrets(names) : {};
+    if (signal.aborted) throw new ConnectorError("unavailable", "Request cancelled.");
+    const missing = names.filter(name => typeof values[name] !== "string");
+    if (missing.length) throw new ConnectorError("unavailable", `Set ${missing.join(", ")} in Settings › Secrets; this connector passes ${missing.length > 1 ? "them" : "it"} to its command.`);
+    row = this.bound(id, bound);
+    let cwd = row.cwd;
+    if (!cwd) {
+      cwd = join(this.deps.dataDir ?? base.HOME ?? "/tmp", "connectors", id);
+      try { mkdirSync(cwd, { recursive: true, mode: 0o700 }); } catch {}
+    }
+    if (!directory(cwd)) throw new ConnectorError("unavailable", "This connector's working folder does not exist.");
+    const env = { ...base };
+    for (const name of names) env[name] = values[name]!;
+    return { command, args: json<string[]>(row.args, []), cwd, env };
+  }
+  /** URL, token, header and sign-in settings belong to remote connectors only. */
+  private remote(row: Row): void {
+    if (row.transport === "stdio") invalid("This connector runs a local command; it has no URL, token, headers or sign-in.");
+  }
+
   /** Vetted transport for one URL role, sharing this registry's network policy. */
   transport(role: UrlRole): typeof fetch {
     return this.deps.fetch ?? safeFetch({ policy: this.policy, resolver: this.deps.resolver, env: this.env, role });
@@ -283,7 +457,7 @@ export class Connectors {
 
   /** What the OAuth flow needs to start: the resource URL, the epoch and any preregistered client. */
   oauthTarget(id: string): { url: URL; epoch: number; client: { id: string; secret: string | null; issuer: string | null } | null } {
-    const row = this.must(id);
+    const row = this.must(id); this.remote(row);
     if (row.auth_mode !== "oauth") return invalid("Switch this connector to OAuth sign-in first.");
     const url = this.endpoint(row);
     if (!url) return invalid("Set the server URL first.");
@@ -302,7 +476,7 @@ export class Connectors {
    * them as they were.
    */
   beginOAuthAttempt(id: string): { epoch: number; attempt: number } {
-    const row = this.must(id);
+    const row = this.must(id); this.remote(row);
     if (row.auth_mode !== "oauth") return invalid("Switch this connector to OAuth sign-in first.");
     return { epoch: row.auth_epoch, attempt: this.oauth.beginAttempt(id, row.auth_epoch) };
   }
@@ -345,7 +519,7 @@ export class Connectors {
    * The client is never used with another issuer. Any change starts a new epoch.
    */
   setOAuthClient(id: string, input: Record<string, unknown>): ConnectorView {
-    const row = this.must(id);
+    const row = this.must(id); this.remote(row);
     if (!Object.hasOwn(input, "client_id") || (input.client_id !== null && typeof input.client_id !== "string")) return invalid("Send client_id (a string, or null to remove the client).");
     for (const key of ["client_secret", "issuer"]) {
       if (Object.hasOwn(input, key) && input[key] !== null && typeof input[key] !== "string") return invalid(`${key} must be a string or null.`);
@@ -436,17 +610,78 @@ export class Connectors {
     catch (error) { return invalid(error instanceof DestinationError ? error.message : "That URL cannot be used."); }
   }
 
-  /** Adds a disabled-by-grant connector: nothing is granted to any tool, agent or session. */
-  async add(input: { name?: unknown; url?: unknown; token?: unknown }): Promise<ConnectorView> {
+  /**
+   * Adds a remote connector: nothing is granted to any tool, agent or session. Every caller
+   * (Settings, an agent's request_connector) gets only a URL here; a local command never is.
+   */
+  async add(input: { name?: unknown; url?: unknown; token?: unknown; headers?: unknown; transport?: unknown; command?: unknown }): Promise<ConnectorView> {
+    if ((input.transport !== undefined && input.transport !== "http") || input.command !== undefined) {
+      return invalid("A local command can be added only by the owner in Settings, from the browser.");
+    }
     const name = this.name(input.name);
     const url = this.url(input.url);
+    const headers = parseHeaders(input.headers);
     // Resolution is checked again, authoritatively, on every connection.
     await this.vetDestination(url);
     const id = randomUUID();
     const hasToken = typeof input.token === "string" && input.token.trim() !== "";
     const sealed = hasToken ? this.seal(id, url.href, input.token) : null;
-    this.db.query(`INSERT INTO mcp_connectors (id,name,slug,url,enabled,credential,credential_set_at,created_at,auth_mode) VALUES (?,?,?,?,1,?,?,?,?)`)
-      .run(id, name, this.slug(name), url.href, sealed, sealed ? this.now() : null, this.now(), sealed ? "bearer" : "none");
+    const sealedHeaders = this.sealHeaders(id, url.href, headers);
+    this.db.query(`INSERT INTO mcp_connectors (id,name,slug,url,enabled,credential,credential_set_at,created_at,auth_mode,headers,header_names) VALUES (?,?,?,?,1,?,?,?,?,?,?)`)
+      .run(id, name, this.slug(name), url.href, sealed, sealed ? this.now() : null, this.now(), sealed ? "bearer" : "none", sealedHeaders.sealed, sealedHeaders.names);
+    return this.view(id);
+  }
+
+  /**
+   * Adds a local (stdio) connector: a command this server runs. Only the owner's browser session
+   * reaches this (connectors-route.ts): no MCP tool, CLI token or agent request does, not even
+   * pending approval. It authenticates with named secrets passed in its environment.
+   */
+  addLocal(input: Record<string, unknown>, via: "owner-browser"): ConnectorView {
+    if (via !== "owner-browser") throw new ConnectorError("denied", "Local commands can be set only from the owner's browser.");
+    const name = this.name(input.name);
+    const local = this.localSettings(input);
+    const id = randomUUID();
+    this.db.query(`INSERT INTO mcp_connectors (id,name,slug,url,enabled,created_at,auth_mode,transport,command,args,env_secrets,cwd) VALUES (?,?,?,'',1,?,'none','stdio',?,?,?,?)`)
+      .run(id, name, this.slug(name), this.now(), local.command, JSON.stringify(local.args), JSON.stringify(local.env_secrets), local.cwd);
+    return this.view(id);
+  }
+
+  /**
+   * Changes a local connector's command, arguments, secrets or folder. Like a new URL it may be a
+   * different server: discovery, status and tool grants are cleared and running calls cancelled.
+   */
+  setLocal(id: string, input: Record<string, unknown>, via: "owner-browser"): ConnectorView {
+    if (via !== "owner-browser") throw new ConnectorError("denied", "Local commands can be set only from the owner's browser.");
+    const row = this.must(id);
+    if (row.transport !== "stdio") return invalid("This connector is a remote server; change its URL instead.");
+    const local = this.localSettings(input);
+    if (row.command === local.command && row.args === JSON.stringify(local.args) && row.env_secrets === JSON.stringify(local.env_secrets) && row.cwd === local.cwd) return this.view(id);
+    this.db.transaction(() => {
+      this.db.query(`UPDATE mcp_connectors SET command=?,args=?,env_secrets=?,cwd=?,catalog=NULL,catalog_at=NULL,catalog_stale=0,server_info=NULL,protocol=NULL,
+        check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,granted_tools='[]' WHERE id=?`)
+        .run(local.command, JSON.stringify(local.args), JSON.stringify(local.env_secrets), local.cwd, id);
+      this.oauth.advanceEpoch(id);
+    })();
+    this.invalidate(id);
+    return this.view(id);
+  }
+
+  /**
+   * Replaces the extra HTTP headers. Values are write-only: an entry without a value keeps the
+   * saved value of that name. Sealed like the token and bound to the connector's origin.
+   */
+  setHeaders(id: string, input: unknown): ConnectorView {
+    const row = this.must(id);
+    this.remote(row);
+    if (!row.url) return invalid("Set the server URL first.");
+    const sealed = this.sealHeaders(id, row.url, parseHeaders(input, this.openHeaders(row)));
+    this.db.transaction(() => {
+      this.db.query("UPDATE mcp_connectors SET headers=?,header_names=?,server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,catalog_stale=1 WHERE id=?")
+        .run(sealed.sealed, sealed.names, id);
+      this.oauth.advanceEpoch(id);
+    })();
+    this.invalidate(id);
     return this.view(id);
   }
 
@@ -462,13 +697,13 @@ export class Connectors {
    * re-enters a token deliberately. Agent and session grants stay (they grant nothing alone).
    */
   async setUrl(id: string, value: unknown): Promise<ConnectorView> {
-    const before = this.must(id);
+    const before = this.must(id); this.remote(before);
     const url = this.url(value);
     if (before.url === url.href) return this.view(id);
     await this.vetDestination(url);
     // The row may have changed while DNS was resolving; apply only to the state that was checked.
     const changed = this.db.transaction(() => {
-      const result = this.db.query(`UPDATE mcp_connectors SET url=?,credential=NULL,credential_set_at=NULL,oauth_client_id=NULL,oauth_client_secret=NULL,oauth_client_issuer=NULL,catalog=NULL,catalog_at=NULL,catalog_stale=0,
+      const result = this.db.query(`UPDATE mcp_connectors SET url=?,credential=NULL,credential_set_at=NULL,headers=NULL,header_names='[]',protocol=NULL,oauth_client_id=NULL,oauth_client_secret=NULL,oauth_client_issuer=NULL,catalog=NULL,catalog_at=NULL,catalog_stale=0,
         server_info=NULL,check_status=NULL,check_detail=NULL,check_at=NULL,check_ok_at=NULL,granted_tools='[]' WHERE id=? AND url=? AND auth_epoch=?`)
         .run(url.href, id, before.url, before.auth_epoch);
       if (result.changes) this.oauth.advanceEpoch(id);
@@ -481,7 +716,7 @@ export class Connectors {
 
   /** Set, replace (value) or remove (null/empty) the bearer token. */
   setCredential(id: string, value: unknown): ConnectorView {
-    const row = this.must(id);
+    const row = this.must(id); this.remote(row);
     if (row.auth_mode === "oauth") return invalid("This connector signs in with OAuth. Switch it to a bearer token first.");
     const clear = value === null || (typeof value === "string" && value.trim() === "");
     if (!clear && !row.url) return invalid("Set the server URL before adding a token.");
@@ -501,7 +736,7 @@ export class Connectors {
    * OAuth grant or pending sign-in). Agent and session grants stay; they grant nothing alone.
    */
   setAuthMode(id: string, value: unknown): ConnectorView {
-    const row = this.must(id);
+    const row = this.must(id); this.remote(row);
     if (typeof value !== "string" || !AUTH_MODES.includes(value as AuthMode)) return invalid("Choose none, bearer or oauth.");
     if (row.auth_mode === value) return this.view(id);
     this.db.transaction(() => {
@@ -566,7 +801,7 @@ export class Connectors {
   /** A real discovery against the server: the only thing that may mark a connector connected. Grants nothing. */
   async check(id: string): Promise<ConnectorView> {
     const row = this.must(id);
-    if (!row.enabled || !this.endpoint(row)) return this.view(id);
+    if (!row.enabled || !this.configured(row)) return this.view(id);
     // Credentials are required but absent: report it without contacting the server anonymously.
     const missing = row.auth_mode === "oauth" ? (this.oauth.status(id).state === "connected" ? null : "Sign in to connect this server.")
       : row.auth_mode === "bearer" && !row.credential ? "Add the bearer token." : null;
@@ -578,7 +813,8 @@ export class Connectors {
     const abort = new AbortController();
     this.checks.set(id, abort);
     const client = this.client(row);
-    client.reset("settings");
+    // A settings check probes again from the newest era, so an upgraded server is noticed.
+    client.reset("settings", { renegotiate: true });
     // Writes apply only if this is still the latest check for the same URL, token and state.
     const current = () => this.checks.get(id) === abort && !abort.signal.aborted;
     const guard = "WHERE id=? AND url=? AND auth_epoch=? AND enabled=1";
@@ -587,12 +823,15 @@ export class Connectors {
     try {
       const session = await client.session("settings", { timeoutMs: 20_000, signal: abort.signal });
       const tools = await client.listTools("settings", { timeoutMs: 20_000, signal: abort.signal });
-      if (current()) this.db.query(`UPDATE mcp_connectors SET catalog=?,catalog_at=?,catalog_stale=0,server_info=?,check_ok_at=? ${guard}`)
-        .run(JSON.stringify(tools), this.now(), session.serverInfo ? JSON.stringify(session.serverInfo) : null, this.now(), id, row.url, row.auth_epoch);
+      if (current()) this.db.query(`UPDATE mcp_connectors SET catalog=?,catalog_at=?,catalog_stale=0,server_info=?,protocol=?,check_ok_at=? ${guard}`)
+        .run(JSON.stringify(tools), this.now(), session.serverInfo ? JSON.stringify(session.serverInfo) : null,
+          JSON.stringify({ transport: session.transport, version: session.protocolVersion }), this.now(), id, row.url, row.auth_epoch);
     } catch (error) {
       status = error instanceof DestinationError ? "blocked"
         : error instanceof UpstreamError ? ({ auth: "auth_failed", forbidden: "forbidden" } as Record<string, string>)[error.kind] ?? "unavailable" : "unavailable";
-      blocked = error instanceof DestinationError ? error.message : null;
+      // Local explanations only (a refused destination, a missing secret or command, an unsupported era), never upstream text.
+      blocked = error instanceof DestinationError || error instanceof ConnectorError ? error.message
+        : error instanceof UpstreamError && (Object.values(UPSTREAM_NOTICES) as string[]).includes(error.message) ? error.message : null;
     }
     if (current()) {
       this.db.query(`UPDATE mcp_connectors SET check_status=?,check_detail=?,check_at=? ${guard}`).run(status, blocked, this.now(), id, row.url, row.auth_epoch);
@@ -619,7 +858,8 @@ export class Connectors {
     }
     tools.sort((a, b) => a.name.localeCompare(b.name));
     const url = this.endpoint(row);
-    const state: ConnectorState = !row.enabled ? "disabled" : !url ? "needs_url"
+    const protocol = json<{ transport: UpstreamTransport; version: string } | null>(row.protocol, null);
+    const state: ConnectorState = !row.enabled ? "disabled" : !this.configured(row) ? "needs_url"
       : row.check_status === "ok" ? "connected" : row.check_status === "auth_failed" ? "auth_failed"
       : row.check_status === "forbidden" ? "forbidden" : row.check_status === "blocked" ? "blocked"
       : row.check_status === "unavailable" ? "unavailable" : "not_checked";
@@ -628,6 +868,10 @@ export class Connectors {
       .map(entry => ({ ...entry, granted: !!this.db.query("SELECT 1 FROM connector_launch_grants WHERE connector_id=? AND launch_id=?").get(id, entry.launch_id) }));
     return {
       id, name: row.name, namespace: row.slug, url: url?.href ?? (row.url || null), host: url?.host ?? null,
+      transport: row.transport === "stdio" ? "stdio" : "http",
+      protocol: protocol ? { ...protocol, label: transportLabel(protocol.transport, protocol.version) } : null,
+      headers: json<string[]>(row.header_names, []),
+      local: row.transport === "stdio" ? { command: row.command ?? "", args: json<string[]>(row.args, []), env_secrets: json<string[]>(row.env_secrets, []), cwd: row.cwd } : null,
       auth: { mode: row.auth_mode, oauth: row.auth_mode === "oauth" ? this.oauth.status(id) : null },
       oauth_client: row.oauth_client_id ? { client_id: row.oauth_client_id, secret_set: !!row.oauth_client_secret, issuer: row.oauth_client_issuer } : null,
       enabled: !!row.enabled, state, credential: { set: !!row.credential, set_at: row.credential_set_at },
@@ -704,8 +948,8 @@ export class Connectors {
   /** Connectors this launch may use right now, each with its granted tools that the server currently offers. */
   private grants(identity: LaunchIdentity): Array<{ row: Row; tools: Array<UpstreamTool & { exposed: string }> }> {
     const rows = this.db.query(`SELECT c.id FROM mcp_connectors c JOIN connector_launch_grants g ON g.connector_id=c.id
-      WHERE g.launch_id=? AND c.enabled=1 AND c.url != '' ORDER BY c.slug`).all(identity.launch_id) as Array<{ id: string }>;
-    return rows.map(({ id }) => this.must(id)).filter(row => this.endpoint(row)).map(row => {
+      WHERE g.launch_id=? AND c.enabled=1 AND (c.url != '' OR c.transport='stdio') ORDER BY c.slug`).all(identity.launch_id) as Array<{ id: string }>;
+    return rows.map(({ id }) => this.must(id)).filter(row => this.configured(row)).map(row => {
       const granted = json<string[]>(row.granted_tools, []);
       const catalog = json<UpstreamTool[]>(row.catalog, []);
       const names = exposures(row.slug, catalog.map(tool => tool.name));
@@ -739,7 +983,7 @@ export class Connectors {
   /** Changes whenever this launch's exposed tools change; the stdio bridge polls it to emit tools/list_changed. */
   async revision(token: string): Promise<string> {
     const identity = await this.identity(token);
-    const view = this.grants(identity).map(({ row, tools }) => [row.id, row.url, row.credential_set_at, tools.map(tool => [tool.name, tool.inputSchema])]);
+    const view = this.grants(identity).map(({ row, tools }) => [row.id, row.url, row.auth_epoch, row.credential_set_at, tools.map(tool => [tool.name, tool.inputSchema])]);
     return createHash("sha256").update(JSON.stringify(view)).digest("base64url").slice(0, 22);
   }
 
@@ -762,7 +1006,8 @@ export class Connectors {
       launch: identity,
       connections: this.grants(identity).map(({ row, tools }) => {
         const server = json<{ name: string; version: string | null } | null>(row.server_info, null);
-        return { connector: row.name, namespace: row.slug, host: this.endpoint(row)?.host ?? null,
+        // A local command's path and arguments are the owner's settings; agents are not shown them.
+        return { connector: row.name, namespace: row.slug, host: row.transport === "stdio" ? "local command on this server" : this.endpoint(row)?.host ?? null,
           server_reported: server ? `${server.name}${server.version ? ` ${server.version}` : ""}` : "not reported",
           access: "only the tools the operator granted; they may read or change things on that server",
           tools: tools.map(tool => tool.exposed) };
@@ -873,6 +1118,7 @@ export class Connectors {
       } else if (row?.auth_mode === "bearer" && row.credential != null && isSealedSecret(row.credential)) {
         secrets.push(this.codec().openSecret(row.credential, this.context(id, row.url)));
       }
+      if (row?.headers) secrets.push(...Object.values(this.openHeaders(row)));
     } catch { /* a secret that cannot be opened cannot be reflected either */ }
     return secrets;
   }
@@ -969,6 +1215,11 @@ export class Connectors {
       { clientId: grant.clientId, clientSecret: grant.clientSecret, tokenAuthMethod: grant.tokenAuthMethod },
       [{ token: grant.refreshToken, hint: "refresh_token" }, { token: grant.accessToken, hint: "access_token" }]) : "none";
     return { connector: this.view(id), revocation };
+  }
+
+  /** Closes every upstream client: sessions end and local commands are stopped. */
+  shutdown(): void {
+    for (const id of [...this.clients.keys()]) this.invalidate(id);
   }
 
   /** The registry's clock, shared with the OAuth flow so expiry uses one time source. */

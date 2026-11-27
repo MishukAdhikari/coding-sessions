@@ -770,12 +770,36 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
     <h3 class="label">Add MCP connector</h3>
     <label class="label connector-field-label" for="input-connector-name">Name</label>
     <input id="input-connector-name" class="field" type="text" maxlength="60" autocapitalize="off" spellcheck="false" placeholder="e.g. Issue tracker" required>
-    <label class="label connector-field-label" for="input-connector-url">Server URL</label>
-    <input id="input-connector-url" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://mcp.example.com/mcp" required>
-    <label class="label connector-field-label" for="input-connector-new-token">Bearer token <span class="connector-optional">optional</span></label>
-    <input id="input-connector-new-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Leave empty if the server needs none" aria-describedby="connector-token-hint">
-    <p id="connector-token-hint" class="hint">Stored encrypted on this server and never shown again.</p>
-    <p class="hint">Supports HTTPS MCP servers using Streamable HTTP. Add a token only if the server needs one. For OAuth, leave it empty and sign in from the connector’s settings after adding it.</p>
+    <label class="label connector-field-label" for="select-connector-transport">Transport</label>
+    <select id="select-connector-transport" class="field">
+      <option value="http">Remote (HTTPS)</option>
+      <option value="stdio">Local command (stdio)</option>
+    </select>
+    <div id="connector-add-remote">
+      <label class="label connector-field-label" for="input-connector-url">Server URL</label>
+      <input id="input-connector-url" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://mcp.example.com/mcp" required>
+      <label class="label connector-field-label" for="input-connector-new-token">Bearer token <span class="connector-optional">optional</span></label>
+      <input id="input-connector-new-token" class="field" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Leave empty if the server needs none" aria-describedby="connector-token-hint">
+      <p id="connector-token-hint" class="hint">Stored encrypted on this server and never shown again.</p>
+      <details class="connector-advanced">
+        <summary>Extra headers <span class="connector-optional">optional</span></summary>
+        <p class="hint">Sent with every request, for servers that want a key in a header such as <code>X-API-Key</code>. Values are stored encrypted and never shown again.</p>
+        <div id="connector-add-headers"></div>
+        <button id="btn-connector-add-header" class="btn btn-ghost btn-big" type="button">Add header</button>
+      </details>
+      <p class="hint">Works with remote MCP servers over HTTPS: Streamable HTTP (2026-07-28 first, then 2025 revisions) and the older HTTP+SSE transport. Add a token only if the server needs one. For OAuth, leave it empty and sign in from the connector’s settings after adding it.</p>
+    </div>
+    <div id="connector-add-local" hidden>
+      <label class="label connector-field-label" for="input-connector-command">Command</label>
+      <input id="input-connector-command" class="field" type="text" autocapitalize="off" spellcheck="false" placeholder="e.g. npx or /usr/local/bin/my-mcp-server">
+      <label class="label connector-field-label" for="input-connector-args">Arguments <span class="connector-optional">one per line</span></label>
+      <textarea id="input-connector-args" class="field" rows="3" autocapitalize="off" spellcheck="false" placeholder="-y&#10;@example/mcp-server"></textarea>
+      <p class="label connector-field-label">Secrets passed as environment variables</p>
+      <div id="connector-add-secrets"></div>
+      <label class="label connector-field-label" for="input-connector-cwd">Working folder <span class="connector-optional">optional</span></label>
+      <input id="input-connector-cwd" class="field" type="text" autocapitalize="off" spellcheck="false" placeholder="A private folder for this connector if empty">
+      <p class="hint">Coding Sessions runs this command on this server and talks MCP over its stdin and stdout. It starts with only PATH, HOME, LANG and TMPDIR plus the secrets you tick, never the server’s own settings or tokens. Only you can add or change it, here.</p>
+    </div>
     <button class="btn btn-primary btn-big" type="submit">Add and test</button>
   </form>
   <button class="btn btn-ghost btn-big" data-close>Close</button>
@@ -791,6 +815,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <p id="connector-state-detail" class="hint"></p>
   <dl class="cli-update-details">
     <dt>Server reports</dt><dd id="connector-server"></dd>
+    <dt>Transport</dt><dd id="connector-transport"></dd>
     <dt>Authentication</dt><dd id="connector-credential"></dd>
     <dt>Tool prefix</dt><dd id="connector-namespace"></dd>
     <dt>Last check</dt><dd id="connector-checked"></dd>
@@ -798,6 +823,21 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   </dl>
   <button id="btn-connector-check" class="btn btn-ghost btn-big">Test connection</button>
 
+  <form id="form-connector-local" class="proj-form" autocomplete="off" hidden>
+    <h3 class="label">Local command</h3>
+    <label class="label connector-field-label" for="input-connector-local-command">Command</label>
+    <input id="input-connector-local-command" class="field" type="text" autocapitalize="off" spellcheck="false">
+    <label class="label connector-field-label" for="input-connector-local-args">Arguments <span class="connector-optional">one per line</span></label>
+    <textarea id="input-connector-local-args" class="field" rows="3" autocapitalize="off" spellcheck="false"></textarea>
+    <p class="label connector-field-label">Secrets passed as environment variables</p>
+    <div id="connector-local-secrets"></div>
+    <label class="label connector-field-label" for="input-connector-local-cwd">Working folder <span class="connector-optional">optional</span></label>
+    <input id="input-connector-local-cwd" class="field" type="text" autocapitalize="off" spellcheck="false" placeholder="A private folder for this connector if empty">
+    <p class="hint">Changing the command removes every tool grant, because it may be a different server.</p>
+    <button class="btn btn-ghost btn-big" type="submit">Save command</button>
+  </form>
+
+  <div id="connector-remote-settings">
   <h3 class="label">Authentication</h3>
   <label class="label connector-field-label" for="select-connector-auth">How Coding Sessions signs in to this server</label>
   <select id="select-connector-auth" class="field">
@@ -845,6 +885,15 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
     </details>
   </div>
 
+  <form id="form-connector-headers" class="proj-form" autocomplete="off">
+    <h3 class="label">Extra headers</h3>
+    <p class="hint">Sent with every request. Saved values are never shown; leave a value empty to keep it.</p>
+    <div id="connector-headers"></div>
+    <button id="btn-connector-header-add" class="btn btn-ghost btn-big" type="button">Add header</button>
+    <button class="btn btn-ghost btn-big" type="submit">Save headers</button>
+  </form>
+  </div>
+
   <h3 class="label">Tools agents may use</h3>
   <p class="hint">Nothing is granted until you tick it, including tools the server adds later. Granted tools may read or change things on that server. The labels below are the server’s own claims and are not verified.</p>
   <div id="connector-tools"></div>
@@ -862,10 +911,12 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <form id="form-connector-edit" class="proj-form" autocomplete="off">
     <label class="label" for="input-connector-rename">Name</label>
     <input id="input-connector-rename" class="field" type="text" maxlength="60" autocapitalize="off" spellcheck="false">
-    <label class="label" for="input-connector-edit-url">Server URL</label>
-    <input id="input-connector-edit-url" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false">
-    <p class="hint">Changing the URL removes the token and every tool grant, because it may be a different server or account. The tool prefix never changes.</p>
-    <button class="btn btn-ghost btn-big" type="submit">Save name and URL</button>
+    <div id="connector-edit-url">
+      <label class="label" for="input-connector-edit-url">Server URL</label>
+      <input id="input-connector-edit-url" class="field" type="url" inputmode="url" autocapitalize="off" spellcheck="false">
+      <p class="hint">Changing the URL removes the token, extra headers and every tool grant, because it may be a different server or account. The tool prefix never changes.</p>
+    </div>
+    <button id="btn-connector-edit-save" class="btn btn-ghost btn-big" type="submit">Save name and URL</button>
   </form>
 
   <button id="btn-connector-enabled" class="btn btn-ghost btn-big" type="button"></button>
@@ -896,7 +947,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/session-search.js?v=1"></script>
 <script src="/session-status.js?v=3"></script>
 <script src="/connection-status.js?v=5"></script>
-<script src="/connectors.js?v=6"></script>
+<script src="/connectors.js?v=7"></script>
 <script src="/secret-import.js?v=1"></script>
 <script src="/secrets.js?v=3"></script>
 <script src="/secret-request.js?v=1"></script>
