@@ -171,3 +171,23 @@ test("a full page of escaped text survives bridge response bounds", async () => 
     expect(received.result.structuredContent.messages).toHaveLength(100);
   } finally { await b.close(); f.server.stop(true); f.db.close(); }
 });
+
+test("a bridge started while the app is down retries until it is back, instead of failing the server", async () => {
+  const db = new Database(":memory:"); applyDatabaseSchema(db);
+  db.query("INSERT INTO launches(screen,name,project_path,created_at,provider,launch_id) VALUES('cs-a','a','/tmp/project',1,'claude','a')").run();
+  const communicator = new Communicator(db, { isLive: async () => true });
+  const token = communicator.prepare("a").token;
+  // Reserve a port, then close it: the app is "restarting".
+  const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null) });
+  const port = probe.port;
+  probe.stop(true);
+  const a = client(`http://127.0.0.1:${port}/mcp/communicator`, token);
+  let server: ReturnType<typeof Bun.serve> | null = null;
+  try {
+    const pending = a.request("initialize", { protocolVersion: "2025-11-25" }).promise;
+    await Bun.sleep(700);
+    server = Bun.serve({ port, hostname: "127.0.0.1", fetch: req => handleCommunicatorRequest(communicator, req) });
+    expect((await pending).result.serverInfo.name).toBe("coding-sessions-communicator");
+    expect((await a.request("tools/list").promise).result.tools.length).toBeGreaterThan(0);
+  } finally { server?.stop(true); await a.close(); }
+});
