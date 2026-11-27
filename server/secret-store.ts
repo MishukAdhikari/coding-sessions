@@ -19,6 +19,8 @@ import type { Database } from "bun:sqlite";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "./db";
 import { childEnvironment } from "./child-env";
+import { reservedName, SECRET_NAME_RE } from "./secret-names";
+export { reservedName, SECRET_NAME_RE } from "./secret-names";
 import { DestinationError, networkPolicy, readBounded, safeFetch, validateServerUrl } from "./connector-net";
 import { isSealedSecret, openSecret, sealSecret, type SecretCodec } from "./secrets";
 
@@ -50,8 +52,6 @@ export class SecretImportError extends SecretStoreError {
   constructor(message: string, readonly entries: ImportPreviewEntry[]) { super(message, 422); this.name = "SecretImportError"; }
 }
 
-/** What a CLI would actually read; same rule as a Command's token env var. */
-export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const VALUE_MAX = 32 * 1024;
 const LABEL_MAX = 40;
 const SOURCES_MAX = 10;
@@ -61,22 +61,6 @@ export const IMPORT_MAX = SECRETS_MAX;
 const RESPONSE_MAX = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 10_000;
 export const SNAPSHOT_FRESH_MS = 5 * 60_000;
-
-/**
- * Names a stored secret may not take: what the session holder, the shell, the
- * dynamic loader, or this app's own session plumbing depends on. The operator can
- * already run anything, so this guards against accidents, not attacks: a pasted
- * PATH or LD_PRELOAD would break every launch in a way that is hard to trace.
- */
-const RESERVED = new Set([
-  "HOME", "USER", "LOGNAME", "SHELL", "PATH", "TERM", "PWD", "OLDPWD", "SHLVL", "IFS", "ENV", "BASH_ENV",
-  "PROMPT_COMMAND", "SHELLOPTS", "BASHOPTS", "PS1", "PS2", "PS4", "CDPATH", "GLOBIGNORE", "NODE_OPTIONS",
-  "SSH_AUTH_SOCK", "TMPDIR", "SCREENDIR", "CREDENTIALS_DIRECTORY",
-]);
-const RESERVED_PREFIXES = ["CS_", "LD_", "DYLD_", "ZMX_", "BASH_FUNC", "XDG_"];
-export function reservedName(name: string): boolean {
-  return RESERVED.has(name) || RESERVED_PREFIXES.some(prefix => name.startsWith(prefix));
-}
 
 export function checkName(raw: unknown): string {
   const name = String(raw ?? "").trim();
