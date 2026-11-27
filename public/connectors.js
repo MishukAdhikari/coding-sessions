@@ -30,6 +30,14 @@
     return "No hints from the server";
   };
 
+  /** "Streamable HTTP (2026-07-28)", "HTTP+SSE (2024-11-05, deprecated)", "stdio (…)", or what is known before a check. */
+  const transportText = (view) => {
+    if (view.protocol?.label) return view.protocol.label;
+    return view.transport === "stdio" ? "Local command (stdio), not checked yet" : "Remote (HTTPS), not checked yet";
+  };
+  /** Arguments are entered one per line; blank lines are dropped. */
+  const argLines = (text) => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+
   window.createConnectorsUI = ({ $, api, openSheet, showToast, agoStr, escapeHtml }) => {
     let connectors = [];
     let current = null;
@@ -59,8 +67,104 @@
       return row;
     };
 
+    /* ---------- extra headers: names shown, values write-only ---------- */
+
+    /** One editable header row. A saved header shows its name and an empty value that keeps the saved one. */
+    function headerRow(container, name = "", saved = false) {
+      const row = document.createElement("div");
+      row.className = "connector-header-row";
+      const nameInput = document.createElement("input");
+      nameInput.className = "field"; nameInput.type = "text"; nameInput.value = name; nameInput.placeholder = "Header name, e.g. X-API-Key";
+      nameInput.autocapitalize = "off"; nameInput.spellcheck = false; nameInput.setAttribute?.("aria-label", "Header name");
+      const valueInput = document.createElement("input");
+      valueInput.className = "field"; valueInput.type = "password"; valueInput.autocomplete = "new-password";
+      valueInput.placeholder = saved ? "Saved; leave empty to keep" : "Value"; valueInput.setAttribute?.("aria-label", "Header value");
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.className = "btn btn-ghost"; remove.textContent = "Remove";
+      remove.addEventListener("click", () => row.remove?.());
+      row.append(nameInput, valueInput, remove);
+      row.headerInputs = { nameInput, valueInput };
+      container.append(row);
+      return row;
+    }
+    /** The rows as the server takes them: [{name, value?}], a missing value keeping the saved one. */
+    function readHeaders(container) {
+      const out = [];
+      for (const row of container.children) {
+        const inputs = row.headerInputs;
+        if (!inputs) continue;
+        const name = inputs.nameInput.value.trim();
+        const value = inputs.valueInput.value;
+        if (!name && !value) continue;
+        out.push(value ? { name, value } : { name });
+      }
+      return out;
+    }
+    let headersFor = null; // the connector whose saved headers the editor shows
+    function renderHeaders(view) {
+      const saved = view.headers ?? [];
+      const key = `${view.id}:${saved.join("\n")}`;
+      if (headersFor === key) return; // keep what is being typed
+      headersFor = key;
+      const container = $("connector-headers");
+      container.replaceChildren();
+      for (const name of saved) headerRow(container, name, true);
+    }
+
+    /* ---------- local commands: secrets picked by name ---------- */
+
+    let secretNames = null; // names of stored and source secrets, loaded once per opening
+    async function loadSecretNames() {
+      try {
+        const data = await api("/api/secrets");
+        const names = new Set((data.secrets ?? []).map(entry => entry.name));
+        for (const source of data.sources ?? []) for (const name of source.names ?? []) names.add(name);
+        secretNames = [...names].sort();
+      } catch { secretNames = []; }
+    }
+    /** Checkboxes for every known secret name plus any already chosen; `chosen` is updated in place. */
+    function renderSecretPicker(container, chosen) {
+      container.replaceChildren();
+      const names = [...new Set([...(secretNames ?? []), ...chosen])].sort();
+      if (!names.length) { container.innerHTML = '<p class="hint connector-empty-hint">No secrets yet. Add them in Settings › Secrets first.</p>'; return; }
+      for (const name of names) {
+        const row = document.createElement("label");
+        row.className = "ws-row";
+        const input = document.createElement("input");
+        input.type = "checkbox"; input.checked = chosen.has(name);
+        input.addEventListener("change", () => { input.checked ? chosen.add(name) : chosen.delete(name); });
+        const text = document.createElement("span");
+        text.className = "connector-row-text";
+        text.innerHTML = `<code>${escapeHtml(name)}</code>`;
+        row.append(input, text);
+        container.append(row);
+      }
+    }
+    const addSecrets = new Set();
+    let localSecrets = new Set();
+    let localFor = null;
+    function renderLocal(view) {
+      const settings = view.local ?? { command: "", args: [], env_secrets: [], cwd: null };
+      const key = `${view.id}:${JSON.stringify(settings)}`;
+      if (localFor === key) return; // keep what is being typed
+      localFor = key;
+      $("input-connector-local-command").value = settings.command;
+      $("input-connector-local-args").value = settings.args.join("\n");
+      $("input-connector-local-cwd").value = settings.cwd ?? "";
+      localSecrets = new Set(settings.env_secrets);
+      renderSecretPicker($("connector-local-secrets"), localSecrets);
+    }
+    function showTransport() {
+      const local = $("select-connector-transport").value === "stdio";
+      $("connector-add-remote").hidden = local;
+      $("connector-add-local").hidden = !local;
+      $("input-connector-url").required = !local;
+      $("input-connector-command").required = local;
+      if (local) renderSecretPicker($("connector-add-secrets"), addSecrets);
+    }
+
     function lock(locked) {
-      for (const el of document.querySelectorAll("#sheet-connector input, #sheet-connector select, #sheet-connector button:not([data-close]):not(.sheet-back):not(.sheet-close), #form-connector-add input, #form-connector-add button")) {
+      for (const el of document.querySelectorAll("#sheet-connector input, #sheet-connector select, #sheet-connector textarea, #sheet-connector button:not([data-close]):not(.sheet-back):not(.sheet-close), #form-connector-add input, #form-connector-add select, #form-connector-add textarea, #form-connector-add button")) {
         if (locked) { el.dataset.wasDisabled = el.disabled ? "1" : ""; el.disabled = true; }
         // Restore only what this lock changed; controls rebuilt meanwhile keep their own state.
         else if (el.dataset.wasDisabled !== undefined) { el.disabled = el.dataset.wasDisabled === "1"; delete el.dataset.wasDisabled; }
@@ -97,7 +201,8 @@
         button.type = "button";
         button.className = "row-btn connector-row";
         const granted = view.granted_tools.length;
-        button.innerHTML = `<span class="connector-row-name">${escapeHtml(view.name)}</span><span class="connection-status" data-tone="${tone}">${icon}${escapeHtml(label)}</span><span class="connection-detail">${escapeHtml(view.host ?? "No URL")} · ${granted} ${granted === 1 ? "tool" : "tools"} granted</span>`;
+        const where = view.transport === "stdio" ? "Local command" : view.host ?? "No URL";
+        button.innerHTML = `<span class="connector-row-name">${escapeHtml(view.name)}</span><span class="connection-status" data-tone="${tone}">${icon}${escapeHtml(label)}</span><span class="connection-detail">${escapeHtml(where)} · ${granted} ${granted === 1 ? "tool" : "tools"} granted</span>`;
         button.addEventListener("click", () => openDetail(view));
         wrap.append(button);
       }
@@ -107,7 +212,14 @@
       const view = current;
       if (!view) return;
       $("connector-name").textContent = view.name;
-      $("connector-host").textContent = view.url ?? "No URL";
+      const local = view.transport === "stdio";
+      $("connector-host").textContent = local ? view.local?.command ?? "" : view.url ?? "No URL";
+      $("connector-transport").textContent = transportText(view);
+      $("connector-remote-settings").hidden = local;
+      $("form-connector-local").hidden = !local;
+      $("connector-edit-url").hidden = local;
+      $("btn-connector-edit-save").textContent = local ? "Save name" : "Save name and URL";
+      if (local) renderLocal(view); else renderHeaders(view);
       const parts = statusParts(view.state);
       const { tone, icon } = parts;
       const label = view.state === "auth_failed" && view.auth?.mode === "oauth" ? "Needs sign-in" : parts.label;
@@ -122,11 +234,15 @@
       $("connector-credential").textContent = mode === "oauth"
         ? (oauth?.state === "connected" ? "OAuth, signed in" : oauth?.state === "reconnect_required" ? "OAuth, sign in again" : "OAuth, not signed in")
         : mode === "bearer" ? (view.credential.set ? `Bearer token saved ${when(view.credential.set_at)}` : "Bearer token missing") : "None";
+      if (local) {
+        const names = view.local?.env_secrets ?? [];
+        $("connector-credential").textContent = names.length ? `Secrets in its environment: ${names.join(", ")}` : "None";
+      }
       renderAuth(view, mode, oauth);
       $("connector-namespace").textContent = `${view.namespace}__`;
       $("connector-checked").textContent = view.checked_at ? `${when(view.checked_at)}${view.last_ok_at ? ` · last OK ${when(view.last_ok_at)}` : ""}` : "Never";
       $("connector-tool-count").textContent = `${view.granted_tools.length} granted of ${view.discovered_count} offered`;
-      $("btn-connector-check").disabled = !view.enabled || !view.url;
+      $("btn-connector-check").disabled = !view.enabled || (!local && !view.url);
       $("connector-token-label").textContent = view.credential.set ? "Replace bearer token" : "Bearer token";
       $("btn-connector-token").textContent = view.credential.set ? "Replace token" : "Save token";
       $("btn-connector-token-remove").hidden = !view.credential.set;
@@ -253,24 +369,61 @@
       disconnectArmed = false;
       $("input-connector-client-secret").value = "";
       $("input-connector-token").value = "";
+      headersFor = null; localFor = null;
       renderDetail();
+      if (view.transport === "stdio" && secretNames === null) loadSecretNames().then(() => { if (current?.id === view.id) { localFor = null; renderDetail(); } });
       loadAudit();
       openSheet("sheet-connector");
     }
 
     $("form-connector-add").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const body = { name: $("input-connector-name").value, url: $("input-connector-url").value.trim() };
-      const token = $("input-connector-new-token").value.trim();
-      if (token) body.token = token;
+      const local = $("select-connector-transport").value === "stdio";
+      let body;
+      if (local) {
+        body = { name: $("input-connector-name").value, transport: "stdio", command: $("input-connector-command").value.trim(),
+          args: argLines($("input-connector-args").value), env_secrets: [...addSecrets], cwd: $("input-connector-cwd").value.trim() };
+      } else {
+        body = { name: $("input-connector-name").value, url: $("input-connector-url").value.trim() };
+        const token = $("input-connector-new-token").value.trim();
+        if (token) body.token = token;
+        const headers = readHeaders($("connector-add-headers"));
+        if (headers.length) body.headers = headers;
+      }
       const result = await mutate(async () => {
         const created = await api("/api/connectors", { method: "POST", body: JSON.stringify(body) });
         return post(`/api/connectors/${created.connector.id}/check`);
       });
       if (!result) return;
-      for (const id of ["input-connector-name", "input-connector-url", "input-connector-new-token"]) $(id).value = "";
+      for (const id of ["input-connector-name", "input-connector-url", "input-connector-new-token", "input-connector-command", "input-connector-args", "input-connector-cwd"]) $(id).value = "";
+      $("connector-add-headers").replaceChildren();
+      addSecrets.clear();
       // Open the new connector only if the list is still showing and nothing navigated meanwhile.
       if (await load() && !$("sheet-connectors").hidden) openDetail(result.connector);
+    });
+    $("select-connector-transport").addEventListener("change", showTransport);
+    $("btn-connector-add-header").addEventListener("click", () => headerRow($("connector-add-headers")));
+    $("btn-connector-header-add").addEventListener("click", () => headerRow($("connector-headers")));
+    $("form-connector-headers").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!current) return;
+      const id = current.id;
+      const headers = readHeaders($("connector-headers"));
+      mutate(async () => {
+        await post(`/api/connectors/${id}/headers`, { headers });
+        return post(`/api/connectors/${id}/check`);
+      }).then(result => { if (result) { headersFor = null; renderDetail(); } });
+    });
+    $("form-connector-local").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!current) return;
+      const id = current.id;
+      const body = { command: $("input-connector-local-command").value.trim(), args: argLines($("input-connector-local-args").value),
+        env_secrets: [...localSecrets], cwd: $("input-connector-local-cwd").value.trim() };
+      mutate(async () => {
+        await post(`/api/connectors/${id}/local`, body);
+        return post(`/api/connectors/${id}/check`);
+      }).then(result => { if (result) showToast("Command saved. Tool grants were removed; choose its tools again."); });
     });
     $("form-connector-token").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -369,6 +522,9 @@
       new MutationObserver(() => {
         if (!$(sheet).hidden) return;
         for (const id of inputs) $(id).value = "";
+        // Header value fields are write-only too: drop the rows, they are rebuilt from saved names.
+        $(sheet === "sheet-connector" ? "connector-headers" : "connector-add-headers").replaceChildren();
+        headersFor = null;
         generation++;
         if (sheet === "sheet-connector" && !$("sheet-connectors").hidden) load();
       }).observe($(sheet), { attributes: true, attributeFilter: ["hidden"] });
@@ -394,6 +550,10 @@
         current = null;
         $("input-connector-new-token").value = "";
         $("connector-list").replaceChildren();
+        $("connector-add-headers").replaceChildren();
+        secretNames = null;
+        loadSecretNames().then(() => { if ($("select-connector-transport").value === "stdio") showTransport(); });
+        showTransport();
         const loading = load();
         openSheet("sheet-connectors");
         return loading;
