@@ -64,12 +64,12 @@ export interface UpstreamSession {
 }
 /** A local command the client spawns, one child per session key. */
 export interface StdioCommand {
-  /** An absolute path, already resolved. */
-  command: string;
-  args: string[];
-  cwd: string;
-  /** The child's whole environment, built just before spawning. */
-  env: (signal: AbortSignal) => Record<string, string> | Promise<Record<string, string>>;
+  /**
+   * Resolved just before each spawn: an absolute command path, its arguments, an existing
+   * working folder and the child's whole environment. A local failure (a missing secret or
+   * command) is thrown as the caller's own error class and passed through unchanged.
+   */
+  prepare: (signal: AbortSignal) => Promise<{ command: string; args: string[]; cwd: string; env: Record<string, string> }>;
 }
 export interface UpstreamOptions {
   /** An HTTP(S) server. Exactly one of url and stdio. */
@@ -838,8 +838,8 @@ export class UpstreamClient {
   /* ---------- stdio ---------- */
 
   private async openStdio(timeoutMs: number): Promise<Channel> {
-    const spec = this.options.stdio!;
-    const env = await spec.env(this.lifetime.signal);
+    const spec = await this.options.stdio!.prepare(this.lifetime.signal);
+    const env = spec.env;
     if (this.lifetime.signal.aborted) fail("cancelled");
     let child: Subprocess<"pipe", "pipe", "pipe">;
     try { child = Bun.spawn([spec.command, ...spec.args], { cwd: spec.cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" }); }
