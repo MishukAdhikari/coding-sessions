@@ -94,6 +94,27 @@ test("stdio bridge lists and calls granted tools and announces grant changes mad
   expect(JSON.stringify(b.rows)).not.toContain("upstream-credential");
 });
 
+test("a 2026-07-28 client discovers, lists and calls through the connector bridge, and hears grant changes", async () => {
+  const g = await gateway();
+  const b = bridge(g.url, g.token);
+  const _meta = { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {} };
+  const discover = await b.request("server/discover", { _meta });
+  expect(discover.result).toMatchObject({ resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: { listChanged: true } },
+    _meta: { "io.modelcontextprotocol/serverInfo": { name: "coding-sessions-connectors" } }, ttlMs: 300000, cacheScope: "private" });
+  const listed = await b.request("tools/list", { _meta });
+  expect(listed.result.resultType).toBe("complete");
+  expect(listed.result.tools.map((tool: any) => tool.name).sort()).toEqual(["lab__lab_list", "list_connections"]);
+  const called = await b.request("tools/call", { name: "lab__lab_list", arguments: {}, _meta });
+  expect(called.result).toMatchObject({ resultType: "complete", content: [{ type: "text", text: "called lab_list" }] });
+  g.connectors.setTools(g.id, ["lab_list", "env_status"]);
+  await b.until(row => row.method === "notifications/tools/list_changed");
+  // The endpoint itself refuses a modern request whose headers do not match its body.
+  const res = await fetch(g.url, { method: "POST", headers: { authorization: `Bearer ${g.token}`, "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", "Mcp-Name": "list_connections" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lab__lab_list", arguments: {}, _meta } }) });
+  expect(res.status).toBe(400);
+  expect(((await res.json()) as any).error.code).toBe(-32020);
+});
+
 test("a revoked bridge stops polling and its calls fail without exposing credentials", async () => {
   const g = await gateway();
   const b = bridge(g.url, g.token);
