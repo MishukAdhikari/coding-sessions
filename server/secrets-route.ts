@@ -1,5 +1,8 @@
 import { hasBrowserSession, PRIVATE_NO_STORE_HEADERS } from "./browser-session";
-import { SecretStoreError, type SecretStore } from "./secret-store";
+import { SecretImportError, SecretStoreError, type SecretStore } from "./secret-store";
+
+/** Largest import request body; 200 values of 32 KB would not fit, which is intended. */
+export const IMPORT_BODY_MAX = 1024 * 1024;
 
 export interface SecretsRouteDependencies {
   cookieName: string;
@@ -19,6 +22,8 @@ export interface SecretsRouteDependencies {
  *   GET    /api/secrets                      names + sources
  *   PUT    /api/secrets/:NAME   {value}      create or replace
  *   DELETE /api/secrets/:NAME
+ *   POST   /api/secrets/import/preview  {entries:[{name,value}]}   statuses, nothing saved
+ *   POST   /api/secrets/import  {entries, replace:[names]}   all or nothing; {saved, skipped}
  *   POST   /api/secret-sources  {kind,label,config,credential}   test, then save
  *   POST   /api/secret-sources/:id/sync
  *   DELETE /api/secret-sources/:id
@@ -50,6 +55,15 @@ export async function handleSecretsRoute(request: Request, deps: SecretsRouteDep
     if (path === "/api/secrets" && method === "GET") return json(store.list());
     const changed = (response: Response) => { deps.onChanged?.(); return response; };
 
+    if (path === "/api/secrets/import" || path === "/api/secrets/import/preview") {
+      if (method !== "POST") return json({ error: "Method not allowed." }, 405);
+      const input = await importBody(request);
+      if (path === "/api/secrets/import/preview") return json({ entries: store.previewImport(input.entries) });
+      const result = store.importSecrets(input.entries, input.replace);
+      // One refresh for the whole import, not one per key.
+      return result.saved.length ? changed(json({ ok: true, ...result })) : json({ ok: true, ...result });
+    }
+
     if (isSecrets) {
       const name = decodeURIComponent(path.slice("/api/secrets/".length));
       if (!name || name.includes("/")) return json({ error: "Not found." }, 404);
@@ -71,7 +85,20 @@ export async function handleSecretsRoute(request: Request, deps: SecretsRouteDep
     if (action === undefined && method === "DELETE") return store.removeSource(id) ? changed(json({ ok: true })) : json({ error: "That source is already gone." }, 404);
     return json({ error: "Method not allowed." }, 405);
   } catch (error) {
+    if (error instanceof SecretImportError) return json({ error: error.message, code: "invalid_entries", entries: error.entries }, error.status);
     if (error instanceof SecretStoreError) return json({ error: error.message }, error.status);
     return json({ error: "The secrets store could not complete that request." }, 500);
   }
+}
+
+/** Reads an import body under IMPORT_BODY_MAX. Parse errors never quote the body. */
+async function importBody(request: Request): Promise<Record<string, unknown>> {
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > IMPORT_BODY_MAX) throw new SecretStoreError("That import is too large: keep it under 1 MB.", 413);
+  const text = await request.text().catch(() => "");
+  if (text.length > IMPORT_BODY_MAX) throw new SecretStoreError("That import is too large: keep it under 1 MB.", 413);
+  let value: unknown = null;
+  try { value = JSON.parse(text); } catch {}
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new SecretStoreError("Send a JSON object.", 400);
+  return value as Record<string, unknown>;
 }
