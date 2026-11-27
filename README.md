@@ -266,6 +266,8 @@ Use [.env.example](.env.example) for non-secret configuration. Keep secrets out 
 | Secrets for sessions (Settings › Secrets) and secret-manager credentials (Bitwarden, Infisical, Vault/OpenBao) | AES-256-GCM ciphertext in SQLite; refused without the encryption key; delivered to every managed session as environment variables and in its `$CS_SECRETS_FILE` (a `0600` file in a runtime directory, outside the data directory) |
 | Secret request links | Only a SHA-256 of each one-time token; cleared once the request is answered or expires |
 
+To move a project's `.env` into Settings › Secrets, use **Import**: paste the file (or a flat JSON object) or choose it, review the names with their status (new, already stored, unchanged, invalid), tick the stored ones to replace, and save them all at once. Values are never shown, and nothing is saved until you confirm. See [importing secrets](docs/security.md#importing-secrets).
+
 ### Server settings in the app
 
 Six settings can also be changed from **Settings → Server settings**, without editing the server's configuration or restarting:
