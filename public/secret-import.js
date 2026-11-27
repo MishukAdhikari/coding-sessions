@@ -5,7 +5,7 @@
  *
  * window.SecretImport.parse(text, format) → {
  *   format: "env" | "json",
- *   entries: [{ name, value, line?, error?, suggestion? }],   // error: a reason this parse already knows
+ *   entries: [{ name, value, line?, error?, suggestion?, valueError? }],  // error: a reason this parse already knows
  *   problems: [{ line?, reason }],                            // text that is not an entry at all
  * }
  * Reasons never quote a value.
@@ -22,12 +22,28 @@
   function entry(name, value, line) {
     const out = { name, value };
     if (line !== undefined) out.line = line;
-    if (!NAME_RE.test(name)) {
-      const suggestion = suggestName(name);
-      out.error = suggestion ? `Not a valid name; did you mean ${suggestion}?` : "Not a valid name: use capitals, digits and underscores, starting with a letter.";
-      if (suggestion) out.suggestion = suggestion;
-    }
     return out;
+  }
+
+  /**
+   * Sets each entry's error (and suggestion) from its name, its own value problem
+   * (valueError, from the JSON reader) and duplicates in the list. Run again after a
+   * rename, so a fixed name clears its error and a new clash is caught.
+   */
+  function annotate(entries) {
+    const counts = new Map();
+    for (const e of entries) counts.set(e.name, (counts.get(e.name) || 0) + 1);
+    for (const e of entries) {
+      delete e.error;
+      delete e.suggestion;
+      if (!NAME_RE.test(e.name)) {
+        const suggestion = suggestName(e.name);
+        e.error = suggestion ? `Not a valid name; did you mean ${suggestion}?` : "Not a valid name: use capitals, digits and underscores, starting with a letter.";
+        if (suggestion) e.suggestion = suggestion;
+      } else if (e.valueError) e.error = e.valueError;
+      else if (counts.get(e.name) > 1) e.error = "This name appears more than once in the import.";
+    }
+    return entries;
   }
 
   const ESCAPES = { n: "\n", r: "\r", t: "\t", '"': '"', "\\": "\\" };
@@ -148,21 +164,13 @@
       else if (typeof parsed === "boolean") entries.push(entry(name, String(parsed)));
       else {
         const out = entry(name, "");
-        out.error = parsed === null ? "null is not a value." : "Nested values are not supported.";
+        out.valueError = parsed === null ? "null is not a value." : "Nested values are not supported.";
         entries.push(out);
       }
       ws();
       if (text[i] === ",") i++;
     }
     return { entries, problems: [] };
-  }
-
-  /** Marks every entry whose name appears more than once; none of them wins. */
-  function markDuplicates(entries) {
-    const counts = new Map();
-    for (const e of entries) counts.set(e.name, (counts.get(e.name) || 0) + 1);
-    for (const e of entries) if (!e.error && counts.get(e.name) > 1) e.error = "This name appears more than once in the import.";
-    return entries;
   }
 
   function detectFormat(text) {
@@ -173,8 +181,47 @@
     const clean = String(text ?? "").replace(/^﻿/, "").replace(/\r\n?/g, "\n");
     const chosen = format === "env" || format === "json" ? format : detectFormat(clean);
     const result = chosen === "json" ? parseJson(clean) : parseEnv(clean);
-    return { format: chosen, entries: markDuplicates(result.entries), problems: result.problems };
+    return { format: chosen, entries: annotate(result.entries), problems: result.problems };
   }
 
-  window.SecretImport = { parse, detectFormat, suggestName, NAME_RE };
+  /**
+   * The preview rows: one per entry (by index, as sent to the preview route), then one
+   * per problem. The server's status is the source of truth; a reason this parse knows
+   * (with its suggested name) is shown in place of the server's generic one. Rows carry
+   * a value's length, never the value.
+   */
+  function previewRows(parsed, serverEntries) {
+    const rows = parsed.entries.map((e, index) => {
+      const server = (serverEntries && serverEntries[index]) || { status: "invalid", reason: "The server did not check this entry." };
+      const row = { index, name: e.name, length: e.value.length, line: e.line, status: e.error ? "invalid" : server.status };
+      if (row.status === "invalid") row.reason = e.error || server.reason || "This entry cannot be stored.";
+      if (e.suggestion) row.suggestion = e.suggestion;
+      return row;
+    });
+    for (const problem of parsed.problems) rows.push({ index: -1, name: "", length: 0, line: problem.line, status: "invalid", reason: problem.reason });
+    return rows;
+  }
+
+  function counts(rows) {
+    const out = { new: 0, replace: 0, unchanged: 0, invalid: 0 };
+    for (const row of rows) out[row.status] = (out[row.status] || 0) + 1;
+    return out;
+  }
+
+  /**
+   * The save request for the rows a member kept: every valid entry (unchanged and
+   * unticked replacements are sent too and come back as skipped), with replace naming
+   * only the ticked names. Invalid rows are never sent.
+   */
+  function importBody(parsed, rows, replaceNames) {
+    const ticked = new Set(replaceNames);
+    const kept = rows.filter(row => row.index >= 0 && row.status !== "invalid");
+    return {
+      entries: kept.map(row => ({ name: parsed.entries[row.index].name, value: parsed.entries[row.index].value })),
+      replace: kept.filter(row => row.status === "replace" && ticked.has(row.name)).map(row => row.name),
+      indices: kept.map(row => row.index),
+    };
+  }
+
+  window.SecretImport = { parse, annotate, detectFormat, suggestName, previewRows, counts, importBody, NAME_RE, MAX_FILE_BYTES: 512 * 1024 };
 })();

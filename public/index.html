@@ -616,7 +616,7 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
   <button class="btn btn-ghost btn-big" data-close>Close</button>
 </div>
 
-<div id="sheet-secrets" class="sheet" data-settings="btn-secrets" data-search="api keys tokens env environment variables credentials passwords vault" role="dialog" aria-modal="true" aria-labelledby="sheet-secrets-heading" tabindex="-1" hidden>
+<div id="sheet-secrets" class="sheet" data-settings="btn-secrets" data-search="api keys tokens env environment variables credentials passwords vault import dotenv .env json bulk" role="dialog" aria-modal="true" aria-labelledby="sheet-secrets-heading" tabindex="-1" hidden>
   <div class="grab"></div><button class="sheet-close" type="button" data-close aria-label="Close dialog"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   <h2 class="sheet-title" id="sheet-secrets-heading">Secrets</h2>
   <p class="sheet-body">API tokens and keys every new session receives as environment variables. Values are encrypted on the server and never shown again. Running sessions keep the values they started with.</p>
@@ -628,6 +628,23 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
     <input id="input-secret-value" class="field" type="password" placeholder="Value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required>
     <button class="btn btn-primary btn-big" type="submit">Save secret</button>
   </form>
+  <h3 class="label" id="secret-import-heading">Import</h3>
+  <p class="hint secret-source-hint">Paste a <code>.env</code> file (<code>KEY=VALUE</code> lines) or a flat JSON object, or choose a file. You review the names first; nothing is saved until you confirm, and values are never shown.</p>
+  <form id="form-secret-import" class="proj-form" aria-labelledby="secret-import-heading">
+    <textarea id="input-secret-import" class="field secret-import-text" rows="5" placeholder="OPENAI_API_KEY=sk-…&#10;GITHUB_TOKEN=ghp_…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Secrets to import"></textarea>
+    <div class="secret-import-row">
+      <select id="select-secret-import-format" class="field" aria-label="Format">
+        <option value="auto">Detect format</option>
+        <option value="env">.env (KEY=VALUE)</option>
+        <option value="json">JSON object</option>
+      </select>
+      <label class="btn btn-ghost secret-import-file-btn" for="input-secret-import-file">Choose file…</label>
+      <input id="input-secret-import-file" class="visually-hidden-file" type="file">
+    </div>
+    <p id="secret-import-file" class="hint" role="status" hidden></p>
+    <button id="btn-secret-import-preview" class="btn btn-ghost btn-big" type="submit">Review import</button>
+  </form>
+  <div id="secret-import-preview" class="secret-import-preview" hidden></div>
   <h3 class="label">From a secret manager</h3>
   <p class="hint secret-source-hint">Connect a vault and its secrets join every new session. Rotated values are picked up within five minutes; if the manager is unreachable, the last values fetched are used. A secret stored here wins over one with the same name from a manager.</p>
   <div id="secret-source-list"></div>
@@ -880,7 +897,8 @@ Open a terminal on the server…</span><span class="connection-detail">Interacti
 <script src="/session-status.js?v=3"></script>
 <script src="/connection-status.js?v=5"></script>
 <script src="/connectors.js?v=6"></script>
-<script src="/secrets.js?v=2"></script>
+<script src="/secret-import.js?v=1"></script>
+<script src="/secrets.js?v=3"></script>
 <script src="/secret-request.js?v=1"></script>
 <script src="/launch-mode.js?v=1"></script>
 <script src="/app.js?v=70"></script>

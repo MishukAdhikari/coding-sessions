@@ -4,7 +4,16 @@ import { runInNewContext } from "node:vm";
 
 interface Entry { name: string; value: string; line?: number; error?: string; suggestion?: string }
 interface Parsed { format: "env" | "json"; entries: Entry[]; problems: Array<{ line?: number; reason: string }> }
-const context: { window: { SecretImport?: { parse(text: string, format?: string): Parsed; suggestName(name: string): string | null } } } = { window: {} };
+interface Row { index: number; name: string; length: number; line?: number; status: string; reason?: string; suggestion?: string }
+interface Api {
+  parse(text: string, format?: string): Parsed;
+  annotate(entries: Entry[]): Entry[];
+  suggestName(name: string): string | null;
+  previewRows(parsed: Parsed, server: Array<{ status: string; reason?: string }>): Row[];
+  counts(rows: Row[]): Record<string, number>;
+  importBody(parsed: Parsed, rows: Row[], replace: string[]): { entries: Array<{ name: string; value: string }>; replace: string[]; indices: number[] };
+}
+const context: { window: { SecretImport?: Api } } = { window: {} };
 runInNewContext(readFileSync(new URL("../public/secret-import.js", import.meta.url), "utf8"), context);
 const SecretImport = context.window.SecretImport!;
 const parse = (text: string, format?: string) => SecretImport.parse(text, format);
@@ -111,4 +120,48 @@ test("JSON: null, arrays and objects are invalid for that key; bad JSON is one p
 test("the format override wins over detection", () => {
   expect(parse("{not json", "env").problems).toEqual([{ line: 1, reason: "No = on this line." }]);
   expect(parse("A_KEY=1", "json").problems).toEqual([{ reason: "This is not valid JSON." }]);
+});
+
+test("preview rows: server statuses by index, the parser's reasons first, lengths and never values", () => {
+  const parsed = parse("NEW_ONE=alpha-value\nOLD_ONE=beta-value\nSAME_ONE=gamma\napi-key=delta\nRESERVED=x\nno equals here");
+  const rows = SecretImport.previewRows(parsed, [
+    { status: "new" }, { status: "replace" }, { status: "unchanged" },
+    { status: "invalid", reason: "Not a valid name: use capitals, digits and underscores, starting with a letter." },
+    { status: "invalid", reason: "Reserved: the server or the session itself uses this name." },
+  ]);
+  expect(rows.map(r => [r.name, r.status, r.length])).toEqual([
+    ["NEW_ONE", "new", 11], ["OLD_ONE", "replace", 10], ["SAME_ONE", "unchanged", 5],
+    ["api-key", "invalid", 5], ["RESERVED", "invalid", 1], ["", "invalid", 0],
+  ]);
+  expect(rows[3]!.suggestion).toBe("API_KEY");
+  expect(rows[3]!.reason).toContain("API_KEY");
+  expect(rows[4]!.reason).toMatch(/Reserved/);
+  expect(rows[5]).toMatchObject({ index: -1, line: 6, reason: "No = on this line." });
+  expect(SecretImport.counts(rows)).toEqual({ new: 1, replace: 1, unchanged: 1, invalid: 3 });
+  const shown = JSON.stringify(rows);
+  for (const value of ["alpha-value", "beta-value", "gamma", "delta"]) expect(shown).not.toContain(value);
+});
+
+test("the save body leaves out invalid rows and replaces only ticked names", () => {
+  const parsed = parse("NEW_ONE=a\nOLD_ONE=b\nOTHER_OLD=c\nSAME_ONE=d\nbad-name=e");
+  const rows = SecretImport.previewRows(parsed, [{ status: "new" }, { status: "replace" }, { status: "replace" }, { status: "unchanged" }, { status: "invalid" }]);
+  const body = SecretImport.importBody(parsed, rows, ["OLD_ONE", "SAME_ONE", "bad-name"]);
+  expect(body.entries.map(e => e.name)).toEqual(["NEW_ONE", "OLD_ONE", "OTHER_OLD", "SAME_ONE"]);
+  expect(body.replace).toEqual(["OLD_ONE"]);
+  expect(body.indices).toEqual([0, 1, 2, 3]);
+});
+
+test("accepting a suggested name clears its error, and a clash it creates is caught", () => {
+  const parsed = parse("api-key=1\nOTHER=2");
+  parsed.entries[0]!.name = parsed.entries[0]!.suggestion!;
+  SecretImport.annotate(parsed.entries);
+  expect(parsed.entries.map(e => e.error ?? null)).toEqual([null, null]);
+  const clash = parse("api_key=1\nAPI_KEY=2");
+  clash.entries[0]!.name = "API_KEY";
+  SecretImport.annotate(clash.entries);
+  expect(clash.entries.every(e => e.error?.includes("more than once"))).toBe(true);
+  const nested = parse('{"lower": {"a": 1}}');
+  nested.entries[0]!.name = "LOWER";
+  SecretImport.annotate(nested.entries);
+  expect(nested.entries[0]!.error).toBe("Nested values are not supported.");
 });

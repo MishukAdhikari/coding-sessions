@@ -570,3 +570,26 @@ img, svg { -webkit-user-drag: none; }
 .palette-flash { outline: 2px solid var(--action-primary); outline-offset: 3px; border-radius: var(--radius-control); animation: palette-flash 1.8s var(--ease-out); }
 @keyframes palette-flash { 0%, 40% { background: var(--action-tint); } 100% { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .palette-flash { animation: none; } }
+
+/* Settings › Secrets › Import */
+.secret-import-text { min-height: 120px; resize: vertical; font: 14px/1.5 var(--font-data); }
+.secret-import-row { display: flex; gap: 12px; align-items: stretch; }
+.secret-import-row .field { flex: 1; min-width: 0; }
+.secret-import-file-btn { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; cursor: pointer; }
+.secret-import-row:focus-within .secret-import-file-btn { outline: 2px solid var(--action-primary); outline-offset: 1px; }
+.visually-hidden-file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.secret-import-preview { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.secret-import-summary { margin-top: 0; color: var(--text-primary); font-weight: 600; }
+.secret-import-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.secret-import-table th { text-align: left; color: var(--text-secondary); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border-default); }
+.secret-import-table td { padding: 8px; border-bottom: 1px solid var(--border-default); vertical-align: top; overflow-wrap: anywhere; }
+.secret-import-table th:nth-child(2), .secret-import-table td:nth-child(2) { width: 26%; }
+.secret-import-table .si-name { font-family: var(--font-data); }
+.secret-import-table .si-size { color: var(--text-secondary); }
+.secret-import-table .si-new .si-status { color: var(--status-positive); }
+.secret-import-table .si-replace .si-status { color: var(--status-working); }
+.secret-import-table .si-unchanged .si-status { color: var(--text-secondary); }
+.secret-import-table .si-invalid .si-status { color: var(--status-danger); }
+.secret-import-table .si-reason { font-size: 12px; margin-top: 2px; }
+.secret-import-table .si-use { margin-top: 6px; }
+.si-leave-out { font-size: 13px; display: flex; gap: 8px; align-items: center; }
